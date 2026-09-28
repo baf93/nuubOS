@@ -1,0 +1,22 @@
+#!/bin/sh
+
+for NAME in nuubos-wl-output-watch nuubui-home labwc; do
+    killall "$NAME" 2>/dev/null || true
+done
+
+I=0
+while pidof labwc >/dev/null 2>&1 && [ "$I" -lt 40 ]; do
+    sleep 0.05
+    I=$((I + 1))
+done
+
+# Escalate only if a stale compositor survived the normal stop window.
+if pidof labwc >/dev/null 2>&1; then
+    killall -9 labwc 2>/dev/null || true
+fi
+
+rm -rf \
+    /run/nuubos/labwc-start.lock \
+    /run/nuubos/labwc.pid \
+    /run/nuubos/ui-ready \
+    /run/nuubos/ui-bootstrap.pid

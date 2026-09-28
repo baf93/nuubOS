@@ -1,0 +1,101 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] phy: allwinner: sun4i-usb: handle dual-route USB0 roles
+
+On SoCs where PHY0 is shared between MUSB and EHCI/OHCI, controller
+consumers must not override the role selected from the USB ID input.
+
+Keep VBUS disabled until host role has actually been detected. On
+dual-route PHY0, complete VBUS and route switching before publishing
+the new host role through extcon.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+
+---
+--- a/drivers/phy/allwinner/phy-sun4i-usb.c
++++ b/drivers/phy/allwinner/phy-sun4i-usb.c
+@@ -467,6 +467,15 @@
+ 	if (!phy->vbus || phy->regulator_on)
+ 		return 0;
+ 
++	/*
++	 * On dual-route PHY0 in OTG mode, only source VBUS after the
++	 * ID detector has established host role. This also keeps VBUS
++	 * off before the initial ID scan, where id_det is still -1.
++	 */
++	if (phy->index == 0 && data->cfg->phy0_dual_route &&
++	    data->dr_mode == USB_DR_MODE_OTG && data->id_det != 0)
++		return 0;
++
+ 	/* For phy0 only turn on Vbus if we don't have an ext. Vbus */
+ 	if (phy->index == 0 && sun4i_usb_phy0_have_vbus_det(data) &&
+ 				data->vbus_det) {
+@@ -535,6 +544,13 @@
+ 		return -EINVAL;
+ 	}
+ 
++	/*
++	 * On dual-route PHY0 the ID detector owns role selection.
++	 * Individual MUSB/EHCI/OHCI consumers must not override it.
++	 */
++	if (data->cfg->phy0_dual_route)
++		return 0;
++
+ 	if (new_mode != data->dr_mode) {
+ 		dev_info(&_phy->dev, "Changing dr_mode to %d\n", new_mode);
+ 		data->dr_mode = new_mode;
+@@ -631,8 +647,14 @@
+ 	mutex_unlock(&phy0->mutex);
+ 
+ 	if (id_notify) {
+-		extcon_set_state_sync(data->extcon, EXTCON_USB_HOST,
+-					!id_det);
++		/*
++		 * Preserve the existing notification order on PHYs which are
++		 * not dual-routed.
++		 */
++		if (!data->cfg->phy0_dual_route)
++			extcon_set_state_sync(data->extcon, EXTCON_USB_HOST,
++						!id_det);
++
+ 		/* When leaving host mode force end the session here */
+ 		if (force_session_end && id_det == 1) {
+ 			mutex_lock(&phy0->mutex);
+@@ -645,9 +667,35 @@
+ 		/* Enable PHY0 passby for host mode only. */
+ 		sun4i_usb_phy_passby(phy, !id_det);
+ 
+-		/* Re-route PHY0 if necessary */
+-		if (data->cfg->phy0_dual_route)
+-			sun4i_usb_phy0_reroute(data, id_det);
++		/*
++		 * On dual-route PHY0, complete the hardware transition before
++		 * publishing the new role to MUSB through extcon.
++		 */
++		if (data->cfg->phy0_dual_route) {
++			int ret;
++
++			mutex_lock(&phy0->mutex);
++
++			if (id_det) {
++				/* Stop sourcing before routing PHY0 back to MUSB. */
++				ret = sun4i_usb_phy_power_off(phy0);
++				sun4i_usb_phy0_reroute(data, id_det);
++			} else {
++				/* Route to EHCI/OHCI before sourcing VBUS. */
++				sun4i_usb_phy0_reroute(data, id_det);
++				ret = sun4i_usb_phy_power_on(phy0);
++			}
++
++			mutex_unlock(&phy0->mutex);
++
++			if (ret)
++				dev_err(&phy0->dev,
++					"Failed to update PHY0 VBUS for USB role: %d\n",
++					ret);
++
++			extcon_set_state_sync(data->extcon, EXTCON_USB_HOST,
++						!id_det);
++		}
+ 	}
+ 
+ 	if (vbus_notify)

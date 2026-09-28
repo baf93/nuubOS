@@ -1,0 +1,34 @@
+From: Jernej Skrabec <jernej.skrabec@gmail.com>
+Subject: [PATCH] arm64: dts: allwinner: h616: add video engine
+
+Backport of the upstream H616 Cedrus video-engine node.
+
+Upstream: [PATCH v3 7/7] arm64: dts: allwinner: sun50i-h616: Add video engine
+Link: https://lists.infradead.org/pipermail/linux-arm-kernel/2026-July/1148391.html
+
+Signed-off-by: Jernej Skrabec <jernej.skrabec@gmail.com>
+Reviewed-by: Andre Przywara <andre.przywara@arm.com>
+Signed-off-by: Chen-Yu Tsai <wens@kernel.org>
+
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h616.dtsi
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h616.dtsi
+@@ -258,6 +258,19 @@
+ 			resets = <&ccu RST_BUS_CE>;
+ 		};
+ 
++		video-codec@1c0e000 {
++			compatible = "allwinner,sun50i-h616-video-engine";
++			reg = <0x01c0e000 0x2000>;
++			clocks = <&ccu CLK_BUS_VE>, <&ccu CLK_VE>,
++				 <&ccu CLK_MBUS_VE>;
++			clock-names = "ahb", "mod", "ram";
++			resets = <&ccu RST_BUS_VE>;
++			interrupts = <GIC_SPI 93 IRQ_TYPE_LEVEL_HIGH>;
++			iommus = <&iommu 3>, <&iommu 2>;
++			allwinner,sram = <&ve_sram 1>, <&sram_c 1>;
++		};
++
++
+ 		syscon: syscon@3000000 {
+ 			compatible = "allwinner,sun50i-h616-system-control";
+ 			reg = <0x03000000 0x1000>;

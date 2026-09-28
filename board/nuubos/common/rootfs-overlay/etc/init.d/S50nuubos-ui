@@ -1,0 +1,92 @@
+#!/bin/sh
+
+LOCKDIR=/run/nuubos/labwc-start.lock
+BOOTSTRAP_PID=/run/nuubos/ui-bootstrap.pid
+
+labwc_running()
+{
+    pidof labwc >/dev/null 2>&1
+}
+
+bootstrap_running()
+{
+    if [ ! -r "$BOOTSTRAP_PID" ]; then
+        return 1
+    fi
+
+    PID="$(cat "$BOOTSTRAP_PID" 2>/dev/null)"
+    [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null
+}
+
+acquire_start_lock()
+{
+    if mkdir "$LOCKDIR" 2>/dev/null; then
+        return 0
+    fi
+
+    # A concurrent starter may already own the lock. Give it time to
+    # create Labwc before deciding whether the lock is stale.
+    I=0
+    while [ "$I" -lt 40 ]; do
+        if labwc_running; then
+            return 1
+        fi
+
+        if [ ! -d "$LOCKDIR" ]; then
+            break
+        fi
+
+        if ! bootstrap_running; then
+            break
+        fi
+
+        sleep 0.05
+        I=$((I + 1))
+    done
+
+    if labwc_running; then
+        return 1
+    fi
+
+    if ! bootstrap_running; then
+        rmdir "$LOCKDIR" 2>/dev/null || true
+    fi
+
+    mkdir "$LOCKDIR" 2>/dev/null
+}
+
+start_ui()
+{
+    mkdir -p /run/nuubos
+
+    if labwc_running; then
+        return 0
+    fi
+
+    if ! acquire_start_lock; then
+        return 0
+    fi
+
+    # Close the check-vs-start race after acquiring the atomic lock.
+    if labwc_running; then
+        rmdir "$LOCKDIR" 2>/dev/null || true
+        return 0
+    fi
+
+    rm -f /run/nuubos/ui-ready
+    /usr/bin/nuubos-ui-launch >/run/nuubos/ui-bootstrap.log 2>&1 &
+    echo "$!" > "$BOOTSTRAP_PID"
+}
+
+case "${1:-}" in
+    start|restart)
+        start_ui
+        ;;
+    stop)
+        /usr/bin/nuubos-ui-stop
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}" >&2
+        exit 1
+        ;;
+esac

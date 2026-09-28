@@ -1,0 +1,165 @@
+#!/bin/sh
+
+if [ -t 1 ] &&
+   [ "${TERM:-dumb}" != "dumb" ] &&
+   [ -z "${NO_COLOR:-}" ]; then
+
+    RESET="$(printf '\033[0m')"
+    BOLD="$(printf '\033[1m')"
+    DIM="$(printf '\033[2m')"
+    CYAN="$(printf '\033[36m')"
+    GREEN="$(printf '\033[32m')"
+    YELLOW="$(printf '\033[33m')"
+else
+    RESET=""
+    BOLD=""
+    DIM=""
+    CYAN=""
+    GREEN=""
+    YELLOW=""
+fi
+
+MODEL="$(
+    tr -d '\000' \
+        </proc/device-tree/model \
+        2>/dev/null ||
+    echo "H700 handheld"
+)"
+
+KERNEL="$(uname -r)"
+
+UPTIME_SECONDS="$(
+    cut -d. -f1 /proc/uptime 2>/dev/null ||
+    echo 0
+)"
+
+UP_DAYS=$((UPTIME_SECONDS / 86400))
+UP_HOURS=$(((UPTIME_SECONDS % 86400) / 3600))
+UP_MINUTES=$(((UPTIME_SECONDS % 3600) / 60))
+
+if [ "$UP_DAYS" -gt 0 ]; then
+    UPTIME="${UP_DAYS}d ${UP_HOURS}h ${UP_MINUTES}m"
+elif [ "$UP_HOURS" -gt 0 ]; then
+    UPTIME="${UP_HOURS}h ${UP_MINUTES}m"
+else
+    UPTIME="${UP_MINUTES}m"
+fi
+
+IP="$(
+    ip -4 addr show wlan0 2>/dev/null |
+    awk '/inet / {
+        sub(/\/.*/, "", $2)
+        print $2
+        exit
+    }'
+)"
+
+[ -n "$IP" ] || IP="offline"
+
+ACTIVE="TF1"
+TF2_STATE="UNKNOWN"
+ACTION="NONE"
+
+if [ -r /run/nuubos/storage/tf2.status ]; then
+    ACTIVE="$(
+        sed -n 's/^ACTIVE_STORAGE=//p' \
+            /run/nuubos/storage/tf2.status
+    )"
+
+    TF2_STATE="$(
+        sed -n 's/^TF2_STATE=//p' \
+            /run/nuubos/storage/tf2.status
+    )"
+
+    ACTION="$(
+        sed -n 's/^ACTION_REQUIRED=//p' \
+            /run/nuubos/storage/tf2.status
+    )"
+fi
+
+[ -n "$ACTIVE" ] || ACTIVE="NONE"
+[ -n "$TF2_STATE" ] || TF2_STATE="UNKNOWN"
+
+TEMP="n/a"
+
+for ZONE in /sys/class/thermal/thermal_zone*/temp; do
+    [ -r "$ZONE" ] || continue
+
+    RAW="$(cat "$ZONE" 2>/dev/null || true)"
+
+    case "$RAW" in
+        ''|*[!0-9]*)
+            ;;
+        *)
+            TEMP="$((RAW / 1000))°C"
+            break
+            ;;
+    esac
+done
+
+printf '\n'
+
+printf '%s%s' "$BOLD" "$CYAN"
+cat <<'ART'
+ _ __    _   _   _   _   _       ___    ____
+| '_ \  | | | | | | | | | |__   / _ \  / ___|
+| | | | | |_| | | |_| | | '_ \ | | | | \___ \
+|_| |_|  \__,_|  \__,_| |_.__/  \___/  |____/
+ART
+printf '%s' "$RESET"
+
+printf '\n'
+printf '  %sSmall system. Big adventures.%s\n' "$DIM" "$RESET"
+printf '\n'
+
+printf '  %-10s %s\n' "Device" "$MODEL"
+printf '  %-10s %s\n' "Kernel" "$KERNEL"
+printf '  %-10s %s\n' "Uptime" "$UPTIME"
+printf '  %-10s %s\n' "Wi-Fi" "$IP"
+printf '  %-10s %s\n' "Temp" "$TEMP"
+
+if [ "$ACTIVE" = "NONE" ]; then
+    printf '  %-10s %s%s%s\n' \
+        "Storage" \
+        "$YELLOW" \
+        "not ready" \
+        "$RESET"
+else
+    printf '  %-10s %s%s active%s\n' \
+        "Storage" \
+        "$GREEN" \
+        "$ACTIVE" \
+        "$RESET"
+fi
+
+case "$TF2_STATE:$ACTION" in
+    FOREIGN:FORMAT)
+        printf '  %-10s %s%s%s\n' \
+            "SD2" \
+            "$YELLOW" \
+            "foreign · format available" \
+            "$RESET"
+        ;;
+
+    OWNED:*)
+        printf '  %-10s %s%s%s\n' \
+            "SD2" \
+            "$GREEN" \
+            "nuubOS owned" \
+            "$RESET"
+        ;;
+
+    ABSENT:*)
+        printf '  %-10s %s\n' \
+            "SD2" \
+            "not inserted"
+        ;;
+
+    *)
+        printf '  %-10s %s\n' \
+            "SD2" \
+            "$TF2_STATE"
+        ;;
+esac
+
+printf '\n'

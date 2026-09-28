@@ -1,0 +1,24 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] HID: microsoft: fix Model 1708 Bluetooth rumble enable mask
+
+Enable all four actuator bits for Xbox One S Model 1708 Bluetooth force-feedback reports so vibration works on the qualified controller path.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+--- a/drivers/hid/hid-microsoft.c
++++ b/drivers/hid/hid-microsoft.c
+@@ -29,0 +30 @@
++#define MS_QUIRK_FF_ENABLE_ALL	BIT(8)
+@@ -291,0 +293,9 @@
++
++	/*
++	 * Xbox One S Model 1708 Bluetooth firmware requires all four
++	 * actuator enable bits to be set, even when the impulse-trigger
++	 * magnitudes are zero. With only weak/strong enabled the report
++	 * is accepted by the transport but produces no vibration.
++	 */
++	if (ms->quirks & MS_QUIRK_FF_ENABLE_ALL)
++		r->enable |= BIT(2) | BIT(3);
+@@ -451 +461 @@
+-		.driver_data = MS_QUIRK_FF },
++		.driver_data = MS_QUIRK_FF | MS_QUIRK_FF_ENABLE_ALL },

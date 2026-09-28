@@ -1,0 +1,25 @@
+#!/bin/sh
+
+RUNTIME_DIR=/run/nuubos/wayland-runtime
+LOGFILE=/run/nuubos/labwc.log
+PIDFILE=/run/nuubos/labwc.pid
+
+mkdir -p /run/nuubos "$RUNTIME_DIR"
+chmod 700 "$RUNTIME_DIR"
+rm -f /run/nuubos/ui-ready
+
+if pidof labwc >/dev/null 2>&1; then
+    exit 0
+fi
+
+export HOME=/root
+export XDG_RUNTIME_DIR="$RUNTIME_DIR"
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=labwc
+export WLR_RENDERER=gles2
+export WLR_NO_HARDWARE_CURSORS=1
+export XCURSOR_THEME=nuubos-hidden
+export XCURSOR_SIZE=1
+
+echo $$ > "$PIDFILE"
+exec /usr/bin/labwc >"$LOGFILE" 2>&1

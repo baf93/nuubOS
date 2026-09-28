@@ -1,0 +1,21 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] arm64: dts: allwinner: h616: connect DE33 mixer to IOMMU
+
+Connect DE33 mixer0 to H616 IOMMU master 0.
+Without this mapping enabling sun50i-iommu removes the hardware
+bypass for master 0 and the active display pipeline faults while
+reading framebuffer memory.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+
+---
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h616.dtsi
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h616.dtsi
+@@ -192,6 +192,7 @@
+ 					 <&display_clocks CLK_MIXER0>;
+ 				clock-names = "bus", "mod";
+ 				resets = <&display_clocks RST_MIXER0>;
++				iommus = <&iommu 0>;
+ 				allwinner,planes = <&planes>;
+ 
+ 				ports {

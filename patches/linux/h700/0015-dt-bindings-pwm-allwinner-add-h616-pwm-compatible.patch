@@ -1,0 +1,96 @@
+From: Richard Genoud <richard.genoud@bootlin.com>
+Subject: dt-bindings: pwm: allwinner: add h616 pwm compatible
+Date: Tue, 04 Aug 2026 15:27:24 -0600
+
+The Allwinner H616 PWM block differs from the A10 and H6 blocks, but it
+uses the same input clocks as H6, so extend the existing Allwinner PWM
+binding.
+
+The block has six channels that can generate PWM waveforms. Each channel
+also has a bypass that turns its output into a clock suitable for consumers
+such as the integrated X-Powers AC200 or AC300 Ethernet PHY.
+
+Require #clock-cells for H616 because the bypass clocks are part of its
+provider interface, while continuing to disallow the property for the older
+variants.
+
+Acked-by: Conor Dooley <conor.dooley@microchip.com>
+Signed-off-by: Richard Genoud <richard.genoud@bootlin.com>
+Signed-off-by: James Hilliard <james.hilliard1@gmail.com>
+---
+Changes v7 -> v8:
+  - require both the module and bus input clocks for H616
+  - require #clock-cells for the H616 clock provider  (reported by Sashiko)
+  - describe the channel-indexed hardware bypass clock cells
+---
+ .../bindings/pwm/allwinner,sun4i-a10-pwm.yaml      | 33 +++++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/Documentation/devicetree/bindings/pwm/allwinner,sun4i-a10-pwm.yaml b/Documentation/devicetree/bindings/pwm/allwinner,sun4i-a10-pwm.yaml
+index 1197858e431f..3b1819c8630c 100644
+--- a/Documentation/devicetree/bindings/pwm/allwinner,sun4i-a10-pwm.yaml
++++ b/Documentation/devicetree/bindings/pwm/allwinner,sun4i-a10-pwm.yaml
+@@ -14,6 +14,13 @@ properties:
+   "#pwm-cells":
+     const: 3
+ 
++  "#clock-cells":
++    const: 1
++    description:
++      The cell selects the PWM channel whose hardware bypass path is exported
++      as a clock. Its rate follows the selected shared pair source and divider;
++      the PWM period, duty-cycle and polarity logic is bypassed.
++
+   compatible:
+     oneOf:
+       - const: allwinner,sun4i-a10-pwm
+@@ -36,6 +43,7 @@ properties:
+           - const: allwinner,sun50i-h5-pwm
+           - const: allwinner,sun5i-a13-pwm
+       - const: allwinner,sun50i-h6-pwm
++      - const: allwinner,sun50i-h616-pwm
+ 
+   reg:
+     maxItems: 1
+@@ -62,7 +70,9 @@ allOf:
+       properties:
+         compatible:
+           contains:
+-            const: allwinner,sun50i-h6-pwm
++            enum:
++              - allwinner,sun50i-h6-pwm
++              - allwinner,sun50i-h616-pwm
+ 
+     then:
+       properties:
+@@ -83,6 +93,27 @@ allOf:
+         clocks:
+           maxItems: 1
+ 
++  - if:
++      properties:
++        compatible:
++          contains:
++            const: allwinner,sun50i-h616-pwm
++
++    then:
++      properties:
++        clocks:
++          minItems: 2
++
++        clock-names:
++          minItems: 2
++
++      required:
++        - "#clock-cells"
++
++    else:
++      properties:
++        "#clock-cells": false
++
+ required:
+   - compatible
+   - reg
+
+-- 
+2.53.0

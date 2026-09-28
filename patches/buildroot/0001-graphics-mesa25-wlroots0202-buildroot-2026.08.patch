@@ -1,0 +1,592 @@
+diff --git a/package/mesa3d-headers/mesa3d-headers.mk b/package/mesa3d-headers/mesa3d-headers.mk
+index fd715b5f84..cabdbe6595 100644
+--- a/package/mesa3d-headers/mesa3d-headers.mk
++++ b/package/mesa3d-headers/mesa3d-headers.mk
+@@ -12,7 +12,7 @@ endif
+ 
+ # Not possible to directly refer to mesa3d variables, because of
+ # first/second expansion trickery...
+-MESA3D_HEADERS_VERSION = 26.1.8
++MESA3D_HEADERS_VERSION = 25.0.6
+ MESA3D_HEADERS_SOURCE = mesa-$(MESA3D_HEADERS_VERSION).tar.xz
+ MESA3D_HEADERS_SITE = https://archive.mesa3d.org
+ MESA3D_HEADERS_DL_SUBDIR = mesa3d
+diff --git a/package/mesa3d/0001-vc4-add-meson-option-to-disable-optional-neon-suppor.patch b/package/mesa3d/0001-vc4-add-meson-option-to-disable-optional-neon-suppor.patch
+deleted file mode 100644
+index f2596a9e87..0000000000
+--- a/package/mesa3d/0001-vc4-add-meson-option-to-disable-optional-neon-suppor.patch
++++ /dev/null
+@@ -1,85 +0,0 @@
+-From f719e942dde0a46a9ff0080001cb3466012ffcc0 Mon Sep 17 00:00:00 2001
+-From: Peter Seiderer <ps.report@gmx.net>
+-Date: Mon, 9 Mar 2020 13:01:14 +0100
+-Subject: [PATCH] vc4: add meson option to disable optional neon support
+-
+-Not all toolchains are able to compile the runtime
+-optional vc4 neon support, so add an meson option
+-to force disabling it at compile time.
+-
+-Upstream: https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/4114
+-Signed-off-by: Peter Seiderer <ps.report@gmx.net>
+-Signed-off-by: Bernd Kuhls <bernd@kuhls.net>
+-[rebased for 25.3.0]
+-Signed-off-by: Peter Seiderer <ps.report@gmx.net>
+-[fix syntax error after previous rebases]
+----
+- meson.options                        | 7 +++++++
+- src/gallium/drivers/vc4/meson.build  | 4 ++--
+- src/gallium/drivers/vc4/vc4_tiling.h | 4 ++--
+- 3 files changed, 11 insertions(+), 4 deletions(-)
+-
+-diff --git a/meson.options b/meson.options
+-index 8e0bf2a..1cf0e07 100644
+---- a/meson.options
+-+++ b/meson.options
+-@@ -123,6 +123,13 @@ option(
+-   description : 'enable gallium mediafoundation frontend tests.',
+- )
+- 
+-+option(
+-+  'gallium-vc4-neon',
+-+  type : 'feature',
+-+  deprecated: {'true': 'enabled', 'false': 'disabled'},
+-+  description : 'enable gallium vc4 optional neon support.',
+-+)
+-+
+- option(
+-   'va-libs-path',
+-   type : 'string',
+-diff --git a/src/gallium/drivers/vc4/meson.build b/src/gallium/drivers/vc4/meson.build
+-index 84da951..7f950de 100644
+---- a/src/gallium/drivers/vc4/meson.build
+-+++ b/src/gallium/drivers/vc4/meson.build
+-@@ -72,7 +72,7 @@ files_libvc4 = files(
+- ]
+- 
+- libvc4_neon = []
+--if host_machine.cpu_family() == 'arm'
+-+if host_machine.cpu_family() == 'arm' and not get_option('gallium-vc4-neon').disabled()
+-   libvc4_neon = static_library(
+-     'vc4_neon',
+-     'vc4_tiling_lt.c',
+-@@ -82,6 +82,7 @@
+-     c_args : ['-mfpu=neon', '-DV3D_BUILD_NEON'],
+-     dependencies : vc4_deps,
+-   )
+-+  vc4_c_args += '-DVC4_TILING_LT_NEON'
+- endif
+- 
+- if dep_simpenrose.found()
+-diff --git a/src/gallium/drivers/vc4/vc4_tiling.h b/src/gallium/drivers/vc4/vc4_tiling.h
+-index 5afe329..919b299 100644
+---- a/src/gallium/drivers/vc4/vc4_tiling.h
+-+++ b/src/gallium/drivers/vc4/vc4_tiling.h
+-@@ -90,7 +90,7 @@ vc4_load_lt_image(void *dst, uint32_t dst_stride,
+-                   void *src, uint32_t src_stride,
+-                   int cpp, const struct pipe_box *box)
+- {
+--#if DETECT_ARCH_ARM
+-+#ifdef VC4_TILING_LT_NEON
+-         if (util_get_cpu_caps()->has_neon) {
+-                 vc4_load_lt_image_neon(dst, dst_stride, src, src_stride,
+-                                        cpp, box);
+-@@ -106,7 +106,7 @@ vc4_store_lt_image(void *dst, uint32_t dst_stride,
+-                    void *src, uint32_t src_stride,
+-                    int cpp, const struct pipe_box *box)
+- {
+--#if DETECT_ARCH_ARM
+-+#ifdef VC4_TILING_LT_NEON
+-         if (util_get_cpu_caps()->has_neon) {
+-                 vc4_store_lt_image_neon(dst, dst_stride, src, src_stride,
+-                                         cpp, box);
+--- 
+-2.41.0
+-
+diff --git a/package/mesa3d/0002-src-util-rand_xor-Include-stddef.h-to-fix-build-erro.patch b/package/mesa3d/0002-src-util-rand_xor-Include-stddef.h-to-fix-build-erro.patch
+deleted file mode 100644
+index e30cb97a72..0000000000
+--- a/package/mesa3d/0002-src-util-rand_xor-Include-stddef.h-to-fix-build-erro.patch
++++ /dev/null
+@@ -1,39 +0,0 @@
+-From fdc8b5a205e2116408aeb9fd305e57f656e2e89d Mon Sep 17 00:00:00 2001
+-From: Bernd Kuhls <bernd.kuhls@t-online.de>
+-Date: Sun, 9 Aug 2020 17:06:26 +0200
+-Subject: [PATCH] src/util/rand_xor: Include stddef.h to fix build error
+-MIME-Version: 1.0
+-Content-Type: text/plain; charset=UTF-8
+-Content-Transfer-Encoding: 8bit
+-
+-Fixes
+-
+-In file included from ../src/util/rand_xor.c:29:
+-output/host/x86_64-buildroot-linux-uclibc/sysroot/usr/include/sys/random.h:27:35:
+- error: unknown type name ‘size_t’
+- extern int getrandom(void *__buf, size_t count, unsigned int flags)
+-
+-seen with gcc version 8.3.0 (Buildroot 2020.02) and uClibc.
+-
+-Upstream: https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/6248
+-
+-Signed-off-by: Bernd Kuhls <bernd.kuhls@t-online.de>
+----
+- src/util/rand_xor.c | 1 +
+- 1 file changed, 1 insertion(+)
+-
+-diff --git a/src/util/rand_xor.c b/src/util/rand_xor.c
+-index 81b64f1ea71..fcb481487fa 100644
+---- a/src/util/rand_xor.c
+-+++ b/src/util/rand_xor.c
+-@@ -25,6 +25,7 @@
+- #include "detect_os.h"
+- 
+- #if !DETECT_OS_WINDOWS
+-+#include <stddef.h>
+- #if defined(HAVE_GETRANDOM)
+- #include <sys/random.h>
+- #endif
+--- 
+-2.27.0
+-
+diff --git a/package/mesa3d/0003-Fix-uClibc-build.patch b/package/mesa3d/0003-Fix-uClibc-build.patch
+deleted file mode 100644
+index d8cd50024c..0000000000
+--- a/package/mesa3d/0003-Fix-uClibc-build.patch
++++ /dev/null
+@@ -1,71 +0,0 @@
+-From 09ce52fe375a6fc1ccf51b6b691aaa2c3f53fbd5 Mon Sep 17 00:00:00 2001
+-From: Bernd Kuhls <bernd.kuhls@t-online.de>
+-Date: Fri, 3 Jun 2022 16:26:03 +0200
+-Subject: [PATCH] Fix uClibc build
+-MIME-Version: 1.0
+-Content-Type: text/plain; charset=UTF-8
+-Content-Transfer-Encoding: 8bit
+-
+-Fixes build errors with uClibc and gcc-9.3.0:
+-
+-../src/gallium/drivers/lima/lima_texture.c:47:15: error: expected
+- declaration specifiers or ‘...’ before ‘__builtin_offsetof’
+-   47 | static_assert(offsetof(lima_tex_desc, va) == 24,
+- "lima_tex_desc->va offset isn't 24");
+-
+-../src/egl/main/egldisplay.c: In function ‘_eglGetNativePlatformFromEnv’:
+- ../src/egl/main/egldisplay.c:101:4: error: implicit declaration of
+- function ‘static_assert’ [-Werror=implicit-function-declaration] 101 |
+- static_assert(ARRAY_SIZE(egl_platforms) == _EGL_NUM_PLATFORMS,
+-
+-../src/util/macros.h:74:4: error: implicit declaration of function
+- ‘static_assert’ [-Werror=implicit-function-declaration]
+-   74 |    static_assert(cond, #cond); \
+-      |    ^~~~~~~~~~~~~
+-
+-Upstream: https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/13898
+-
+-Signed-off-by: Bernd Kuhls <bernd@kuhls.net>
+-[rebased for 25.3.0]
+----
+- src/util/compiler.h | 10 ++++++++++
+- src/util/macros.h   |  1 +
+- 2 files changed, 11 insertions(+)
+-
+-diff --git a/src/util/compiler.h b/src/util/compiler.h
+-index d184ad455af..b5c56807acc 100644
+---- a/src/util/compiler.h
+-+++ b/src/util/compiler.h
+-@@ -35,6 +35,17 @@
+- 
+- 
+- #include <assert.h>
+-+
+-+/*
+-+ * C11 static_assert() macro
+-+ * assert.h only defines that name for C11 and above
+-+ */
+-+#if !defined(__cplusplus)
+-+#ifndef static_assert
+-+#define static_assert _Static_assert
+-+#endif
+-+#endif
+-+
+- #include <limits.h>
+- #include <stdarg.h>
+- #include <stdbool.h>
+-diff --git a/src/util/macros.h b/src/util/macros.h
+-index 22b18303826..8f73ee72693 100644
+---- a/src/util/macros.h
+-+++ b/src/util/macros.h
+-@@ -32,6 +32,7 @@
+- #include <stdint.h>
+- #include <stdio.h>
+- #include <string.h>
+-+#include "util/compiler.h"
+- 
+- #ifdef _GAMING_XBOX
+- #define strdup _strdup
+--- 
+-2.34.1
+-
+diff --git a/package/mesa3d/0004-src-util-u_math.c-do-not-use-arm-fpu-instructions-if.patch b/package/mesa3d/0004-src-util-u_math.c-do-not-use-arm-fpu-instructions-if.patch
+deleted file mode 100644
+index 96d1902061..0000000000
+--- a/package/mesa3d/0004-src-util-u_math.c-do-not-use-arm-fpu-instructions-if.patch
++++ /dev/null
+@@ -1,55 +0,0 @@
+-From 345b14a820a557b72f218637cb37ef39947b1f50 Mon Sep 17 00:00:00 2001
+-From: Alexander Kanavin <alex@linutronix.de>
+-Date: Wed, 1 Jul 2026 22:48:15 +0200
+-Subject: [PATCH] src/util/u_math.c: do not use arm fpu instructions if fpu is
+- not available
+-
+-Signed-off-by: Alexander Kanavin <alex@linutronix.de>
+-Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/42682>
+-
+-Upstream: https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/42682
+-
+-Signed-off-by: Bernd Kuhls <bernd@kuhls.net>
+----
+- src/util/u_math.c | 4 ++++
+- 1 file changed, 4 insertions(+)
+-
+-diff --git a/src/util/u_math.c b/src/util/u_math.c
+-index 722eac7f733..5683766a417 100644
+---- a/src/util/u_math.c
+-+++ b/src/util/u_math.c
+-@@ -87,6 +87,7 @@ util_fpstate_get(void)
+-    }
+- #endif
+- #if DETECT_ARCH_ARM
+-+#if !defined(__SOFTFP__)
+-    if (util_get_cpu_caps()->has_neon) {
+- #ifdef HAVE___BUILTIN_ARM_GET_FPSCR
+-       fpstate = __builtin_arm_get_fpscr();
+-@@ -94,6 +95,7 @@ util_fpstate_get(void)
+-       __asm__ volatile("vmrs %0, fpscr" : "=r"(fpstate));
+- #endif
+-    }
+-+#endif
+- #elif DETECT_ARCH_AARCH64
+-    {
+- #ifdef HAVE___BUILTIN_AARCH64_GET_FPCR
+-@@ -154,6 +156,7 @@ util_fpstate_set(unsigned fpstate)
+-    }
+- #endif
+- #if DETECT_ARCH_ARM
+-+#if !defined(__SOFTFP__)
+-    if (util_get_cpu_caps()->has_neon) {
+- #ifdef HAVE___BUILTIN_ARM_SET_FPSCR
+-       __builtin_arm_set_fpscr(fpstate);
+-@@ -161,6 +164,7 @@ util_fpstate_set(unsigned fpstate)
+-       __asm__ volatile("vmsr fpscr, %0" :: "r"(fpstate));
+- #endif
+-    }
+-+#endif
+- #elif DETECT_ARCH_AARCH64
+-    {
+- #ifdef HAVE___BUILTIN_AARCH64_SET_FPCR
+--- 
+-2.47.3
+-
+diff --git a/package/mesa3d/0005-src-intel-compiler-jay-jay_ir.h-do-not-used-typed-en.patch b/package/mesa3d/0005-src-intel-compiler-jay-jay_ir.h-do-not-used-typed-en.patch
+deleted file mode 100644
+index af066287e2..0000000000
+--- a/package/mesa3d/0005-src-intel-compiler-jay-jay_ir.h-do-not-used-typed-en.patch
++++ /dev/null
+@@ -1,41 +0,0 @@
+-From 345ccf93e9d00dfd0f71085832a7df0170b74f74 Mon Sep 17 00:00:00 2001
+-From: Alexander Kanavin <alex@linutronix.de>
+-Date: Sun, 14 Jun 2026 17:42:19 +0200
+-Subject: [PATCH] src/intel/compiler/jay/jay_ir.h: do not used typed enum
+-
+-This is a C23 feature and not supported by gcc < 13, which
+-many host distros still have (e.g. Debian 12).
+-
+-Upstream-Status: Inappropriate [yocto host distro requirements]
+-Signed-off-by: Alexander Kanavin <alex@linutronix.de>
+-Upstream: N/A, code completely changed upstream
+-Signed-off-by: Thomas Petazzoni <thomas.petazzoni@bootlin.com>
+----
+- src/intel/compiler/jay/jay_ir.h | 4 ++--
+- 1 file changed, 2 insertions(+), 2 deletions(-)
+-
+-diff --git a/src/intel/compiler/jay/jay_ir.h b/src/intel/compiler/jay/jay_ir.h
+-index 8307044ef8a..abf175a71bf 100644
+---- a/src/intel/compiler/jay/jay_ir.h
+-+++ b/src/intel/compiler/jay/jay_ir.h
+-@@ -579,7 +579,7 @@ jay_type_is_any_float(enum jay_type t)
+-    return jay_base_type(t) == JAY_TYPE_F || jay_base_type(t) == JAY_TYPE_BF;
+- }
+- 
+--enum jay_predication : uint8_t {
+-+enum jay_predication {
+-    /** No predication. */
+-    JAY_NOT_PREDICATED = 0,
+- 
+-@@ -634,7 +634,7 @@ typedef struct jay_inst {
+-    bool decrement_dep:1;
+-    unsigned padding  :12;
+- 
+--   enum jay_predication predication;
+-+   uint8_t predication;
+-    enum jay_conditional_mod conditional_mod;
+- 
+-    jay_def cond_flag; /**< conditional flag */
+--- 
+-2.55.0
+-
+diff --git a/package/mesa3d/Config.in b/package/mesa3d/Config.in
+index e184039150..c8289d2173 100644
+--- a/package/mesa3d/Config.in
++++ b/package/mesa3d/Config.in
+@@ -207,16 +207,10 @@ config BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_NOUVEAU
+ config BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST
+ 	bool "Gallium panfrost driver"
+ 	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || !BR2_PACKAGE_XORG7 # libxshmfence
+-	depends on BR2_PACKAGE_MESA3D_LLVM
+ 	select BR2_PACKAGE_MESA3D_GALLIUM_DRIVER
+-	select BR2_PACKAGE_MESA3D_NEEDS_PRECOMP_COMPILER
+-	select BR2_PACKAGE_MESA3D_RUSTICL_SUPPORTED_DRIVER
+ 	help
+ 	  Mesa driver for ARM Mali Midgard and Bifrost GPUs.
+ 
+-comment "panfrost driver needs llvm"
+-	depends on !BR2_PACKAGE_MESA3D_LLVM
+-
+ config BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_R300
+ 	bool "Gallium Radeon R300 driver"
+ 	depends on BR2_i386 || BR2_x86_64
+diff --git a/package/mesa3d/mesa3d.hash b/package/mesa3d/mesa3d.hash
+index dc7776488a..c94611ff05 100644
+--- a/package/mesa3d/mesa3d.hash
++++ b/package/mesa3d/mesa3d.hash
+@@ -1,6 +1,6 @@
+-# From https://lists.freedesktop.org/archives/mesa-announce/2026-August/000865.html
+-sha256  b320f65874fd9653ac6c0bd1616605387344e1247411a50c797b5f3fb9dc0b55  mesa-26.1.8.tar.xz
+-sha512  eb3d46ae9aaba70fdd908486cef24041fec9264ddf586eaebbba65ce55e716d306ef9e91be83e742dfaec4dfc94105a5cd3a36b29bf56614febcbcf6c1f8b516  mesa-26.1.8.tar.xz
++# From https://lists.freedesktop.org/archives/mesa-announce/2025-May/000803.html
++sha256  0d179e019e3441f5d957330d7abb3b0ef38e6782cc85a382608cd1a4a77fa2e1  mesa-25.0.6.tar.xz
++sha512  6a0abc8a5bbbb8ffdad7286fc5642f643b1f4183794425ba689c2c9f5c73a4131c8685074241deb1022631b4c1f1c505dbd848190ec60d5d6931e90dd9316e05  mesa-25.0.6.tar.xz
+ # License
+ sha256  0d1a0472ecc81830e75c20d59b0ea02841e3db21255e0ebad97ab682c54d6615  docs/license.rst
+ sha256  323c587d0ccf10e376f8bf9a7f31fb4ca6078105194b42e0b1e0ee2bc9bde71f  licenses/MIT
+diff --git a/package/mesa3d/mesa3d.mk b/package/mesa3d/mesa3d.mk
+index 87c7f427e4..466cd4e2ac 100644
+--- a/package/mesa3d/mesa3d.mk
++++ b/package/mesa3d/mesa3d.mk
+@@ -5,7 +5,7 @@
+ ################################################################################
+ 
+ # When updating the version, please also update mesa3d-headers
+-MESA3D_VERSION = 26.1.8
++MESA3D_VERSION = 25.0.6
+ MESA3D_SOURCE = mesa-$(MESA3D_VERSION).tar.xz
+ MESA3D_SITE = https://archive.mesa3d.org
+ MESA3D_LICENSE = MIT, SGI, Khronos
+@@ -30,7 +30,10 @@ MESA3D_DEPENDENCIES = \
+ 	zlib
+ 
+ MESA3D_CONF_OPTS = \
+-	-Dmicrosoft-clc=disabled
++	-Dgallium-opencl=disabled \
++	-Dgallium-rusticl=false \
++	-Dmicrosoft-clc=disabled \
++	-Dpower8=disabled
+ 
+ ifeq ($(BR2_PACKAGE_MESA3D_DRIVER)$(BR2_PACKAGE_XORG7),yy)
+ MESA3D_DEPENDENCIES += xlib_libxshmfence
+@@ -92,21 +95,25 @@ endif
+ ifeq ($(BR2_PACKAGE_MESA3D_OPENGL_GLX),y)
+ # Disable-mangling not yet supported by meson build system.
+ # glx:
+-#  dri          : dri based GLX requires at least one DRI driver
++#  dri          : dri based GLX requires at least one DRI driver || dri based GLX requires shared-glapi
+ #  xlib         : xlib conflicts with any dri driver
+ # Always enable glx-direct; without it, many GLX applications don't work.
+ MESA3D_CONF_OPTS += \
+ 	-Dglx=dri \
+ 	-Dglx-direct=true
++ifeq ($(BR2_PACKAGE_MESA3D_NEEDS_XA),y)
++MESA3D_CONF_OPTS += -Dgallium-xa=enabled
++else
++MESA3D_CONF_OPTS += -Dgallium-xa=disabled
++endif
+ else
+ MESA3D_CONF_OPTS += \
+-	-Dglx=disabled
++	-Dglx=disabled \
++	-Dgallium-xa=disabled
+ endif
+ 
+ ifeq ($(BR2_ARM_CPU_HAS_NEON),y)
+-MESA3D_CONF_OPTS += -Dgallium-vc4-neon=auto
+ else
+-MESA3D_CONF_OPTS += -Dgallium-vc4-neon=disabled
+ endif
+ 
+ # Drivers
+@@ -117,12 +124,10 @@ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_ETNAVIV)  += etnaviv
+ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_FREEDRENO) += freedreno
+ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_I915)     += i915
+ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_IRIS)     += iris
+-HOST_MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_IRIS) += iris
+ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_LIMA)     += lima
+ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_LLVMPIPE) += llvmpipe
+ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_NOUVEAU)  += nouveau
+ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST) += panfrost
+-HOST_MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST) += panfrost
+ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_R300)     += r300
+ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_R600)     += r600
+ MESA3D_GALLIUM_DRIVERS-$(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_RADEONSI) += radeonsi
+@@ -150,6 +155,7 @@ MESA3D_CONF_OPTS += \
+ 	-Dgallium-extra-hud=false
+ else
+ MESA3D_CONF_OPTS += \
++	-Dshared-glapi=enabled \
+ 	-Dgallium-drivers=$(subst $(space),$(comma),$(MESA3D_GALLIUM_DRIVERS-y)) \
+ 	-Dgallium-extra-hud=true
+ endif
+@@ -176,31 +182,32 @@ endif
+ 
+ ifeq ($(BR2_PACKAGE_MESA3D_VULKAN_DRIVER_INTEL),y)
+ MESA3D_DEPENDENCIES += host-python-ply
++MESA3D_CONF_OPTS += -Dmesa-clc=system -Dprecomp-compiler=system
++MESA3D_DEPENDENCIES += host-mesa3d spirv-llvm-translator spirv-tools
+ endif
+ 
+-ifeq ($(BR2_PACKAGE_MESA3D_NEEDS_PRECOMP_COMPILER),y)
++ifeq ($(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_IRIS),y)
+ MESA3D_CONF_OPTS += -Dmesa-clc=system -Dprecomp-compiler=system
+ MESA3D_DEPENDENCIES += host-mesa3d spirv-llvm-translator spirv-tools
+ endif
+ 
+ ifeq ($(BR2_PACKAGE_MESA3D_VULKAN_DRIVER),)
+ MESA3D_CONF_OPTS += \
+-	-Ddisplay-info=disabled \
+ 	-Dvulkan-drivers=
+ else
+ MESA3D_DEPENDENCIES += host-python-glslang
+ MESA3D_CONF_OPTS += \
+ 	-Dvulkan-drivers=$(subst $(space),$(comma),$(MESA3D_VULKAN_DRIVERS-y))
+-ifeq ($(BR2_PACKAGE_LIBDISPLAY_INFO),y)
+-MESA3D_DEPENDENCIES += libdisplay-info
+-MESA3D_CONF_OPTS += -Ddisplay-info=enabled
+-else
+-MESA3D_CONF_OPTS += -Ddisplay-info=disabled
+-endif
+ endif
+ 
+ # APIs
+ 
++ifeq ($(BR2_PACKAGE_MESA3D_OSMESA_GALLIUM),y)
++MESA3D_CONF_OPTS += -Dosmesa=true
++else
++MESA3D_CONF_OPTS += -Dosmesa=false
++endif
++
+ # Always enable OpenGL:
+ #   - Building OpenGL ES without OpenGL is not supported, so always keep opengl enabled.
+ MESA3D_CONF_OPTS += -Dopengl=true
+@@ -244,9 +251,6 @@ endif
+ ifeq ($(BR2_PACKAGE_WAYLAND),y)
+ MESA3D_DEPENDENCIES += wayland wayland-protocols
+ MESA3D_PLATFORMS += wayland
+-ifeq ($(BR2_PACKAGE_MESA3D_LEGACY_BIND_WAYLAND_DISPLAY),y)
+-MESA3D_CONF_OPTS += -Dlegacy-wayland=bind-wayland-display
+-endif
+ endif
+ 
+ MESA3D_CONF_OPTS += \
+@@ -294,6 +298,13 @@ else
+ MESA3D_CONF_OPTS += -Dlibunwind=disabled
+ endif
+ 
++ifeq ($(BR2_PACKAGE_MESA3D_VDPAU),y)
++MESA3D_DEPENDENCIES += libvdpau
++MESA3D_CONF_OPTS += -Dgallium-vdpau=enabled
++else
++MESA3D_CONF_OPTS += -Dgallium-vdpau=disabled
++endif
++
+ ifeq ($(BR2_PACKAGE_LM_SENSORS),y)
+ MESA3D_CONF_OPTS += -Dlmsensors=enabled
+ MESA3D_DEPENDENCIES += lm-sensors
+@@ -326,23 +337,13 @@ else
+ MESA3D_CONF_OPTS += -Dglvnd=disabled
+ endif
+ 
+-ifneq ($(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST)$(BR2_PACKAGE_MESA3D_VULKAN_DRIVER_PANFROST),)
+-HOST_MESA3D_TOOLS += panfrost
+-endif
+-
+-ifeq ($(BR2_PACKAGE_MESA3D_VULKAN_DRIVER_IMAGINATION),y)
+-HOST_MESA3D_TOOLS += imagination
+-endif
+-
+-HOST_MESA3D_CONF_ENV = \
+-	LLVM_CONFIG="$(HOST_DIR)/bin/llvm-config"
+-
++# host-mesa3d is needed by mesa3d only when the Iris Gallium driver is
++# enabled
+ HOST_MESA3D_CONF_OPTS = \
+ 	-Dglvnd=disabled \
+-	-Dgallium-drivers=$(subst $(space),$(comma),$(HOST_MESA3D_GALLIUM_DRIVERS-y)) \
+-	-Dtools=$(subst $(space),$(comma),$(HOST_MESA3D_TOOLS)) \
++	-Dgallium-drivers=iris \
++	-Dgallium-vdpau=disabled \
+ 	-Dinstall-mesa-clc=true \
+-	-Dllvm=enabled \
+ 	-Dmesa-clc=enabled \
+ 	-Dplatforms= \
+ 	-Dprecomp-compiler=enabled \
+@@ -352,26 +353,13 @@ HOST_MESA3D_CONF_OPTS = \
+ HOST_MESA3D_DEPENDENCIES = \
+ 	host-libclc \
+ 	host-libdrm \
+-	host-llvm \
+ 	host-python-mako \
+ 	host-python-pyyaml \
+ 	host-spirv-tools
+ 
+-ifneq ($(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST)$(BR2_PACKAGE_MESA3D_VULKAN_DRIVER_PANFROST),)
+-HOST_MESA3D_INSTALL_PANFROST_COMPILE = \
+-	$(INSTALL) -D -m 0755 $(@D)/buildroot-build/src/panfrost/clc/panfrost_compile $(HOST_DIR)/bin/panfrost_compile
+-endif
+-
+-ifeq ($(BR2_PACKAGE_MESA3D_VULKAN_DRIVER_IMAGINATION),y)
+-HOST_MESA3D_INSTALL_PCO_CLC = \
+-	$(INSTALL) -D -m 0755 $(@D)/buildroot-build/src/imagination/pco/uscgen/pco_clc $(HOST_DIR)/bin/pco_clc
+-endif
+-
+ define HOST_MESA3D_INSTALL_CMDS
+ 	$(INSTALL) -D -m 0755 $(@D)/buildroot-build/src/compiler/clc/mesa_clc $(HOST_DIR)/bin/mesa_clc
+-	$(INSTALL) -D -m 0755 $(@D)/buildroot-build/src/compiler/spirv/vtn_bindgen2 $(HOST_DIR)/bin/vtn_bindgen2
+-	$(HOST_MESA3D_INSTALL_PANFROST_COMPILE)
+-	$(HOST_MESA3D_INSTALL_PCO_CLC)
++	$(INSTALL) -D -m 0755 $(@D)/buildroot-build/src/compiler/spirv/vtn_bindgen $(HOST_DIR)/bin/vtn_bindgen
+ endef
+ 
+ $(eval $(meson-package))
+diff --git a/package/wlroots/wlroots.hash b/package/wlroots/wlroots.hash
+index cd1b83e6e4..1d151b4f8a 100644
+--- a/package/wlroots/wlroots.hash
++++ b/package/wlroots/wlroots.hash
+@@ -1,7 +1,7 @@
+ # Locally calculated after checking pgp signature
+ # https://gitlab.freedesktop.org/wlroots/wlroots/-/releases/0.20.0/downloads/wlroots-0.20.0.tar.gz.sig
+ # with key 34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48 "emersion <contact@emersion.fr>"
+-sha256  33f52414e1b280839aeb70786f0ae2c9f54e27ad4873108d86270a2f89c4934b  wlroots-0.20.0.tar.gz
++sha256  80c567d2ed4efb2cfa6b077f22c7a710d9c78ba4e185a75e8694001114af0733  wlroots-0.20.2.tar.gz
+ 
+ # Hashes for license files:
+ sha256  35d427c043dcafe8893b9e7247348f599847c81d9a067703587c80707f3d58df  LICENSE
+diff --git a/package/wlroots/wlroots.mk b/package/wlroots/wlroots.mk
+index 5ce634d402..cae2ff0c5d 100644
+--- a/package/wlroots/wlroots.mk
++++ b/package/wlroots/wlroots.mk
+@@ -4,7 +4,7 @@
+ #
+ ################################################################################
+ 
+-WLROOTS_VERSION = 0.20.0
++WLROOTS_VERSION = 0.20.2
+ WLROOTS_SITE = https://gitlab.freedesktop.org/wlroots/wlroots/-/releases/$(WLROOTS_VERSION)/downloads
+ WLROOTS_LICENSE = MIT
+ WLROOTS_LICENSE_FILES = LICENSE

@@ -1,0 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nuubOS <nuubos@local>
+Date: Sun, 27 Sep 2026 14:25:00 +0200
+Subject: [PATCH] meson: resolve hwdata from cross sysroot
+
+Buildroot installs hwdata.pc and pnp.ids in STAGING_DIR.  Do not force
+Meson to resolve hwdata as a build-machine/native dependency.
+
+---
+ meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+--- a/meson.build
++++ b/meson.build
+@@ -18 +18 @@
+-dep_hwdata = dependency('hwdata', required: false, native: true)
++dep_hwdata = dependency('hwdata', required: false)
+-- 
+2.51.0

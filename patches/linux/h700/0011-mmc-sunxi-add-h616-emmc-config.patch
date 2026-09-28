@@ -1,0 +1,45 @@
+From: nuubOS Project <nuubos@localhost>
+Subject: [PATCH] mmc: sunxi: add H616 eMMC controller configuration
+
+The H616 MMC2 controller uses the eMMC variant of the controller but
+requires DATA0 masking while updating the card clock.
+
+Without SDXC_MASK_DATA0, a removable SD card connected to MMC2 can
+cause the UPCLK_ONLY command issued during runtime resume to time out
+when the card is inserted after the controller has runtime-suspended.
+
+Add a dedicated H616 eMMC configuration which preserves the A100 eMMC
+descriptor layout while enabling DATA0 masking. This fixes reliable
+hot insertion on the H700-based Anbernic RG35XX Pro without changing
+the generic A100 eMMC configuration.
+
+Signed-off-by: nuubOS Project <nuubos@localhost>
+---
+ drivers/mmc/host/sunxi-mmc.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/drivers/mmc/host/sunxi-mmc.c b/drivers/mmc/host/sunxi-mmc.c
+--- a/drivers/mmc/host/sunxi-mmc.c
++++ b/drivers/mmc/host/sunxi-mmc.c
+@@ -1198,6 +1198,15 @@ static const struct sunxi_mmc_cfg sun50i_h616_cfg = {
+ 	.needs_new_timings = true,
+ };
+ 
++static const struct sunxi_mmc_cfg sun50i_h616_emmc_cfg = {
++	.idma_des_size_bits = 13,
++	.idma_des_shift = 2,
++	.clk_delays = NULL,
++	.can_calibrate = true,
++	.mask_data0 = true,
++	.needs_new_timings = true,
++};
++
+ static const struct sunxi_mmc_cfg sun50i_a100_emmc_cfg = {
+ 	.idma_des_size_bits = 13,
+ 	.idma_des_shift = 2,
+@@ -1218,4 +1227,5 @@ static const struct of_device_id sunxi_mmc_of_match[] = {
+ 	{ .compatible = "allwinner,sun50i-a100-mmc", .data = &sun20i_d1_cfg },
+ 	{ .compatible = "allwinner,sun50i-a100-emmc", .data = &sun50i_a100_emmc_cfg },
++	{ .compatible = "allwinner,sun50i-h616-emmc", .data = &sun50i_h616_emmc_cfg },
+ 	{ .compatible = "allwinner,sun50i-h616-mmc", .data = &sun50i_h616_cfg },
+ 	{ /* sentinel */ }

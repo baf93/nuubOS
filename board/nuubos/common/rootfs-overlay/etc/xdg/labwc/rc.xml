@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<labwc_config>
+  <core>
+    <xwayland>no</xwayland>
+    <reuseOutputMode>yes</reuseOutputMode>
+  </core>
+
+  <focus>
+    <followMouse>no</followMouse>
+    <raiseOnFocus>yes</raiseOnFocus>
+  </focus>
+</labwc_config>

@@ -1,0 +1,9 @@
+config BR2_PACKAGE_NUUBUI_HOME
+	bool "nuubUI placeholder home"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_HOST_RUSTC
+	select BR2_PACKAGE_LIBDRM
+	help
+	  nuubUI placeholder Home implemented in Rust + Slint.
+	  Provides the first graphics micro-step with a top bar,
+	  center content area and bottom bar.

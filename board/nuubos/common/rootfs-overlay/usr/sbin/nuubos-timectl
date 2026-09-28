@@ -1,0 +1,119 @@
+#!/bin/sh
+
+STATE_DIR=/state/time
+STATE_FILE="$STATE_DIR/last-sync"
+
+VALID_AFTER=1577836800
+
+die()
+{
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+epoch()
+{
+    date +%s 2>/dev/null || echo 0
+}
+
+clock_valid()
+{
+    NOW="$(epoch)"
+
+    case "$NOW" in
+        ''|*[!0-9]*)
+            return 1
+            ;;
+    esac
+
+    [ "$NOW" -ge "$VALID_AFTER" ]
+}
+
+rtc_epoch()
+{
+    cat /sys/class/rtc/rtc0/since_epoch 2>/dev/null || echo 0
+}
+
+status()
+{
+    NOW="$(epoch)"
+    RTC="$(rtc_epoch)"
+
+    if clock_valid; then
+        VALID=1
+    else
+        VALID=0
+    fi
+
+    echo "CLOCK_EPOCH=$NOW"
+    echo "CLOCK_VALID=$VALID"
+    echo "RTC_EPOCH=$RTC"
+
+    if [ -r "$STATE_FILE" ]; then
+        cat "$STATE_FILE"
+    else
+        echo "LAST_NTP_SYNC=0"
+    fi
+}
+
+sync_time()
+{
+    command -v ntpd >/dev/null 2>&1 ||
+        die "ntpd unavailable"
+
+    #
+    # Client-only, foreground, quit after the clock has been set.
+    #
+    ntpd \
+        -n \
+        -q \
+        -p 0.pool.ntp.org \
+        -p 1.pool.ntp.org \
+        -p 2.pool.ntp.org ||
+        die "NTP synchronization failed"
+
+    clock_valid ||
+        die "NTP completed but system clock is still invalid"
+
+    #
+    # Persist into the hardware RTC. If the handheld does not retain RTC
+    # power across a cold shutdown, NTP remains the authoritative source.
+    #
+    #
+    # RTC persistence is optional. Some targets, such as RG35XX Pro,
+    # cannot retain RTC time while fully unpowered.
+    #
+    hwclock -w -u 2>/dev/null || true
+
+    NOW="$(epoch)"
+
+    mkdir -p "$STATE_DIR"
+
+    TMP="$STATE_FILE.tmp.$$"
+
+    cat > "$TMP" <<EOF2
+LAST_NTP_SYNC=$NOW
+EOF2
+
+    mv "$TMP" "$STATE_FILE"
+    sync
+
+    echo "TIME_SYNC=PASS"
+    echo "CLOCK_EPOCH=$NOW"
+    echo "RTC_EPOCH=$(rtc_epoch)"
+}
+
+case "${1:-}" in
+    status)
+        status
+        ;;
+
+    sync)
+        sync_time
+        ;;
+
+    *)
+        echo "Usage: nuubos-timectl {status|sync}"
+        exit 2
+        ;;
+esac

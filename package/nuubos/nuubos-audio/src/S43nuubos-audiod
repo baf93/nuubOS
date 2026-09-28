@@ -1,0 +1,36 @@
+#!/bin/sh
+
+DAEMON=/usr/sbin/nuubos-audiod
+PIDFILE=/run/nuubos-audiod.pid
+SOCKET=/run/nuubos/audiod.sock
+
+case "${1:-}" in
+	start)
+		"$DAEMON" --supported || exit 0
+		mkdir -p /run/nuubos
+
+		start-stop-daemon \
+			-S -q -b -m \
+			-p "$PIDFILE" \
+			-x "$DAEMON"
+		;;
+	stop)
+		start-stop-daemon \
+			-K -q \
+			-p "$PIDFILE" \
+			-x "$DAEMON" \
+			2>/dev/null || true
+
+		rm -f "$PIDFILE" "$SOCKET"
+		;;
+	restart|reload)
+		"$0" stop
+		"$0" start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit 0

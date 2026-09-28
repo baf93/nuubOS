@@ -1,0 +1,85 @@
+#!/bin/sh
+
+MODE="${1:-poweroff}"
+
+case "$MODE" in
+    reboot|restart)
+        MODE=reboot
+        ;;
+    poweroff|shutdown)
+        MODE=poweroff
+        ;;
+    *)
+        echo "Usage: $0 {reboot|poweroff}" >&2
+        exit 1
+        ;;
+esac
+
+mkdir -p /run/nuubos
+printf '%s\n' "$MODE" > /run/nuubos/shutdown-mode
+
+LOG=/run/nuubos/lifecycle-final.log
+: > "$LOG"
+
+log()
+{
+    printf '%s\n' "$*" >> "$LOG"
+}
+
+log "mode=$MODE"
+
+#
+# v0.8.1 lifecycle animation:
+#   curtain close 460 ms
+#   small phase gap
+#   line contract 220 ms
+#   plus margin before ownership handoff
+#
+if pidof nuubui-home >/dev/null 2>&1 && [ -p /run/nuubos/ui-control ]; then
+    printf '%s\n' "$MODE" > /run/nuubos/ui-control
+    log "slint-transition=sent"
+    sleep 0.80
+else
+    log "slint-transition=unavailable"
+fi
+
+#
+# Pre-render the exact same final lifecycle raster into fbdev while it remains
+# hidden. --prepare does not unblank or force a display commit.
+#
+if /usr/bin/nuubos-splash --prepare "$MODE" >>"$LOG" 2>&1; then
+    log "fbdev-prepare=ok"
+else
+    log "fbdev-prepare=fail"
+    exit 1
+fi
+
+sync
+
+#
+# Preserve the already-qualified v0.7.8 ownership handoff:
+# bypass normal wlroots DRM teardown and leave the final KMS scanout untouched.
+#
+if pidof labwc >/dev/null 2>&1; then
+    log "labwc-before=$(pidof labwc 2>/dev/null)"
+    killall -9 labwc >>"$LOG" 2>&1 || true
+
+    I=0
+    while pidof labwc >/dev/null 2>&1 && [ "$I" -lt 40 ]; do
+        sleep 0.025
+        I=$((I + 1))
+    done
+fi
+
+if pidof labwc >/dev/null 2>&1; then
+    log "labwc-release=still-running"
+    exit 1
+fi
+
+log "labwc-release=done"
+
+sync
+log "scanout=left-untouched"
+log "handoff=complete"
+
+exit 0

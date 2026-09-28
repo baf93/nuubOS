@@ -1,0 +1,60 @@
+#!/bin/sh
+
+find_card()
+{
+    card_id="$1"
+
+    for id_file in /sys/class/sound/card*/id; do
+        [ -r "$id_file" ] || continue
+
+        if [ "$(cat "$id_file")" = "$card_id" ]; then
+            basename "$(dirname "$id_file")" | sed 's/^card//'
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+start_audio()
+{
+    # HDMI components used by the RG35XX Pro simple-audio-card.
+    /sbin/modprobe snd-soc-hdmi-codec 2>/dev/null || true
+    /sbin/modprobe dw-hdmi-i2s-audio 2>/dev/null || true
+    /sbin/modprobe snd-soc-simple-card 2>/dev/null || true
+
+    CODEC_CARD="$(find_card Codec)" || return 0
+
+    /usr/bin/amixer -c "$CODEC_CARD" cset \
+        name="Line Out Source Playback Route" \
+        "Stereo","Stereo" >/dev/null 2>&1 || true
+
+    /usr/bin/amixer -c "$CODEC_CARD" set \
+        "DAC" 63 >/dev/null 2>&1 || true
+
+    /usr/bin/amixer -c "$CODEC_CARD" set \
+        "DAC" unmute >/dev/null 2>&1 || true
+
+    /usr/bin/amixer -c "$CODEC_CARD" set \
+        "Line Out" 31 >/dev/null 2>&1 || true
+
+    /usr/bin/amixer -c "$CODEC_CARD" set \
+        "Line Out" unmute >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+    start)
+        start_audio
+        ;;
+    stop)
+        ;;
+    restart|reload)
+        start_audio
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+
+exit 0

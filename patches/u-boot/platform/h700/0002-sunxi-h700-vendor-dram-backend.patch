@@ -1,0 +1,4003 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] sunxi: consolidate the qualified H700 vendor DRAM backend
+
+Consolidate the qualified H700 vendor DRAM implementation into one final
+patch instead of layering the bring-up fixes incrementally.
+
+Preserve runtime DRAM.ext selection, DDR3/LPDDR3/LPDDR4 training and
+timing, and the separate H616 path. DDR4 remains audited source excluded
+from SPL because no current vendor profile selects it.
+
+Keep the vendor-matched SPL CPUX clock setup and the H700-only ASIMD
+validator bulk memory operations. Preserve the scalar tails for arbitrary
+word-aligned byte counts, with the compare mismatch accumulated outside
+w0 so x0 remains valid until the tail completes.
+
+Remove the pre-DRAM MMC/FAT resolver and image-specific base profiles.
+Unsupported DRAM strap indices fail closed in SPL; valid profiles retain
+the qualified timing and training paths.
+
+Hardware baseline: RG35XX Pro, RG CubeXX and RG40XX-V reach userspace
+with this final DRAM state.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+
+---
+diff --git a/arch/arm/include/asm/arch-sunxi/dram_sun50i_h616.h b/arch/arm/include/asm/arch-sunxi/dram_sun50i_h616.h
+index a8fdda1..f843b12 100644
+--- a/arch/arm/include/asm/arch-sunxi/dram_sun50i_h616.h
++++ b/arch/arm/include/asm/arch-sunxi/dram_sun50i_h616.h
+@@ -141,24 +141,51 @@ check_member(sunxi_mctl_ctl_reg, unk_0x4240, 0x4240);
+ #define TPR10_CA_BIT_DELAY	BIT(16)
+ #define TPR10_DX_BIT_DELAY0	BIT(17)
+ #define TPR10_DX_BIT_DELAY1	BIT(18)
++#define TPR10_TRAINING_RETRY	BIT(19)
+ #define TPR10_WRITE_LEVELING	BIT(20)
+ #define TPR10_READ_CALIBRATION	BIT(21)
+ #define TPR10_READ_TRAINING	BIT(22)
+ #define TPR10_WRITE_TRAINING	BIT(23)
+ 
++/*
++ * H700 boot0 uses a 0x80-byte parameter block. Keep the same logical
++ * layout so the runtime selector, mode-register programming and training
++ * policy all consume one coherent profile instead of board-specific
++ * sideband state.
++ */
+ struct dram_para {
+-	u32 clk;
+-	enum sunxi_dram_type type;
+-	u32 dx_odt;
+-	u32 dx_dri;
+-	u32 ca_dri;
+-	u32 odt_en;
+-	u32 tpr0;
+-	u32 tpr2;
+-	u32 tpr6;
+-	u32 tpr10;
+-	u32 tpr11;
+-	u32 tpr12;
++	u32 clk;          /* 0x00 */
++	enum sunxi_dram_type type; /* 0x04 */
++	u32 dx_odt;       /* 0x08 */
++	u32 dx_dri;       /* 0x0c */
++	u32 ca_dri;       /* 0x10 */
++	u32 odt_en;       /* 0x14 */
++	u32 para1;        /* 0x18 */
++	u32 para2;        /* 0x1c */
++	u32 mr0;          /* 0x20 */
++	u32 mr1;          /* 0x24 */
++	u32 mr2;          /* 0x28 */
++	u32 mr3;          /* 0x2c */
++	u32 mr4;          /* 0x30 */
++	u32 mr5;          /* 0x34 */
++	u32 mr6;          /* 0x38 */
++	u32 mr11;         /* 0x3c */
++	u32 mr12;         /* 0x40 */
++	u32 mr13;         /* 0x44 */
++	u32 mr14;         /* 0x48 */
++	u32 mr16;         /* 0x4c */
++	u32 mr17;         /* 0x50 */
++	u32 mr22;         /* 0x54 */
++	u32 tpr0;         /* 0x58 */
++	u32 tpr1;         /* 0x5c */
++	u32 tpr2;         /* 0x60 */
++	u32 tpr3;         /* 0x64 */
++	u32 tpr6;         /* 0x68 */
++	u32 tpr10;        /* 0x6c */
++	u32 tpr11;        /* 0x70 */
++	u32 tpr12;        /* 0x74 */
++	u32 tpr13;        /* 0x78 */
++	u32 tpr14;        /* 0x7c, vendor auxiliary word */
+ };
+ 
+ struct dram_config {
+@@ -168,13 +195,65 @@ struct dram_config {
+ 	u8 bus_full_width;
+ };
+ 
+-static inline int ns_to_t(int nanoseconds)
++#define H616_PHY_INIT_LEN	27
++
++static inline int ns_to_t(const struct dram_para *para, int nanoseconds)
+ {
+-	const unsigned int ctrl_freq = CONFIG_DRAM_CLK / 2;
++	const unsigned int ctrl_freq = para->clk / 2;
+ 
+ 	return DIV_ROUND_UP(ctrl_freq * nanoseconds, 1000);
+ }
+ 
+-void mctl_set_timing_params(const struct dram_para *para);
++void h616_ddr3_set_timing_params(const struct dram_para *para);
++void h616_lpddr3_set_timing_params(const struct dram_para *para);
++void h616_lpddr4_set_timing_params(const struct dram_para *para);
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++const u8 *h700_phy_get_map0_2(unsigned int map);
++const u8 *h700_phy_get_map5_6(unsigned int map);
++const u8 *h700_phy_get_map7_8(unsigned int map);
++#endif
++
++const u8 *h616_ddr3_get_phy_init(void);
++const u8 *h616_lpddr3_get_phy_init(void);
++const u8 *h616_lpddr4_get_phy_init(void);
++
++static inline void mctl_set_timing_params(const struct dram_para *para)
++{
++#if defined(CONFIG_NUUBOS_H700_VENDOR_DRAM) || defined(CONFIG_SUNXI_DRAM_H616_DDR3_1333)
++	if (para->type == SUNXI_DRAM_TYPE_DDR3) {
++		h616_ddr3_set_timing_params(para);
++		return;
++	}
++#endif
++#if defined(CONFIG_NUUBOS_H700_VENDOR_DRAM) || defined(CONFIG_SUNXI_DRAM_H616_LPDDR3)
++	if (para->type == SUNXI_DRAM_TYPE_LPDDR3) {
++		h616_lpddr3_set_timing_params(para);
++		return;
++	}
++#endif
++#if defined(CONFIG_NUUBOS_H700_VENDOR_DRAM) || defined(CONFIG_SUNXI_DRAM_H616_LPDDR4)
++	if (para->type == SUNXI_DRAM_TYPE_LPDDR4) {
++		h616_lpddr4_set_timing_params(para);
++		return;
++	}
++#endif
++}
++
++static inline const u8 *h616_get_phy_init(const struct dram_para *para)
++{
++#if defined(CONFIG_NUUBOS_H700_VENDOR_DRAM) || defined(CONFIG_SUNXI_DRAM_H616_DDR3_1333)
++	if (para->type == SUNXI_DRAM_TYPE_DDR3)
++		return h616_ddr3_get_phy_init();
++#endif
++#if defined(CONFIG_NUUBOS_H700_VENDOR_DRAM) || defined(CONFIG_SUNXI_DRAM_H616_LPDDR3)
++	if (para->type == SUNXI_DRAM_TYPE_LPDDR3)
++		return h616_lpddr3_get_phy_init();
++#endif
++#if defined(CONFIG_NUUBOS_H700_VENDOR_DRAM) || defined(CONFIG_SUNXI_DRAM_H616_LPDDR4)
++	if (para->type == SUNXI_DRAM_TYPE_LPDDR4)
++		return h616_lpddr4_get_phy_init();
++#endif
++	return NULL;
++}
+ 
+ #endif /* _SUNXI_DRAM_SUN50I_H616_H */
+diff --git a/arch/arm/mach-sunxi/Kconfig b/arch/arm/mach-sunxi/Kconfig
+index ceba96b..a7ccda8 100644
+--- a/arch/arm/mach-sunxi/Kconfig
++++ b/arch/arm/mach-sunxi/Kconfig
+@@ -716,6 +716,14 @@ config SUNXI_DRAM_A523_LPDDR4
+ endchoice
+ endif
+ 
++config NUUBOS_H700_VENDOR_DRAM
++	bool "H700 vendor-compatible runtime DRAM backend"
++	depends on SPL && MACH_SUN50I_H616
++	help
++	  Reproduce the H700 boot0 DRAM.ext GPIO selector and the vendor
++	  rank/width, geometry, training and final validation flow.  DEVICE=
++	  is deliberately not used to identify DRAM.
++
+ config DRAM_TYPE
+ 	int "sunxi dram type"
+ 	depends on MACH_SUN8I_A83T
+diff --git a/arch/arm/mach-sunxi/Makefile b/arch/arm/mach-sunxi/Makefile
+index 9c79b55..829c5d7 100644
+--- a/arch/arm/mach-sunxi/Makefile
++++ b/arch/arm/mach-sunxi/Makefile
+@@ -44,6 +44,7 @@ obj-$(CONFIG_SUNXI_DRAM_DW)	+= dram_timings/
+ obj-$(CONFIG_DRAM_SUN50I_H6)	+= dram_sun50i_h6.o dram_dw_helpers.o
+ obj-$(CONFIG_DRAM_SUN50I_H6)	+= dram_timings/
+ obj-$(CONFIG_DRAM_SUN50I_H616)	+= dram_sun50i_h616.o dram_dw_helpers.o
++obj-$(CONFIG_NUUBOS_H700_VENDOR_DRAM) += h700_dram_memops.o
+ obj-$(CONFIG_DRAM_SUN50I_H616)	+= dram_timings/
+ obj-$(CONFIG_DRAM_SUN50I_A133)	+= dram_sun50i_a133.o
+ obj-$(CONFIG_DRAM_SUN50I_A133)	+= dram_timings/
+diff --git a/arch/arm/mach-sunxi/clock_sun50i_h6.c b/arch/arm/mach-sunxi/clock_sun50i_h6.c
+index 80004f1..557c015 100644
+--- a/arch/arm/mach-sunxi/clock_sun50i_h6.c
++++ b/arch/arm/mach-sunxi/clock_sun50i_h6.c
+@@ -42,7 +42,15 @@ void clock_init_safe(void)
+ 		setbits_le32(prcm + CCU_PRCM_PLL_LDO_CFG, 0x60000);
+ 	}
+ 
+-	clock_set_pll1(408000000);
++	/*
++	 * H700 boot0 configures PLL_CPUX to 1008 MHz before DRAM training.
++	 * Match the vendor pre-DRAM CPU clock for the clean-room H700 DRAM
++	 * backend while keeping the upstream H616 safe clock unchanged.
++	 */
++	if (IS_ENABLED(CONFIG_NUUBOS_H700_VENDOR_DRAM))
++		clock_set_pll1(1008000000);
++	else
++		clock_set_pll1(408000000);
+ 
+ 	writel(CCM_PLL6_DEFAULT, ccm + CCU_H6_PLL6_CFG);
+ 	while (!(readl(ccm + CCU_H6_PLL6_CFG) & CCM_PLL_LOCK))
+diff --git a/arch/arm/mach-sunxi/dram_sun50i_h616.c b/arch/arm/mach-sunxi/dram_sun50i_h616.c
+index 42a0550..7598401 100644
+--- a/arch/arm/mach-sunxi/dram_sun50i_h616.c
++++ b/arch/arm/mach-sunxi/dram_sun50i_h616.c
+@@ -12,6 +12,7 @@
+  * (C) Copyright 2020 Jernej Skrabec <jernej.skrabec@siol.net>
+  *
+  */
++#include <errno.h>
+ #include <init.h>
+ #include <log.h>
+ #include <asm/io.h>
+@@ -22,6 +23,12 @@
+ #include <asm/arch/prcm.h>
+ #include <linux/bitops.h>
+ #include <linux/delay.h>
++#include <string.h>
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++#include <axp_pmic.h>
++#include <asm/gpio.h>
++#include <hang.h>
++#endif
+ 
+ enum {
+ 	MBUS_QOS_LOWEST = 0,
+@@ -92,6 +99,32 @@ static void mctl_set_master_priority(void)
+ 	dmb();
+ }
+ 
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++static bool h700_vendor_training_active(void);
++static bool h700_vendor_core_init(const struct dram_para *para,
++				  const struct dram_config *config);
++static const u8 *h700_vendor_get_phy_init(const struct dram_para *para);
++
++struct h700_dram_runtime_state {
++	u32 current_para1;
++	u32 current_para2;
++	u32 current_tpr13;
++	u8 active;
++	u8 min_window;
++	u8 retry_count;
++};
++
++/*
++ * Keep this in initialized SRAM .data. SPL BSS is deliberately not relied
++ * on before DRAM is trained. This declaration must precede the vendor
++ * training primitives, which consume the active para2/rank state.
++ */
++static struct h700_dram_runtime_state h700_dram_runtime = {
++	.active = 0xff,
++};
++
++#endif
++
+ static void mctl_sys_init(u32 clk_rate)
+ {
+ 	void * const ccm = (void *)SUNXI_CCM_BASE;
+@@ -100,6 +133,76 @@ static void mctl_sys_init(u32 clk_rate)
+ 	struct sunxi_mctl_ctl_reg * const mctl_ctl =
+ 			(struct sunxi_mctl_ctl_reg *)SUNXI_DRAM_CTL0_BASE;
+ 
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	{
++		u32 value;
++
++		/* Exact H700 boot0 0x271d4 reset/clock ordering. */
++		clrbits_le32(ccm + CCU_H6_MBUS_CFG, MBUS_ENABLE);
++		clrbits_le32(ccm + CCU_H6_MBUS_CFG, MBUS_RESET);
++		clrbits_le32(ccm + CCU_H6_DRAM_GATE_RESET, BIT(GATE_SHIFT));
++		clrbits_le32(ccm + CCU_H6_DRAM_GATE_RESET, BIT(RESET_SHIFT));
++		clrbits_le32(ccm + CCU_H6_PLL5_CFG, CCM_PLL_CTRL_EN);
++		clrbits_le32(ccm + CCU_H6_DRAM_CLK_CFG, DRAM_MOD_RESET);
++		udelay(5);
++
++		/*
++		 * H700 boot0 0x24b64 does not use the H616 one-shot PLL5
++		 * programming sequence.  Preserve the existing PLL register,
++		 * replace N/div fields, enable the PLL, apply the H700 analog
++		 * side effect from 0x24b08, toggle the vendor control bits and
++		 * only then wait for lock.
++		 *
++		 * All currently reconstructed H700 DRAM.ext profiles have
++		 * TPR13[22:20] == 0, for which 0x24b08 sets BIT(24) at
++		 * 0x03001010.
++		 */
++		value = readl(ccm + CCU_H6_PLL5_CFG);
++		value &= ~((0xffU << 8) | 0x3U);
++		value |= CCM_PLL5_CTRL_N(clk_rate * 2 / 24);
++
++		writel(value | BIT(31), ccm + CCU_H6_PLL5_CFG);
++
++		/*
++		 * boot0 0x24b12: selector zero branches directly to 0x24b22,
++		 * skipping the analogue-control write at 0x24b20. Preserve
++		 * 0x03001110 and only set PLL5 bit 24. All reconstructed
++		 * DRAM.ext profiles use selector zero.
++		 */
++		setbits_le32((void *)0x03001010UL, BIT(24));
++
++		writel(value | BIT(31) | BIT(30) | BIT(29),
++		       ccm + CCU_H6_PLL5_CFG);
++		writel(value | BIT(31) | BIT(29),
++		       ccm + CCU_H6_PLL5_CFG);
++
++		mctl_await_completion(ccm + CCU_H6_PLL5_CFG,
++				      CCM_PLL_LOCK, CCM_PLL_LOCK);
++
++		value = readl(ccm + CCU_H6_DRAM_CLK_CFG);
++		value &= ~((0x3U << 24) | 0x3U);
++		value |= BIT(27);
++		writel(value, ccm + CCU_H6_DRAM_CLK_CFG);
++
++		setbits_le32(ccm + CCU_H6_DRAM_GATE_RESET, BIT(RESET_SHIFT));
++		setbits_le32(ccm + CCU_H6_DRAM_GATE_RESET, BIT(GATE_SHIFT));
++
++		writel(0, &mctl_com->maer0);
++		writel(0, &mctl_com->maer1);
++		writel(0, &mctl_com->maer2);
++
++		setbits_le32(ccm + CCU_H6_MBUS_CFG, MBUS_RESET);
++		setbits_le32(ccm + CCU_H6_MBUS_CFG, MBUS_ENABLE);
++		clrbits_le32(&mctl_com->unk_0x500, BIT(25));
++		setbits_le32(ccm + CCU_H6_DRAM_CLK_CFG, DRAM_MOD_RESET);
++		udelay(5);
++		writel(0x8000, &mctl_ctl->clken);
++
++		if (!(readl((void *)0x070001f8UL) >> 16))
++			setbits_le32((void *)0x070001f4UL, BIT(0));
++	}
++#else
++
+ 	/* Put all DRAM-related blocks to reset state */
+ 	clrbits_le32(ccm + CCU_H6_MBUS_CFG, MBUS_ENABLE);
+ 	clrbits_le32(ccm + CCU_H6_MBUS_CFG, MBUS_RESET);
+@@ -139,8 +242,13 @@ static void mctl_sys_init(u32 clk_rate)
+ 
+ 	/* Unknown hack, which enables access of mctl_ctl regs */
+ 	writel(0x8000, &mctl_ctl->clken);
++#endif
+ }
+ 
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++static bool h700_vendor_set_addrmap(struct sunxi_mctl_ctl_reg *mctl_ctl);
++#endif
++
+ static void mctl_set_addrmap(const struct dram_config *config)
+ {
+ 	struct sunxi_mctl_ctl_reg * const mctl_ctl =
+@@ -149,6 +257,11 @@ static void mctl_set_addrmap(const struct dram_config *config)
+ 	u8 rows = config->rows;
+ 	u8 ranks = config->ranks;
+ 
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	h700_vendor_set_addrmap(mctl_ctl);
++	return;
++#endif
++
+ 	if (!config->bus_full_width)
+ 		cols -= 1;
+ 
+@@ -227,61 +340,29 @@ static void mctl_set_addrmap(const struct dram_config *config)
+ 	mctl_ctl->addrmap[8] = 0x3F3F;
+ }
+ 
+-#ifdef CONFIG_DRAM_SUNXI_PHY_ADDR_MAP_1
+-static const u8 phy_init[] = {
+-#ifdef CONFIG_SUNXI_DRAM_H616_DDR3_1333
+-	0x08, 0x02, 0x12, 0x05, 0x15, 0x17, 0x18, 0x0b,
+-	0x14, 0x07, 0x04, 0x13, 0x0c, 0x00, 0x16, 0x1a,
+-	0x0a, 0x11, 0x03, 0x10, 0x0e, 0x01, 0x0d, 0x19,
+-	0x06, 0x09, 0x0f
+-#elif defined(CONFIG_SUNXI_DRAM_H616_LPDDR3)
+-	0x18, 0x00, 0x04, 0x09, 0x06, 0x05, 0x02, 0x19,
+-	0x17, 0x03, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+-	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x07,
+-	0x08, 0x01, 0x1a
+-#elif defined(CONFIG_SUNXI_DRAM_H616_LPDDR4)
+-	0x03, 0x00, 0x17, 0x05, 0x02, 0x19, 0x06, 0x07,
+-	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+-	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x01,
+-	0x18, 0x04, 0x1a
+-#endif
+-};
+-#else /* CONFIG_DRAM_SUNXI_PHY_ADDR_MAP_0 */
+-static const u8 phy_init[] = {
+-#ifdef CONFIG_SUNXI_DRAM_H616_DDR3_1333
+-	0x07, 0x0b, 0x02, 0x16, 0x0d, 0x0e, 0x14, 0x19,
+-	0x0a, 0x15, 0x03, 0x13, 0x04, 0x0c, 0x10, 0x06,
+-	0x0f, 0x11, 0x1a, 0x01, 0x12, 0x17, 0x00, 0x08,
+-	0x09, 0x05, 0x18
+-#elif defined(CONFIG_SUNXI_DRAM_H616_LPDDR3)
+-	0x18, 0x06, 0x00, 0x05, 0x04, 0x03, 0x09, 0x02,
+-	0x08, 0x01, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+-	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x07,
+-	0x17, 0x19, 0x1a
+-#elif defined(CONFIG_SUNXI_DRAM_H616_LPDDR4)
+-	0x02, 0x00, 0x17, 0x05, 0x04, 0x19, 0x06, 0x07,
+-	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+-	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x01,
+-	0x18, 0x03, 0x1a
+-#endif
+-};
+-#endif /* CONFIG_DRAM_SUNXI_PHY_ADDR_MAP_0 */
+ #define MASK_BYTE(reg, nr) (((reg) >> ((nr) * 8)) & 0x1f)
+ static void mctl_phy_configure_odt(const struct dram_para *para)
+ {
+ 	uint32_t val_lo, val_hi;
+ 
+ 	/*
+-	 * This part should be applicable to all memory types, but is
+-	 * usually found in LPDDR4 bootloaders. Therefore, we will leave
+-	 * only for this type of memory.
++	 * H700 boot0 0x24ee4 performs this receiver/driver-mode RMW for
++	 * every supported DRAM type before programming DX drive/ODT.
++	 * Preserve the historical H616 restriction outside the vendor path.
+ 	 */
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 0x390, BIT(5), BIT(4));
++	clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 0x3d0, BIT(5), BIT(4));
++	clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 0x410, BIT(5), BIT(4));
++	clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 0x450, BIT(5), BIT(4));
++#else
+ 	if (para->type == SUNXI_DRAM_TYPE_LPDDR4) {
+ 		clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 0x390, BIT(5), BIT(4));
+ 		clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 0x3d0, BIT(5), BIT(4));
+ 		clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 0x410, BIT(5), BIT(4));
+ 		clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 0x450, BIT(5), BIT(4));
+ 	}
++#endif
+ 
+ 	val_lo = para->dx_dri;
+ 	val_hi = (para->type == SUNXI_DRAM_TYPE_LPDDR4) ? 0x04040404 : para->dx_dri;
+@@ -315,8 +396,8 @@ static void mctl_phy_configure_odt(const struct dram_para *para)
+ 	dmb();
+ }
+ 
+-static bool mctl_phy_write_leveling(const struct dram_para *para,
+-				    const struct dram_config *config)
++static bool h616_mctl_phy_write_leveling(const struct dram_para *para,
++					 const struct dram_config *config)
+ {
+ 	bool result = true;
+ 	u32 val;
+@@ -324,8 +405,11 @@ static bool mctl_phy_write_leveling(const struct dram_para *para,
+ 	clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0xc0, 0x80);
+ 
+ 	if (para->type == SUNXI_DRAM_TYPE_LPDDR4) {
+-		/* MR2 value */
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++		writel(para->mr2, SUNXI_DRAM_PHY0_BASE + 0xc);
++#else
+ 		writel(0x1b, SUNXI_DRAM_PHY0_BASE + 0xc);
++#endif
+ 		writel(0, SUNXI_DRAM_PHY0_BASE + 0x10);
+ 	} else {
+ 		writel(4, SUNXI_DRAM_PHY0_BASE + 0xc);
+@@ -333,14 +417,8 @@ static bool mctl_phy_write_leveling(const struct dram_para *para,
+ 	}
+ 
+ 	setbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 4);
+-
+-	if (config->bus_full_width)
+-		val = 0xf;
+-	else
+-		val = 3;
+-
++	val = config->bus_full_width ? 0xf : 3;
+ 	mctl_await_completion((u32 *)(SUNXI_DRAM_PHY0_BASE + 0x188), val, val);
+-
+ 	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 4);
+ 
+ 	val = readl(SUNXI_DRAM_PHY0_BASE + 0x258);
+@@ -360,38 +438,91 @@ static bool mctl_phy_write_leveling(const struct dram_para *para,
+ 
+ 	if (config->ranks == 2) {
+ 		clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0xc0, 0x40);
+-
+ 		setbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 4);
++		val = config->bus_full_width ? 0xf : 3;
++		mctl_await_completion((u32 *)(SUNXI_DRAM_PHY0_BASE + 0x188),
++				      val, val);
++		clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 4);
++	}
+ 
+-		if (config->bus_full_width)
+-			val = 0xf;
+-		else
+-			val = 3;
++	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0xc0);
++	return result;
++}
+ 
+-		mctl_await_completion((u32 *)(SUNXI_DRAM_PHY0_BASE + 0x188), val, val);
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++/*
++ * Literal clean-room translation of boot0 0x259b0.
++ *
++ * para2 is consumed directly, like boot0:
++ *   bit 0  -> half-width completion mask
++ *   bit 12 -> second rank
++ *
++ * The four trained delay codes are invalid when either 0 or 0x3f.
++ */
++static bool h700_vendor_write_leveling(const struct dram_para *para)
++{
++	u32 para2 = h700_dram_runtime.current_para2;
++	u32 mask, val;
++	bool failed = false;
+ 
+-		clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 4);
++	clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0xc0, 0x80);
++
++	if (para->type == SUNXI_DRAM_TYPE_DDR4) {
++		writel((u8)para->mr1, SUNXI_DRAM_PHY0_BASE + 0xc);
++		writel(((u8)(para->mr1 >> 8)) | 0x40,
++		       SUNXI_DRAM_PHY0_BASE + 0x10);
++	} else if (para->type == SUNXI_DRAM_TYPE_LPDDR3 ||
++		   para->type == SUNXI_DRAM_TYPE_LPDDR4) {
++		writel((u8)para->mr2, SUNXI_DRAM_PHY0_BASE + 0xc);
++		writel((u8)(para->mr2 >> 8), SUNXI_DRAM_PHY0_BASE + 0x10);
++	} else {
++		writel(4, SUNXI_DRAM_PHY0_BASE + 0xc);
++		writel(0x40, SUNXI_DRAM_PHY0_BASE + 0x10);
+ 	}
+ 
++	setbits_le32(SUNXI_DRAM_PHY0_BASE + 8, BIT(2));
++	mask = (para2 & BIT(0)) ? 0x3 : 0xf;
++	while ((readl(SUNXI_DRAM_PHY0_BASE + 0x188) & mask) != mask)
++		;
++	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, BIT(2));
++
++	val = readl(SUNXI_DRAM_PHY0_BASE + 0x258);
++	if (val == 0 || val == 0x3f)
++		failed = true;
++	val = readl(SUNXI_DRAM_PHY0_BASE + 0x25c);
++	if (val == 0 || val == 0x3f)
++		failed = true;
++	val = readl(SUNXI_DRAM_PHY0_BASE + 0x318);
++	if (val == 0 || val == 0x3f)
++		failed = true;
++	val = readl(SUNXI_DRAM_PHY0_BASE + 0x31c);
++	if (val == 0 || val == 0x3f)
++		failed = true;
++
+ 	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0xc0);
+ 
+-	return result;
++	if (para2 & BIT(12)) {
++		clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0xc0, 0x40);
++		setbits_le32(SUNXI_DRAM_PHY0_BASE + 8, BIT(2));
++		while ((readl(SUNXI_DRAM_PHY0_BASE + 0x188) & mask) != mask)
++			;
++		clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, BIT(2));
++	}
++
++	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0xc0);
++	return !failed;
+ }
++#endif
+ 
+-static bool mctl_phy_read_calibration(const struct dram_config *config)
++static bool h616_mctl_phy_read_calibration(const struct dram_config *config)
+ {
+ 	bool result = true;
+ 	u32 val, tmp;
+ 
+ 	clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0x30, 0x20);
+-
+ 	setbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 1);
+ 
+-	if (config->bus_full_width)
+-		val = 0xf;
+-	else
+-		val = 3;
+-
++	val = config->bus_full_width ? 0xf : 3;
+ 	while ((readl(SUNXI_DRAM_PHY0_BASE + 0x184) & val) != val) {
+ 		if (readl(SUNXI_DRAM_PHY0_BASE + 0x184) & 0x20) {
+ 			result = false;
+@@ -400,12 +531,10 @@ static bool mctl_phy_read_calibration(const struct dram_config *config)
+ 	}
+ 
+ 	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 1);
+-
+ 	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0x30);
+ 
+ 	if (config->ranks == 2) {
+ 		clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0x30, 0x10);
+-
+ 		setbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 1);
+ 
+ 		while ((readl(SUNXI_DRAM_PHY0_BASE + 0x184) & val) != val) {
+@@ -433,10 +562,85 @@ static bool mctl_phy_read_calibration(const struct dram_config *config)
+ 	clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 0x38, 0x7, (val + 2) & 7);
+ 
+ 	setbits_le32(SUNXI_DRAM_PHY0_BASE + 4, 0x20);
+-
+ 	return result;
+ }
+ 
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++/*
++ * Literal clean-room translation of boot0 0x25ac8.
++ *
++ * Unlike the H616 helper, boot0 consumes para2 directly:
++ *   para2 bit 0  -> half-width calibration completion mask (0x3)
++ *   para2 bit 12 -> second rank calibration
++ *
++ * PHY+0x184 bit 5 is the hardware calibration-error indication.
++ */
++static bool h700_vendor_read_calibration(const struct dram_para *para)
++{
++	u32 para2 = h700_dram_runtime.current_para2;
++	u32 status, mask, val, tmp;
++	bool failed = false;
++
++	clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0x30, 0x20);
++
++	/* boot0 only does this extra RMW for type 4 (DDR4). */
++	if (para->type == SUNXI_DRAM_TYPE_DDR4)
++		setbits_le32(SUNXI_DRAM_PHY0_BASE + 0x54, BIT(1));
++
++	setbits_le32(SUNXI_DRAM_PHY0_BASE + 8, BIT(0));
++	mask = (para2 & BIT(0)) ? 0x3 : 0xf;
++
++	for (;;) {
++		status = readl(SUNXI_DRAM_PHY0_BASE + 0x184);
++		if ((status & mask) == mask)
++			break;
++		if (status & BIT(5)) {
++			failed = true;
++			break;
++		}
++	}
++
++	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, BIT(0));
++	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0x30);
++
++	if (para2 & BIT(12)) {
++		clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0x30, 0x10);
++		setbits_le32(SUNXI_DRAM_PHY0_BASE + 8, BIT(0));
++
++		for (;;) {
++			status = readl(SUNXI_DRAM_PHY0_BASE + 0x184);
++			if ((status & mask) == mask)
++				break;
++			if (status & BIT(5)) {
++				/* Vendor RCAL rank 1 hardware error. */
++				failed = true;
++				break;
++			}
++		}
++
++		clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, BIT(0));
++	}
++
++	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 8, 0x30);
++
++	val = readl(SUNXI_DRAM_PHY0_BASE + 0x274) & 7;
++	tmp = readl(SUNXI_DRAM_PHY0_BASE + 0x26c) & 7;
++	if (val < tmp)
++		val = tmp;
++	tmp = readl(SUNXI_DRAM_PHY0_BASE + 0x32c) & 7;
++	if (val < tmp)
++		val = tmp;
++	tmp = readl(SUNXI_DRAM_PHY0_BASE + 0x334) & 7;
++	if (val < tmp)
++		val = tmp;
++
++	clrsetbits_le32(SUNXI_DRAM_PHY0_BASE + 0x38, 0x7, (val + 2) & 7);
++	setbits_le32(SUNXI_DRAM_PHY0_BASE + 4, BIT(5));
++
++	return !failed;
++}
++#endif
++
+ static bool mctl_phy_read_training(const struct dram_para *para,
+ 			   const struct dram_config *config)
+ {
+@@ -473,7 +677,7 @@ static bool mctl_phy_read_training(const struct dram_para *para,
+ 	for (i = 0; i < 9; i++) {
+ 		val1 = readl(&ptr1[i]);
+ 		val2 = readl(&ptr2[i]);
+-		if (val1 - val2 <= 6)
++		if (val1 - val2 <= 6 && !(para->tpr10 & BIT(28)))
+ 			result = false;
+ 	}
+ 	ptr1 = (u32 *)(SUNXI_DRAM_PHY0_BASE + 0x8bc);
+@@ -481,7 +685,7 @@ static bool mctl_phy_read_training(const struct dram_para *para,
+ 	for (i = 0; i < 9; i++) {
+ 		val1 = readl(&ptr1[i]);
+ 		val2 = readl(&ptr2[i]);
+-		if (val1 - val2 <= 6)
++		if (val1 - val2 <= 6 && !(para->tpr10 & BIT(28)))
+ 			result = false;
+ 	}
+ 
+@@ -491,7 +695,7 @@ static bool mctl_phy_read_training(const struct dram_para *para,
+ 		for (i = 0; i < 9; i++) {
+ 			val1 = readl(&ptr1[i]);
+ 			val2 = readl(&ptr2[i]);
+-			if (val1 - val2 <= 6)
++			if (val1 - val2 <= 6 && !(para->tpr10 & BIT(28)))
+ 				result = false;
+ 		}
+ 
+@@ -500,7 +704,7 @@ static bool mctl_phy_read_training(const struct dram_para *para,
+ 		for (i = 0; i < 9; i++) {
+ 			val1 = readl(&ptr1[i]);
+ 			val2 = readl(&ptr2[i]);
+-			if (val1 - val2 <= 6)
++			if (val1 - val2 <= 6 && !(para->tpr10 & BIT(28)))
+ 				result = false;
+ 		}
+ 	}
+@@ -532,7 +736,8 @@ static bool mctl_phy_read_training(const struct dram_para *para,
+ 	return result;
+ }
+ 
+-static bool mctl_phy_write_training(const struct dram_config *config)
++static bool mctl_phy_write_training(const struct dram_para *para,
++				    const struct dram_config *config)
+ {
+ 	u32 val1, val2, *ptr1, *ptr2;
+ 	bool result = true;
+@@ -563,7 +768,7 @@ static bool mctl_phy_write_training(const struct dram_config *config)
+ 	for (i = 0; i < 9; i++) {
+ 		val1 = readl(&ptr1[i]);
+ 		val2 = readl(&ptr2[i]);
+-		if (val1 - val2 <= 6)
++		if (val1 - val2 <= 6 && !(para->tpr10 & BIT(28)))
+ 			result = false;
+ 	}
+ 	ptr1 = (u32 *)(SUNXI_DRAM_PHY0_BASE + 0x95c);
+@@ -571,7 +776,7 @@ static bool mctl_phy_write_training(const struct dram_config *config)
+ 	for (i = 0; i < 9; i++) {
+ 		val1 = readl(&ptr1[i]);
+ 		val2 = readl(&ptr2[i]);
+-		if (val1 - val2 <= 6)
++		if (val1 - val2 <= 6 && !(para->tpr10 & BIT(28)))
+ 			result = false;
+ 	}
+ 
+@@ -581,7 +786,7 @@ static bool mctl_phy_write_training(const struct dram_config *config)
+ 		for (i = 0; i < 9; i++) {
+ 			val1 = readl(&ptr1[i]);
+ 			val2 = readl(&ptr2[i]);
+-			if (val1 - val2 <= 6)
++			if (val1 - val2 <= 6 && !(para->tpr10 & BIT(28)))
+ 				result = false;
+ 		}
+ 		ptr1 = (u32 *)(SUNXI_DRAM_PHY0_BASE + 0xb5c);
+@@ -589,7 +794,7 @@ static bool mctl_phy_write_training(const struct dram_config *config)
+ 		for (i = 0; i < 9; i++) {
+ 			val1 = readl(&ptr1[i]);
+ 			val2 = readl(&ptr2[i]);
+-			if (val1 - val2 <= 6)
++			if (val1 - val2 <= 6 && !(para->tpr10 & BIT(28)))
+ 				result = false;
+ 		}
+ 	}
+@@ -827,6 +1032,7 @@ static void mctl_phy_ca_bit_delay_compensation(const struct dram_para *para,
+ 					       const struct dram_config *config)
+ {
+ 	u32 val, *ptr;
++	bool second_rank;
+ 	int i;
+ 
+ 	if (para->tpr0 & BIT(30))
+@@ -844,12 +1050,76 @@ static void mctl_phy_ca_bit_delay_compensation(const struct dram_para *para,
+ 	writel(val, SUNXI_DRAM_PHY0_BASE + 0x7e0);
+ 	writel(val, SUNXI_DRAM_PHY0_BASE + 0x7f4);
+ 
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	/* boot0 0x25064 consumes para2.bit12 directly for the second rank. */
++	second_rank = h700_dram_runtime.current_para2 & BIT(12);
++	val = (para->tpr10 >> 7) & 0x1e;
++	{
++		/* Exact H700 boot0 0x250a0 jump table. */
++		switch (para->type) {
++		case SUNXI_DRAM_TYPE_DDR3:
++			if (para->tpr2 & BIT(0)) {
++				writel(val, SUNXI_DRAM_PHY0_BASE + 0x794);
++				if (second_rank) {
++					val = (para->tpr10 >> 11) & 0x1e;
++					writel(val, SUNXI_DRAM_PHY0_BASE + 0x7e4);
++				}
++				if (para->tpr0 & BIT(31)) {
++					val = (para->tpr0 << 1) & 0x3e;
++					writel(val, SUNXI_DRAM_PHY0_BASE + 0x790);
++					writel(val, SUNXI_DRAM_PHY0_BASE + 0x7b8);
++					writel(val, SUNXI_DRAM_PHY0_BASE + 0x7cc);
++				}
++			} else {
++				writel(val, SUNXI_DRAM_PHY0_BASE + 0x7d4);
++				if (second_rank) {
++					val = (para->tpr10 >> 11) & 0x1e;
++					writel(val, SUNXI_DRAM_PHY0_BASE + 0x79c);
++				}
++				if (para->tpr0 & BIT(31)) {
++					val = (para->tpr0 << 1) & 0x3e;
++					writel(val, SUNXI_DRAM_PHY0_BASE + 0x78c);
++					writel(val, SUNXI_DRAM_PHY0_BASE + 0x7a4);
++					writel(val, SUNXI_DRAM_PHY0_BASE + 0x7b8);
++				}
++			}
++			return;
++		case SUNXI_DRAM_TYPE_LPDDR3:
++			if (para->tpr2 & BIT(0)) {
++				writel(val, SUNXI_DRAM_PHY0_BASE + 0x7a0);
++				if (second_rank) {
++					val = (para->tpr10 >> 11) & 0x1e;
++					writel(val, SUNXI_DRAM_PHY0_BASE + 0x79c);
++				}
++			} else {
++				writel(val, SUNXI_DRAM_PHY0_BASE + 0x7e8);
++				if (second_rank) {
++					val = (para->tpr10 >> 11) & 0x1e;
++					writel(val, SUNXI_DRAM_PHY0_BASE + 0x7f8);
++				}
++			}
++			return;
++		case SUNXI_DRAM_TYPE_LPDDR4:
++			writel(val, SUNXI_DRAM_PHY0_BASE + 0x788);
++			if (second_rank) {
++				val = (para->tpr10 >> 11) & 0x1e;
++				writel(val, SUNXI_DRAM_PHY0_BASE + 0x794);
++			}
++			return;
++		default:
++			panic("H700 vendor backend: unsupported CA type\n");
++		}
++	}
++#else
++	second_rank = config->ranks == 2;
+ 	val = (para->tpr10 >> 7) & 0x1e;
++
++	/* Historical H616 routing. */
+ 	switch (para->type) {
+ 	case SUNXI_DRAM_TYPE_DDR3:
+ 		if (para->tpr2 & 1) {
+ 			writel(val, SUNXI_DRAM_PHY0_BASE + 0x794);
+-			if (config->ranks == 2) {
++			if (second_rank) {
+ 				val = (para->tpr10 >> 11) & 0x1e;
+ 				writel(val, SUNXI_DRAM_PHY0_BASE + 0x7e4);
+ 			}
+@@ -861,7 +1131,7 @@ static void mctl_phy_ca_bit_delay_compensation(const struct dram_para *para,
+ 			}
+ 		} else {
+ 			writel(val, SUNXI_DRAM_PHY0_BASE + 0x7d4);
+-			if (config->ranks == 2) {
++			if (second_rank) {
+ 				val = (para->tpr10 >> 11) & 0x1e;
+ 				writel(val, SUNXI_DRAM_PHY0_BASE + 0x79c);
+ 			}
+@@ -876,13 +1146,13 @@ static void mctl_phy_ca_bit_delay_compensation(const struct dram_para *para,
+ 	case SUNXI_DRAM_TYPE_LPDDR3:
+ 		if (para->tpr2 & 1) {
+ 			writel(val, SUNXI_DRAM_PHY0_BASE + 0x7a0);
+-			if (config->ranks == 2) {
++			if (second_rank) {
+ 				val = (para->tpr10 >> 11) & 0x1e;
+ 				writel(val, SUNXI_DRAM_PHY0_BASE + 0x79c);
+ 			}
+ 		} else {
+ 			writel(val, SUNXI_DRAM_PHY0_BASE + 0x7e8);
+-			if (config->ranks == 2) {
++			if (second_rank) {
+ 				val = (para->tpr10 >> 11) & 0x1e;
+ 				writel(val, SUNXI_DRAM_PHY0_BASE + 0x7f8);
+ 			}
+@@ -890,16 +1160,104 @@ static void mctl_phy_ca_bit_delay_compensation(const struct dram_para *para,
+ 		break;
+ 	case SUNXI_DRAM_TYPE_LPDDR4:
+ 		writel(val, SUNXI_DRAM_PHY0_BASE + 0x788);
+-		if (config->ranks == 2) {
++		if (second_rank) {
+ 			val = (para->tpr10 >> 11) & 0x1e;
+ 			writel(val, SUNXI_DRAM_PHY0_BASE + 0x794);
+-		};
++		}
+ 		break;
+ 	case SUNXI_DRAM_TYPE_DDR4:
+ 	default:
+ 		panic("This DRAM setup is currently not supported.\n");
+-	};
++	}
++#endif
++}
++
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++/*
++ * Dedicated translation of vendor boot0 training orchestrator 0x275f0.
++ *
++ * Low-level training primitives are still shared with the H616 file,
++ * but H700 owns stage ordering, local retry count, error aggregation and
++ * the "skip read/write training after failed read calibration" rule.
++ */
++static bool h700_vendor_training(const struct dram_para *para,
++				 const struct dram_config *config)
++{
++	unsigned int attempts = (para->tpr10 & TPR10_TRAINING_RETRY) ? 5 : 1;
++	unsigned int errors = 0;
++	unsigned int i;
++	bool result = true;
++
++	if (para->tpr10 & TPR10_WRITE_LEVELING) {
++		for (i = 0; i < attempts; i++) {
++			result = h700_vendor_write_leveling(para);
++			if (result)
++				break;
++		}
++		if (!result)
++			errors |= BIT(0);
++	}
++
++	if (para->tpr10 & TPR10_READ_CALIBRATION) {
++		for (i = 0; i < attempts; i++) {
++			result = h700_vendor_read_calibration(para);
++			if (result)
++				break;
++		}
++		if (!result)
++			errors |= BIT(1);
++	}
++
++	if ((para->tpr10 & TPR10_READ_TRAINING) && !(errors & BIT(1))) {
++		for (i = 0; i < attempts; i++) {
++			result = mctl_phy_read_training(para, config);
++			if (result)
++				break;
++		}
++		if (!result)
++			errors |= BIT(2);
++	}
++
++	if ((para->tpr10 & TPR10_WRITE_TRAINING) && !(errors & BIT(1))) {
++		for (i = 0; i < attempts; i++) {
++			result = mctl_phy_write_training(para, config);
++			if (result)
++				break;
++		}
++		if (!result)
++			errors |= BIT(3);
++	}
++
++	/*
++	 * boot0 0x276ec..0x27760: BIT19 owns the whole-core retry.
++	 * A failed training pass increments the SRAM retry counter and re-enters
++	 * 0x272c0.  The counter is cleared while unwinding the recursive retry.
++	 * 0x251ec is run on normal success and after a recursive retry returns,
++	 * but not when the tenth pass is exhausted.
++	 */
++	if (para->tpr10 & TPR10_TRAINING_RETRY) {
++		if (errors) {
++			h700_dram_runtime.retry_count++;
++			if (h700_dram_runtime.retry_count == 10)
++				return false;
++
++			result = h700_vendor_core_init(para, config);
++			h700_dram_runtime.retry_count = 0;
++			mctl_phy_bit_delay_compensation(para);
++			return result;
++		}
++
++		mctl_phy_bit_delay_compensation(para);
++		return result;
++	}
++
++	if (errors)
++		return result;
++
++	mctl_phy_bit_delay_compensation(para);
++	return result;
+ }
++#endif
+ 
+ static bool mctl_phy_init(const struct dram_para *para,
+ 			  const struct dram_config *config)
+@@ -908,7 +1266,15 @@ static bool mctl_phy_init(const struct dram_para *para,
+ 			(struct sunxi_mctl_com_reg *)SUNXI_DRAM_COM_BASE;
+ 	struct sunxi_mctl_ctl_reg * const mctl_ctl =
+ 			(struct sunxi_mctl_ctl_reg *)SUNXI_DRAM_CTL0_BASE;
+-	u32 val, val2, *ptr, mr0, mr2;
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	const u8 *phy_init = h700_vendor_get_phy_init(para);
++#else
++	const u8 *phy_init = h616_get_phy_init(para);
++#endif
++	u32 val, val2, *ptr;
++#ifndef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	u32 mr0, mr2;
++#endif
+ 	int i;
+ 
+ 	if (para->type == SUNXI_DRAM_TYPE_LPDDR4)
+@@ -922,7 +1288,7 @@ static bool mctl_phy_init(const struct dram_para *para,
+ 
+ 	switch (para->type) {
+ 	case SUNXI_DRAM_TYPE_DDR3:
+-		if (para->tpr2 & 0x100) {
++		if (para->tpr2 & BIT(8)) {
+ 			val = 9;
+ 			val2 = 7;
+ 		} else {
+@@ -931,7 +1297,7 @@ static bool mctl_phy_init(const struct dram_para *para,
+ 		}
+ 		break;
+ 	case SUNXI_DRAM_TYPE_LPDDR3:
+-		if (para->tpr2 & 0x100) {
++		if (para->tpr2 & BIT(8)) {
+ 			val = 12;
+ 			val2 = 6;
+ 		} else {
+@@ -964,7 +1330,7 @@ static bool mctl_phy_init(const struct dram_para *para,
+ 	writel(val2, SUNXI_DRAM_PHY0_BASE + 0x37c);
+ 
+ 	ptr = (u32 *)(SUNXI_DRAM_PHY0_BASE + 0xc0);
+-	for (i = 0; i < ARRAY_SIZE(phy_init); i++)
++	for (i = 0; i < H616_PHY_INIT_LEN; i++)
+ 		writel(phy_init[i], &ptr[i]);
+ 
+ 	if (para->tpr10 & TPR10_CA_BIT_DELAY)
+@@ -973,12 +1339,24 @@ static bool mctl_phy_init(const struct dram_para *para,
+ 	switch (para->type) {
+ 	case SUNXI_DRAM_TYPE_DDR3:
+ 		val = para->tpr6 & 0xff;
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++		if (!val)
++			val = 0x80;
++#endif
+ 		break;
+ 	case SUNXI_DRAM_TYPE_LPDDR3:
+-		val = para->tpr6 >> 16 & 0xff;
++		val = (para->tpr6 >> 16) & 0xff;
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++		if (!val)
++			val = 0x80;
++#endif
+ 		break;
+ 	case SUNXI_DRAM_TYPE_LPDDR4:
+-		val = para->tpr6 >> 24 & 0xff;
++		val = (para->tpr6 >> 24) & 0xff;
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++		if (!val)
++			val = 0x33;
++#endif
+ 		break;
+ 	case SUNXI_DRAM_TYPE_DDR4:
+ 	default:
+@@ -1027,6 +1405,17 @@ static bool mctl_phy_init(const struct dram_para *para,
+ 
+ 	writel(0x37, SUNXI_DRAM_PHY0_BASE + 0x58);
+ 
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	/* boot0 0x2593c: restore the H700 PHY gate before DFI init. */
++	setbits_le32((void *)0x070001f4UL, BIT(0));
++	/*
++	 * boot0 0x24ba8 starts DFI/MR initialisation by enabling
++	 * CTL.CLKEN[8].  Do this here, after 0x25818 PHY setup,
++	 * rather than before PHY reset as the generic H616 path does.
++	 */
++	setbits_le32(&mctl_ctl->clken, BIT(8));
++#endif
++
+ 	writel(0, &mctl_ctl->swctl);
+ 	setbits_le32(&mctl_ctl->dfimisc, 1);
+ 
+@@ -1052,6 +1441,79 @@ static bool mctl_phy_init(const struct dram_para *para,
+ 	writel(1, &mctl_ctl->swctl);
+ 	mctl_await_completion(&mctl_ctl->swstat, 1, 1);
+ 
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	switch (para->type) {
++	case SUNXI_DRAM_TYPE_DDR3:
++		/* boot0 0x26534 normalizes DDR3 MR0/MR2/MR3 first. */
++		if (para->tpr2 & BIT(8)) {
++			val = 0x1b50;
++			val2 = 0x10;
++		} else {
++			val = 0x1f14;
++			val2 = 0x20;
++		}
++		writel(val, &mctl_ctl->mrctrl1);
++		writel(0x80000030, &mctl_ctl->mrctrl0);
++		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
++		writel(para->mr1, &mctl_ctl->mrctrl1);
++		writel(0x80001030, &mctl_ctl->mrctrl0);
++		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
++		writel(val2, &mctl_ctl->mrctrl1);
++		writel(0x80002030, &mctl_ctl->mrctrl0);
++		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
++		writel(0, &mctl_ctl->mrctrl1);
++		writel(0x80003030, &mctl_ctl->mrctrl0);
++		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
++		break;
++	case SUNXI_DRAM_TYPE_LPDDR3:
++		/* boot0 0x26b78..0x26c7c normalizes MR1/MR2 in 0x26534. */
++		if (para->tpr2 & BIT(8)) {
++			val = 0x43;
++			val2 = 0x1a;
++		} else {
++			val = 0x83;
++			val2 = 0x1c;
++		}
++		writel((1U << 8) | val, &mctl_ctl->mrctrl1);
++		writel(0x800000f0, &mctl_ctl->mrctrl0);
++		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
++		writel((2U << 8) | val2, &mctl_ctl->mrctrl1);
++		writel(0x800000f0, &mctl_ctl->mrctrl0);
++		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
++		writel((3U << 8) | para->mr3, &mctl_ctl->mrctrl1);
++		writel(0x800000f0, &mctl_ctl->mrctrl0);
++		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
++		break;
++	case SUNXI_DRAM_TYPE_LPDDR4:
++#define H700_LPDDR4_MR_WRITE(_mr, _value) do { \
++		writel(((_mr) << 8) | ((_value) & 0xff), &mctl_ctl->mrctrl1); \
++		writel(0x80000030, &mctl_ctl->mrctrl0); \
++		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0); \
++	} while (0)
++#define H700_LPDDR4_MR_WRITE_DELAYED(_mr, _value) do { \
++		writel(((_mr) << 8) | ((_value) & 0xff), &mctl_ctl->mrctrl1); \
++		udelay(10); \
++		writel(0x80000030, &mctl_ctl->mrctrl0); \
++		udelay(10); \
++		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0); \
++	} while (0)
++		H700_LPDDR4_MR_WRITE(0, para->mr0);
++		H700_LPDDR4_MR_WRITE(1, para->mr1);
++		H700_LPDDR4_MR_WRITE(2, para->mr2);
++		H700_LPDDR4_MR_WRITE(3, para->mr3);
++		H700_LPDDR4_MR_WRITE(4, para->mr4);
++		H700_LPDDR4_MR_WRITE_DELAYED(11, para->mr11);
++		H700_LPDDR4_MR_WRITE_DELAYED(12, para->mr12);
++		H700_LPDDR4_MR_WRITE_DELAYED(14, para->mr14);
++		H700_LPDDR4_MR_WRITE_DELAYED(22, para->mr22);
++#undef H700_LPDDR4_MR_WRITE_DELAYED
++#undef H700_LPDDR4_MR_WRITE
++		break;
++	case SUNXI_DRAM_TYPE_DDR4:
++	default:
++		panic("This DRAM setup is currently not supported.\n");
++	}
++#else
+ 	if (para->tpr2 & 0x100) {
+ 		mr0 = 0x1b50;
+ 		mr2 = 0x10;
+@@ -1064,32 +1526,23 @@ static bool mctl_phy_init(const struct dram_para *para,
+ 		writel(mr0, &mctl_ctl->mrctrl1);
+ 		writel(0x80000030, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(4, &mctl_ctl->mrctrl1);
+ 		writel(0x80001030, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(mr2, &mctl_ctl->mrctrl1);
+ 		writel(0x80002030, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(0, &mctl_ctl->mrctrl1);
+ 		writel(0x80003030, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+ 		break;
+ 	case SUNXI_DRAM_TYPE_LPDDR3:
+-		/* MR0 is read-only */
+-		/* MR1: nWR=14, BL8 */
+ 		writel(0x183, &mctl_ctl->mrctrl1);
+ 		writel(0x800000f0, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+-		/* MR2: no WR leveling, WL set A, use nWR>9, nRL=14/nWL=8 */
+ 		writel(0x21c, &mctl_ctl->mrctrl1);
+ 		writel(0x800000f0, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+-		/* MR3: 34.3 Ohm pull-up/pull-down resistor */
+ 		writel(0x301, &mctl_ctl->mrctrl1);
+ 		writel(0x800000f0, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+@@ -1098,41 +1551,33 @@ static bool mctl_phy_init(const struct dram_para *para,
+ 		writel(0x0, &mctl_ctl->mrctrl1);
+ 		writel(0x80000030, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(0x134, &mctl_ctl->mrctrl1);
+ 		writel(0x80000030, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(0x21b, &mctl_ctl->mrctrl1);
+ 		writel(0x80000030, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(0x333, &mctl_ctl->mrctrl1);
+ 		writel(0x80000030, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(0x403, &mctl_ctl->mrctrl1);
+ 		writel(0x80000030, &mctl_ctl->mrctrl0);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(0xb04, &mctl_ctl->mrctrl1);
+ 		udelay(10);
+ 		writel(0x80000030, &mctl_ctl->mrctrl0);
+ 		udelay(10);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(0xc72, &mctl_ctl->mrctrl1);
+ 		udelay(10);
+ 		writel(0x80000030, &mctl_ctl->mrctrl0);
+ 		udelay(10);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(0xe09, &mctl_ctl->mrctrl1);
+ 		udelay(10);
+ 		writel(0x80000030, &mctl_ctl->mrctrl0);
+ 		udelay(10);
+ 		mctl_await_completion(&mctl_ctl->mrctrl0, BIT(31), 0);
+-
+ 		writel(0x1624, &mctl_ctl->mrctrl1);
+ 		udelay(10);
+ 		writel(0x80000030, &mctl_ctl->mrctrl0);
+@@ -1142,63 +1587,75 @@ static bool mctl_phy_init(const struct dram_para *para,
+ 	case SUNXI_DRAM_TYPE_DDR4:
+ 	default:
+ 		panic("This DRAM setup is currently not supported.\n");
+-	};
+-
++	}
++#endif
+ 	writel(0, SUNXI_DRAM_PHY0_BASE + 0x54);
+ 
+ 	writel(0, &mctl_ctl->swctl);
+ 	clrbits_le32(&mctl_ctl->rfshctl3, 1);
+ 	writel(1, &mctl_ctl->swctl);
+ 
+-	if (para->tpr10 & TPR10_WRITE_LEVELING) {
+-		for (i = 0; i < 5; i++)
+-			if (mctl_phy_write_leveling(para, config))
+-				break;
+-		if (i == 5) {
+-			debug("write leveling failed!\n");
+-			return false;
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	if (!h700_vendor_training(para, config))
++		return false;
++#else
++	{
++		unsigned int i;
++		unsigned int attempts = 5;
++
++		if (para->tpr10 & TPR10_WRITE_LEVELING) {
++			for (i = 0; i < attempts; i++)
++				if (h616_mctl_phy_write_leveling(para, config))
++					break;
++			if (i == attempts) {
++				debug("write leveling failed!\n");
++				return false;
++			}
+ 		}
+-	}
+ 
+-	if (para->tpr10 & TPR10_READ_CALIBRATION) {
+-		for (i = 0; i < 5; i++)
+-			if (mctl_phy_read_calibration(config))
+-				break;
+-		if (i == 5) {
+-			debug("read calibration failed!\n");
+-			return false;
++		if (para->tpr10 & TPR10_READ_CALIBRATION) {
++			for (i = 0; i < attempts; i++)
++				if (h616_mctl_phy_read_calibration(config))
++					break;
++			if (i == attempts) {
++				debug("read calibration failed!\n");
++				return false;
++			}
+ 		}
+-	}
+ 
+-	if (para->tpr10 & TPR10_READ_TRAINING) {
+-		for (i = 0; i < 5; i++)
+-			if (mctl_phy_read_training(para, config))
+-				break;
+-		if (i == 5) {
+-			debug("read training failed!\n");
+-			return false;
++		if (para->tpr10 & TPR10_READ_TRAINING) {
++			for (i = 0; i < attempts; i++)
++				if (mctl_phy_read_training(para, config))
++					break;
++			if (i == attempts) {
++				debug("read training failed!\n");
++				return false;
++			}
+ 		}
+-	}
+ 
+-	if (para->tpr10 & TPR10_WRITE_TRAINING) {
+-		for (i = 0; i < 5; i++)
+-			if (mctl_phy_write_training(config))
+-				break;
+-		if (i == 5) {
+-			debug("write training failed!\n");
+-			return false;
++		if (para->tpr10 & TPR10_WRITE_TRAINING) {
++			for (i = 0; i < attempts; i++)
++				if (mctl_phy_write_training(para, config))
++					break;
++			if (i == attempts) {
++				debug("write training failed!\n");
++				return false;
++			}
+ 		}
+ 	}
++#endif
+ 
++#ifndef CONFIG_NUUBOS_H700_VENDOR_DRAM
+ 	mctl_phy_bit_delay_compensation(para);
++#endif
+ 
+ 	clrbits_le32(SUNXI_DRAM_PHY0_BASE + 0x60, 4);
+ 
+ 	return true;
+ }
+ 
+-static bool mctl_ctrl_init(const struct dram_para *para,
+-			   const struct dram_config *config)
++static bool h616_mctl_ctrl_init(const struct dram_para *para,
++				const struct dram_config *config)
+ {
+ 	struct sunxi_mctl_com_reg * const mctl_com =
+ 			(struct sunxi_mctl_com_reg *)SUNXI_DRAM_COM_BASE;
+@@ -1286,7 +1743,6 @@ static bool mctl_ctrl_init(const struct dram_para *para,
+ 	writel(0, &mctl_com->maer2);
+ 
+ 	writel(0x20, &mctl_ctl->pwrctl);
+-	setbits_le32(&mctl_ctl->clken, BIT(8));
+ 
+ 	clrsetbits_le32(&mctl_com->unk_0x500, BIT(24), 0x300);
+ 	udelay(1);
+@@ -1294,6 +1750,11 @@ static bool mctl_ctrl_init(const struct dram_para *para,
+ 	setbits_le32(&mctl_com->unk_0x500, BIT(24));
+ 	udelay(1);
+ 
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	/* boot0 0x25818: gate the H700 PHY calibration path before programming it. */
++	clrbits_le32((void *)0x070001f4UL, BIT(0));
++#endif
++
+ 	if (!mctl_phy_init(para, config))
+ 		return false;
+ 
+@@ -1311,17 +1772,205 @@ static bool mctl_ctrl_init(const struct dram_para *para,
+ 	return true;
+ }
+ 
+-bool mctl_core_init(const struct dram_para *para,
+-		    const struct dram_config *config)
+-{
+-	mctl_sys_init(para->clk);
+ 
+-	return mctl_ctrl_init(para, config);
+-}
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++/*
++ * Dedicated H700 controller wrapper.
++ *
++ * This intentionally does not call the H616 controller orchestrator.
++ * The order mirrors the vendor boot0 call graph:
++ *
++ *   0x2779c wrapper
++ *     -> CLKEN / COM preparation
++ *     -> 0x27150 controller setup
++ *     -> 0x257ec PHY reset/preparation
++ *     -> 0x25818 PHY setup + 0x24ba8 DFI/MR init
++ *     -> 0x275f0 training
++ *     -> 0x26458 controller post
++ *
++ * Low-level helpers already proven register-equivalent are reused, but
++ * the H700 sequence is owned here so later clean-room replacements do not
++ * perturb the upstream H616 path.
++ */
++static bool h700_vendor_ctrl_init(const struct dram_para *para,
++				  const struct dram_config *config)
++{
++	struct sunxi_mctl_com_reg * const mctl_com =
++			(struct sunxi_mctl_com_reg *)SUNXI_DRAM_COM_BASE;
++	struct sunxi_mctl_ctl_reg * const mctl_ctl =
++			(struct sunxi_mctl_ctl_reg *)SUNXI_DRAM_CTL0_BASE;
++	u32 reg_val;
++
++	/* boot0 0x2779c wrapper entry / 0x27150 preparation. */
++	clrsetbits_le32(&mctl_com->unk_0x500, BIT(24), 0x200);
++	writel(0x8000, &mctl_ctl->clken);
++	/* boot0 0x24a84(0xff): replace COM+0x08[15:8], do not only OR it. */
++	clrsetbits_le32(&mctl_com->unk_0x008, 0xff00, 0xff00);
++
++	if (para->type == SUNXI_DRAM_TYPE_LPDDR4)
++		writel(1, SUNXI_DRAM_COM_BASE + 0x50);
++	clrsetbits_le32(&mctl_ctl->sched[0], 0xff00, 0x3000);
++
++	/* boot0 0x2779c writes HWLPCTL before entering 0x27150. */
++	writel(0, &mctl_ctl->hwlpctl);
++
++	/* boot0 0x27150 begins with a second 0x24a84(0xff). */
++	clrsetbits_le32(&mctl_com->unk_0x008, 0xff00, 0xff00);
++
++	/* boot0 0x2710c: MSTR is built directly from the active para2. */
++	{
++		u32 para2 = h700_dram_runtime.current_para2;
++
++		reg_val = ((para2 & BIT(12)) ? 3U : 1U) << 24;
++		switch (para->type) {
++		case SUNXI_DRAM_TYPE_DDR3:
++			reg_val |= 0x00040001;
++			break;
++		case SUNXI_DRAM_TYPE_LPDDR3:
++			reg_val |= 0x00040008;
++			break;
++		case SUNXI_DRAM_TYPE_LPDDR4:
++			reg_val |= 0x00080020;
++			break;
++		default:
++			panic("H700 vendor backend: unsupported DRAM type\n");
++		}
++		if (para2 & BIT(0))
++			reg_val |= MSTR_BUSWIDTH_HALF;
++		writel(BIT(31) | BIT(30) | reg_val, &mctl_ctl->mstr);
++
++
++		/* boot0 0x270d8 is used by the selectable DDR3 profile. */
++		if (para->type == SUNXI_DRAM_TYPE_DDR3) {
++			if ((readl(&mctl_ctl->mstr) & BIT(11)) ||
++			    (para->tpr13 & BIT(5)))
++				clrbits_le32(&mctl_ctl->mstr, MSTR_2TMODE);
++			else
++				setbits_le32(&mctl_ctl->mstr, MSTR_2TMODE);
++		}
++
++		/* boot0 0x2703c: ODTMAP also consumes para2.bit12. */
++		writel((para2 & BIT(12)) ? 0x0303 : 0x0201,
++		       &mctl_ctl->odtmap);
++	}
++
++	switch (para->type) {
++	case SUNXI_DRAM_TYPE_DDR3:
++		reg_val = 0x06000400;
++		break;
++	case SUNXI_DRAM_TYPE_LPDDR3: {
++		u32 q = (7 * para->clk) / 2000;
++		u32 top = para->clk < 400 ? 3 : 4;
++
++		/* boot0 0x2709c derives LPDDR3 ODT from the active clock. */
++		reg_val = ((q + 7) << 24) | ((top - q) << 16) | 0x400;
++		break;
++	}
++	case SUNXI_DRAM_TYPE_LPDDR4:
++		reg_val = 0x04000400;
++		break;
++	default:
++		panic("H700 vendor backend: unsupported ODT type\n");
++	}
++	writel(reg_val, &mctl_ctl->odtcfg);
++	writel(reg_val, &mctl_ctl->unk_0x2240);
++	writel(reg_val, &mctl_ctl->unk_0x3240);
++	writel(reg_val, &mctl_ctl->unk_0x4240);
++
++	writel(BIT(31), &mctl_com->cr);
++
++	/* boot0 0x26e60 + 0x26534. */
++	mctl_set_addrmap(config);
++	mctl_set_timing_params(para);
++
++	/* boot0 0x27150 tail / 0x264f4 + 0x264a4. */
++	writel(0, &mctl_ctl->pwrctl);
++	setbits_le32(&mctl_ctl->dfiupd[0], BIT(31) | BIT(30));
++	setbits_le32(&mctl_ctl->zqctl[0], BIT(31) | BIT(30));
++	setbits_le32(&mctl_ctl->unk_0x2180, BIT(31) | BIT(30));
++	setbits_le32(&mctl_ctl->unk_0x3180, BIT(31) | BIT(30));
++	setbits_le32(&mctl_ctl->unk_0x4180, BIT(31) | BIT(30));
++
++	/* boot0 0x264dc: DBI enable is type/TPR13 dependent. */
++	if (para->type == SUNXI_DRAM_TYPE_LPDDR4 &&
++	    (h700_dram_runtime.current_tpr13 & BIT(29)))
++		setbits_le32(&mctl_ctl->dbictl, BIT(2));
++
++	/*
++	 * boot0 tail-calls 0x264a4 here. Keep the hardware transition order
++	 * literal: RFSHCTL3 first, then a second PWRCTL=0 write, then
++	 * DFIMISC/MAER, and finally an RMW setting PWRCTL.bit5.
++	 */
++	setbits_le32(&mctl_ctl->rfshctl3, BIT(0));
++	writel(0, &mctl_ctl->pwrctl);
++	clrbits_le32(&mctl_ctl->dfimisc, BIT(0));
++	writel(0, &mctl_com->maer0);
++	writel(0, &mctl_com->maer1);
++	writel(0, &mctl_com->maer2);
++	setbits_le32(&mctl_ctl->pwrctl, BIT(5));
++
++	/* boot0 0x257ec PHY reset/preparation. */
++	clrsetbits_le32(&mctl_com->unk_0x500, BIT(24), 0x300);
++	udelay(1);
++	setbits_le32(&mctl_com->unk_0x500, BIT(24));
++	udelay(1);
++
++	/* boot0 0x25818 gates the H700 PHY calibration path first. */
++	clrbits_le32((void *)0x070001f4UL, BIT(0));
++
++	/*
++	 * mctl_phy_init() still supplies the proven-equivalent low-level PHY
++	 * programming/training helpers. Its H700 hooks reproduce 0x25818,
++	 * 0x24ba8 and the 0x275f0 training semantics. A following patch will
++	 * split those helpers into H700-named functions as well; importantly,
++	 * controller orchestration no longer flows through H616 here.
++	 */
++	{
++		bool phy_ok = mctl_phy_init(para, config);
++
++		/* boot0 0x26458 controller post runs regardless of PHY result. */
++	writel(0, &mctl_ctl->swctl);
++	clrbits_le32(&mctl_ctl->rfshctl3, BIT(0));
++	setbits_le32(&mctl_com->unk_0x014, BIT(31));
++	writel(0xffffffff, &mctl_com->maer0);
++	writel(0x7ff, &mctl_com->maer1);
++	writel(0xffff, &mctl_com->maer2);
++	writel(1, &mctl_ctl->swctl);
++	mctl_await_completion(&mctl_ctl->swstat, 1, 1);
++
++		return phy_ok;
++	}
++}
++
++/*
++ * boot0 0x272c0.  Whole-core retry is owned by 0x275f0 training, not here.
++ * Own the complete H700 core-init/retry loop instead of entering the
++ * generic H616 controller orchestrator.
++ */
++static bool h700_vendor_core_init(const struct dram_para *para,
++				  const struct dram_config *config)
++{
++	mctl_sys_init(para->clk);
++	return h700_vendor_ctrl_init(para, config);
++}
++#endif
++
++bool mctl_core_init(const struct dram_para *para,
++		    const struct dram_config *config)
++{
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	return h700_vendor_core_init(para, config);
++#else
++	mctl_sys_init(para->clk);
++	return h616_mctl_ctrl_init(para, config);
++#endif
++}
+ 
+-static const struct dram_para para = {
++static struct dram_para para = {
+ 	.clk = CONFIG_DRAM_CLK,
+-#ifdef CONFIG_SUNXI_DRAM_H616_DDR3_1333
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	.type = SUNXI_DRAM_TYPE_LPDDR4,
++#elif defined(CONFIG_SUNXI_DRAM_H616_DDR3_1333)
+ 	.type = SUNXI_DRAM_TYPE_DDR3,
+ #elif defined(CONFIG_SUNXI_DRAM_H616_LPDDR3)
+ 	.type = SUNXI_DRAM_TYPE_LPDDR3,
+@@ -1332,6 +1981,19 @@ static const struct dram_para para = {
+ 	.dx_dri = CONFIG_DRAM_SUNXI_DX_DRI,
+ 	.ca_dri = CONFIG_DRAM_SUNXI_CA_DRI,
+ 	.odt_en = CONFIG_DRAM_SUNXI_ODT_EN,
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	.para1 = 0x000030fa,
++	.para2 = 0x04000000,
++	.mr1 = 0x34,
++	.mr2 = 0x1b,
++	.mr3 = 0x33,
++	.mr4 = 0x03,
++	.mr11 = 0x04,
++	.mr12 = 0x72,
++	.mr14 = 0x09,
++	.mr22 = 0x24,
++	.tpr13 = 0x02008c60,
++#endif
+ 	.tpr0 = CONFIG_DRAM_SUNXI_TPR0,
+ 	.tpr2 = CONFIG_DRAM_SUNXI_TPR2,
+ 	.tpr6 = CONFIG_DRAM_SUNXI_TPR6,
+@@ -1340,22 +2002,1573 @@ static const struct dram_para para = {
+ 	.tpr12 = CONFIG_DRAM_SUNXI_TPR12,
+ };
+ 
+-unsigned long sunxi_dram_init(void)
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++
++#define H700_VENDOR_BOOTSTRAP_CLK	360
++#define H700_VENDOR_LANES		4
++#define H700_VENDOR_TPR6_FIRST		0x10
++#define H700_VENDOR_TPR6_LAST		0x90
++#define H700_VENDOR_TPR6_STEP		4
++#define H700_VENDOR_R2D_DELAYS		63
++#define H700_VENDOR_R2D_WORKSPACE	0x800
++#define H700_VENDOR_TPR6_BUCKETS	((H700_VENDOR_TPR6_LAST >> 2) + 1)
++#define H700_VENDOR_MATRIX_WORDS	256
++#define H700_VENDOR_RETRIES		4
++
++#define H700_VENDOR_TPR13_R2D		BIT(25)
++#define H700_VENDOR_TPR13_W2D		BIT(26)
++
++#define H700_VENDOR_PIO_PH_BASE		0x0300b0fcUL
++#define H700_VENDOR_PH_CFG0		(H700_VENDOR_PIO_PH_BASE + 0x00)
++#define H700_VENDOR_PH_CFG1		(H700_VENDOR_PIO_PH_BASE + 0x04)
++#define H700_VENDOR_PH_DATA		(H700_VENDOR_PIO_PH_BASE + 0x10)
++#define H700_VENDOR_PH_DRV0		(H700_VENDOR_PIO_PH_BASE + 0x14)
++#define H700_VENDOR_PH_PULL0		(H700_VENDOR_PIO_PH_BASE + 0x1c)
++#define H700_VENDOR_SYSINFO_ID		0x03006200UL
++#define H700_VENDOR_SYSINFO_28		0x03006228UL
++#define H700_VENDOR_SYSINFO_2C		0x0300622cUL
++
++static bool h700_vendor_sysinfo_known(void)
+ {
+-	void *const prcm = (void *)SUNXI_PRCM_BASE;
+-	struct dram_config config;
+-	unsigned long size;
++	u32 sysinfo = readl((void *)H700_VENDOR_SYSINFO_ID) & 0xffff;
+ 
+-	setbits_le32(prcm + CCU_PRCM_RES_CAL_CTRL, BIT(8));
+-	clrbits_le32(prcm + CCU_PRCM_OHMS240, 0x3f);
++	return (sysinfo & 0xfbff) == 0x5000 ||
++	       (sysinfo & 0xfeff) == 0x5c00 ||
++	       (sysinfo & ~0x0800U) == 0x2000;
++}
+ 
+-	mctl_auto_detect_rank_width(&para, &config);
+-	mctl_auto_detect_dram_size(&para, &config);
++/* Exact runtime PHY-address-map selector from boot0 0x255b0. */
++static const u8 *h700_vendor_get_phy_init(const struct dram_para *para)
++{
++	bool known = h700_vendor_sysinfo_known();
+ 
+-	mctl_core_init(&para, &config);
++	switch (para->type) {
++	case SUNXI_DRAM_TYPE_DDR3:
++		/* boot0 type 3 owns tables 0/1/2; bit7 chooses 0 vs 1. */
++		if (!known)
++			return h700_phy_get_map0_2(2);
++		return h700_phy_get_map0_2((para->tpr13 & BIT(7)) ? 1 : 0);
++	case SUNXI_DRAM_TYPE_LPDDR3:
++		/* boot0 type 7 selects tables 5/6. */
++		return h700_phy_get_map5_6(known ? 0 : 1);
++	case SUNXI_DRAM_TYPE_LPDDR4:
++		/* boot0 type 8 selects tables 7/8. */
++		return h700_phy_get_map7_8(known ? 0 : 1);
++	default:
++		return NULL;
++	}
++}
+ 
+-	size = mctl_calc_size(&config);
++/*
++ * The 15 DRAM.ext entries embedded in the reference H700 boot0 collapse
++ * to three unique parameter blocks: entries 1..13 are DDR3, entry 14 is
++ * LPDDR3 and entry 15 is LPDDR4.  Keep the exact 0x80-byte semantics while
++ * avoiding thirteen duplicate copies in the SPL.
++ */
++static const struct dram_para h700_vendor_ddr3 = {
++	.clk = 792, .type = SUNXI_DRAM_TYPE_DDR3,
++	.dx_odt = 0x08080808, .dx_dri = 0x0e0e0e0e,
++	.ca_dri = 0x00000e0e, .odt_en = 0x00000001,
++	.para1 = 0x000030fa, .para2 = 0x00001000,
++	.mr0 = 0x00000840, .mr1 = 0x04, .mr2 = 0x08,
++	.tpr2 = 0x00000000, .tpr6 = 0x33808080,
++	.tpr10 = 0x00f83438, .tpr13 = 0x00000040,
++};
+ 
++static const struct dram_para h700_vendor_lpddr3 = {
++	.clk = 672, .type = SUNXI_DRAM_TYPE_LPDDR3,
++	.dx_odt = 0x06060606, .dx_dri = 0x0d0d0d0d,
++	.ca_dri = 0x00001919, .odt_en = 0x9988eeee,
++	.para1 = 0x000030fa, .para2 = 0x00001000,
++	.mr1 = 0x000000c3, .mr2 = 0x00000006, .mr3 = 0x00000001,
++	.tpr2 = 0x00000001, .tpr6 = 0x2fb08080,
++	.tpr10 = 0x402f4489, .tpr11 = 0x0e0e0f0e,
++	.tpr12 = 0x0f10110f, .tpr13 = 0x00008c60,
++};
++
++static const struct dram_para h700_vendor_lpddr4 = {
++	.clk = 672, .type = SUNXI_DRAM_TYPE_LPDDR4,
++	.dx_odt = 0x08080808, .dx_dri = 0x0e0e0e0e,
++	.ca_dri = 0x00000e0e, .odt_en = 0x7887bbbb,
++	.para1 = 0x0000310a, .para2 = 0x00000000,
++	.mr1 = 0x34, .mr2 = 0x1b, .mr3 = 0x33, .mr4 = 0x03,
++	.mr11 = 0x04, .mr12 = 0x72, .mr14 = 0x09, .mr22 = 0x24,
++	.tpr2 = 0x00000001, .tpr6 = 0x40808080,
++	.tpr10 = 0x402f6633, .tpr13 = 0x02008c60,
++};
++
++/* No image-specific base profile is available: two long flashes, one short. */
++static void __noreturn h700_vendor_missing_profile(void)
++{
++	unsigned int active =
++		IS_ENABLED(CONFIG_SPL_SUNXI_LED_STATUS_ACTIVE_HIGH);
++	unsigned int i;
++
++	for (;;) {
++		gpio_direction_output(CONFIG_SPL_SUNXI_LED_STATUS_GPIO, !active);
++		udelay(1500000);
++		for (i = 0; i < 3; i++) {
++			gpio_direction_output(CONFIG_SPL_SUNXI_LED_STATUS_GPIO, active);
++			udelay(i < 2 ? 800000 : 150000);
++			gpio_direction_output(CONFIG_SPL_SUNXI_LED_STATUS_GPIO, !active);
++			udelay(250000);
++		}
++	}
++}
++
++static bool h700_vendor_training_active(void)
++{
++	return h700_dram_runtime.active == 1;
++}
++
++struct h700_vendor_window {
++	u8 start;
++	u8 end;
++	u8 width;
++	u8 center;
++	u8 odt;
++};
++
++struct h700_vendor_r2d_result {
++	u8 start;
++	u8 end;
++	u8 center;
++	u8 delay;
++};
++
++static void h700_vendor_prepare_dram_ext_straps(void)
++{
++	u32 mask, value;
++
++	mask = (0x7U << 24) | (0x7U << 28);
++	clrsetbits_le32((void *)H700_VENDOR_PH_CFG0, mask, 0);
++	mask = (0x7U << 0) | (0x7U << 8);
++	clrsetbits_le32((void *)H700_VENDOR_PH_CFG1, mask, 0);
++
++	mask = (0x3U << 12) | (0x3U << 14) |
++	       (0x3U << 16) | (0x3U << 20);
++	value = (0x3U << 12) | (0x3U << 14) |
++		(0x2U << 16) | (0x3U << 20);
++	clrsetbits_le32((void *)H700_VENDOR_PH_DRV0, mask, value);
++
++	value = (0x1U << 12) | (0x1U << 14) | (0x1U << 20);
++	clrsetbits_le32((void *)H700_VENDOR_PH_PULL0, mask, value);
++
++	/*
++	 * boot0 calls its GPIO-table helper for six descriptors starting at
++	 * +0x354, not just the four PH strap descriptors consumed later by
++	 * the selector. Descriptor #5 is:
++	 *   { port=0x18, pin=3, mux=0, pull=0, drive=3, data=0 }
++	 * and maps through the helper's R_PIO register table to the three
++	 * fields below. Descriptor #6 then re-applies PH8 as input/pull=0/
++	 * drive=2, which is already the final PH8 state programmed above.
++	 */
++	clrsetbits_le32((void *)0x070221b0UL, 0x7U << 12, 0);
++	clrsetbits_le32((void *)0x070221ccUL, 0x3U << 6, 0);
++	clrsetbits_le32((void *)0x070221c4UL, 0x3U << 6, 0x3U << 6);
++
++	udelay(5000);
++}
++
++static u8 h700_vendor_dram_ext_index(void)
++{
++	u32 value, index;
++
++	h700_vendor_prepare_dram_ext_straps();
++	value = readl((void *)H700_VENDOR_PH_DATA);
++	index = ((value >> 6) & 1) |
++		(((value >> 7) & 1) << 1) |
++		(((value >> 8) & 1) << 2) |
++		(((value >> 10) & 1) << 3);
++
++	if ((readl((void *)H700_VENDOR_SYSINFO_ID) & 0xffff) == 0x5000 &&
++	    (s32)readl((void *)H700_VENDOR_SYSINFO_28) >= 0 &&
++	    !(readl((void *)H700_VENDOR_SYSINFO_2C) & BIT(8)))
++		index += 0x10;
++
++	return index;
++}
++
++static bool h700_vendor_select_profile(void)
++{
++	u8 index = h700_vendor_dram_ext_index();
++
++	/* Index zero and empty records 16..31 require a vendor image base. */
++	if (!index || index >= 16)
++		h700_vendor_missing_profile();
++
++	if (index <= 13)
++		para = h700_vendor_ddr3;
++	else if (index == 14)
++		para = h700_vendor_lpddr3;
++	else
++		para = h700_vendor_lpddr4;
++
++	h700_dram_runtime.active = 1;
++	h700_dram_runtime.retry_count = 0;
++	h700_dram_runtime.current_para1 = para.para1;
++	h700_dram_runtime.current_para2 = para.para2;
++	h700_dram_runtime.current_tpr13 = para.tpr13;
++	h700_dram_runtime.min_window = ((para.tpr13 >> 8) & 0x7) * 2;
++
++	return true;
++}
++
++/*
++ * boot0 0x24a98 programs VDD-DRAM through DCDC3 according to the
++ * selected DRAM type before autoscan/core initialization.
++ */
++static bool h700_vendor_set_dram_voltage(void)
++{
++	unsigned int mv;
++
++	switch (para.type) {
++	case SUNXI_DRAM_TYPE_DDR3:
++		mv = 1500;
++		break;
++	case SUNXI_DRAM_TYPE_LPDDR3:
++		mv = 1200;
++		break;
++	case SUNXI_DRAM_TYPE_LPDDR4:
++		mv = 1100;
++		break;
++	default:
++		return false;
++	}
++
++	return axp_set_dcdc3(mv) == 0;
++}
++
++static u32 h700_set_delay_lane(u32 value, unsigned int lane, u8 delay)
++{
++	u32 shift = lane * 8;
++
++	value &= ~(0x3fU << shift);
++	value |= ((u32)delay & 0x3f) << shift;
++
++	return value;
++}
++
++static u8 h700_get_delay_lane(u32 value, unsigned int lane)
++{
++	return (value >> (lane * 8)) & 0x3f;
++}
++
++static u32 h700_set_tpr6_byte(u32 value, unsigned int byte, u8 setting)
++{
++	u32 shift = byte * 8;
++
++	value &= ~(0xffU << shift);
++	value |= (u32)setting << shift;
++
++	return value;
++}
++
++static u8 h700_get_odt_nibble(u32 value, unsigned int nibble)
++{
++	return (value >> (nibble * 4)) & 0xf;
++}
++
++static u32 h700_set_odt_nibble(u32 value, unsigned int nibble, u8 odt)
++{
++	u32 shift = nibble * 4;
++
++	value &= ~(0xfU << shift);
++	value |= ((u32)odt & 0xf) << shift;
++
++	return value;
++}
++
++/*
++ * Raw vendor geometry state.
++ *
++ * H700 boot0 does not feed a normalized dram_config into its ADDRMAP
++ * programming.  It consumes para1/para2 directly, including temporary
++ * autoscan geometries that H616's generic mctl_set_addrmap() rejects
++ * (notably 7 columns / 11 rows).  Keep the exact raw words in initialized
++ * SPL .data and derive the normalized fields only for the common controller
++ * code which genuinely needs ranks/bus-width.
++ */
++static bool h700_vendor_decode_config(u32 para1, u32 para2,
++				      struct dram_config *config)
++{
++	u8 cols = para1 & 0xf;
++	u8 rows = (para1 >> 4) & 0xff;
++
++	if (!cols || !rows)
++		return false;
++
++	config->cols = cols;
++	config->rows = rows;
++	config->ranks = (para2 & BIT(12)) ? 2 : 1;
++	config->bus_full_width = !(para2 & 0xf);
++
++	return true;
++}
++
++static void h700_vendor_select_raw(u32 para1, u32 para2, u32 tpr13,
++				   struct dram_config *config)
++{
++	h700_dram_runtime.current_para1 = para1;
++	h700_dram_runtime.current_para2 = para2;
++	h700_dram_runtime.current_tpr13 = tpr13;
++	(void)h700_vendor_decode_config(para1, para2, config);
++}
++
++/*
++ * Clean-room translation of boot0 0x26e60 for the qualified H700 LPDDR4
++ * profile and its autoscan temporary geometries.  The verified CubeXX /
++ * RG40XX-V TPR13 upper selector is zero, so the vendor's alternate row-map
++ * submodes are intentionally not guessed here.
++ */
++static bool h700_vendor_set_addrmap(struct sunxi_mctl_ctl_reg *mctl_ctl)
++{
++	u32 para1, para2, tpr13;
++	u32 map2, map3, map4, map5, map6, map7, map8;
++	int cols, rows, banks, groups, bank_base, row_code;
++
++	para1 = h700_dram_runtime.current_para1;
++	para2 = h700_dram_runtime.current_para2;
++	tpr13 = h700_dram_runtime.current_tpr13;
++
++	cols = para1 & 0xf;
++	rows = (para1 >> 4) & 0xff;
++	banks = (para1 >> 12) & 0x3;
++	groups = (para1 >> 14) & 0x3;
++	if (para2 & 0xf)
++		cols--;
++
++	if (cols < 6 || cols > 11 || rows < 11 || rows > 17 ||
++	    banks < 2 || banks > 3 || groups > 2)
++		panic("Unsupported H700 vendor ADDRMAP geometry\n");
++	if (((tpr13 >> 16) & 0x7) != 0)
++		panic("Unsupported H700 vendor ADDRMAP TPR13 mode\n");
++
++	/* ADDRMAP2: vendor places the group selector in bytes 1..3. */
++	map2 = (groups << 8) | (groups << 16) | (groups << 24);
++
++	switch (cols) {
++	case 8:
++		map3 = groups | (groups << 8) | 0x1f1f0000;
++		map4 = 0x1f1f;
++		break;
++	case 9:
++		map3 = groups | (groups << 8) | (groups << 16) |
++		       0x1f000000;
++		map4 = 0x1f1f;
++		break;
++	case 10:
++		map3 = groups | (groups << 8) | (groups << 16) |
++		       (groups << 24);
++		map4 = 0x1f1f;
++		break;
++	case 11:
++		map3 = groups | (groups << 8) | (groups << 16) |
++		       (groups << 24);
++		map4 = groups | 0x1f00;
++		break;
++	default: /* vendor default, including autoscan cols=7 */
++		map3 = groups | (groups << 8) | (groups << 16) |
++		       (groups << 24);
++		map4 = groups | (groups << 8);
++		break;
++	}
++
++	map8 = groups == 2 ? 0x0101 : groups == 1 ? 0x3f01 : 0x3f3f;
++
++	bank_base = groups - 2 + cols;
++	map5 = bank_base | (bank_base << 8);
++	if (banks == 3)
++		map5 |= bank_base << 16;
++	else
++		map5 |= 0x3f0000;
++
++	row_code = groups + banks + cols - 6;
++	map6 = row_code | (row_code << 8) | (row_code << 16) |
++	       (row_code << 24);
++	switch (rows) {
++	case 14:
++		map6 = row_code | (row_code << 8) | 0x0f0f0000;
++		map7 = 0x0f0f;
++		break;
++	case 15:
++		map6 = row_code | (row_code << 8) | (row_code << 16) |
++		       0x0f000000;
++		map7 = 0x0f0f;
++		break;
++	case 16:
++		map7 = 0x0f0f;
++		break;
++	case 17:
++		map7 = row_code | 0x0f00;
++		break;
++	default: /* vendor default, including autoscan rows=11 */
++		map7 = row_code | (row_code << 8);
++		break;
++	}
++
++	/* Vendor ADDRMAP0: one-rank is disabled (0x1f), two-rank is raw. */
++	mctl_ctl->addrmap[0] = (para2 & BIT(12)) ? rows + row_code : 0x1f;
++	mctl_ctl->addrmap[1] = map5;
++	mctl_ctl->addrmap[2] = map2;
++	mctl_ctl->addrmap[3] = map3;
++	mctl_ctl->addrmap[4] = map4;
++	mctl_ctl->addrmap[5] = row_code | (row_code << 8) |
++			       (row_code << 16) | (row_code << 24);
++	mctl_ctl->addrmap[6] = map6;
++	mctl_ctl->addrmap[7] = map7;
++	mctl_ctl->addrmap[8] = map8;
++
++	return true;
++}
++
++static unsigned int h700_vendor_size_mib(void)
++{
++	u32 para1 = h700_dram_runtime.current_para1;
++	u32 para2 = h700_dram_runtime.current_para2;
++	int exponent;
++
++	exponent = ((para1 >> 12) & 0x3) + ((para1 >> 4) & 0xff) +
++		   (para1 & 0xf) + ((para1 >> 14) & 0x3) +
++		   ((para2 >> 12) & 0xf);
++	exponent -= (para2 & 0xf) ? 19 : 18;
++	if (exponent < 0 || exponent >= 16)
++		return 0;
++
++	{
++		unsigned int size_mib = 1U << exponent;
++
++		/* boot0 0x24946..0x24958: TPR13[18:16] enables the
++		 * para2[31:30] density correction.  Selector value 2 keeps
++		 * the computed size; all other values scale it by 3/4.
++		 */
++		if (((h700_dram_runtime.current_tpr13 >> 16) & 0x7) != 0 &&
++		    ((para2 >> 30) & 0x3) != 2)
++			size_mib = (size_mib * 3) >> 2;
++
++		return size_mib;
++	}
++}
++
++static unsigned int h700_vendor_finalize_size(void)
++{
++	u32 para2 = h700_dram_runtime.current_para2;
++	u32 chip_id;
++	unsigned int size_mib;
++
++	/* boot0 caller preserves a negative para2 and consumes bits 16..30. */
++	if ((s32)para2 < 0)
++		return (para2 >> 16) & 0x7fff;
++
++	size_mib = h700_vendor_size_mib();
++	if (!size_mib)
++		return 0;
++
++	chip_id = readl((void *)0x03006200UL) & 0xffff;
++	if ((chip_id == 0x5c00 || chip_id == 0x5d00) && size_mib > 2048)
++		return 0;
++
++	h700_dram_runtime.current_para2 =
++		(para2 & 0xffff) | (size_mib << 16);
++
++	return size_mib;
++}
++
++static void h700_vendor_write_alias_pattern(void)
++{
++	volatile u32 *base = (volatile u32 *)CFG_SYS_SDRAM_BASE;
++	unsigned int i;
++
++	for (i = 0; i < 16; i++) {
++		u32 address = CFG_SYS_SDRAM_BASE + i * sizeof(u32);
++		base[i] = (i & 1) ? address : ~address;
++		asm volatile("dsb sy" ::: "memory");
++	}
++}
++
++static bool h700_vendor_aliases(ulong offset)
++{
++	volatile u32 *probe =
++		(volatile u32 *)(uintptr_t)(CFG_SYS_SDRAM_BASE + offset);
++	unsigned int i;
++
++	for (i = 0; i < 16; i++) {
++		u32 address = CFG_SYS_SDRAM_BASE + i * sizeof(u32);
++		u32 expected = (i & 1) ? address : ~address;
++
++		if (probe[i] != expected)
++			return false;
++	}
++	return true;
++}
++
++/*
++ * Exact boot0 0x7330..0x7466 group probe.
++ *
++ * For each of the 16 base pattern words, boot0 alternates the probe:
++ * boot0 0x272dc group probe: compare all 16 words at +0x40 first;
++ * only after a mismatch perform a second complete pass at +0x80.
++ */
++static u8 h700_vendor_probe_groups(const struct dram_para *work)
++{
++	volatile u32 *base = (volatile u32 *)CFG_SYS_SDRAM_BASE;
++	unsigned int i;
++
++	/* boot0 first tests all 16 pattern words at +0x40. */
++	for (i = 0; i < 16; i++) {
++		u32 address = CFG_SYS_SDRAM_BASE + i * sizeof(u32);
++		u32 expected = (i & 1) ? address : ~address;
++
++		if (base[0x40 / sizeof(u32) + i] != expected)
++			break;
++	}
++	if (i == 16)
++		return 1;
++
++	/* A +0x40 mismatch causes a complete second pass at +0x80. */
++	for (i = 0; i < 16; i++) {
++		u32 address = CFG_SYS_SDRAM_BASE + i * sizeof(u32);
++		u32 expected = (i & 1) ? address : ~address;
++
++		if (base[0x80 / sizeof(u32) + i] != expected)
++			break;
++	}
++
++	/* boot0 selects 2 for type 4 (DDR4), 0 for all other types. */
++	return work->type == SUNXI_DRAM_TYPE_DDR4 ? 2 : 0;
++}
++
++/* boot0 0x27484: rank/width scan used by the internal DST autoscan. */
++static bool h700_vendor_rank_width_scan(struct dram_para *work,
++					struct dram_config *config)
++{
++	static const u16 candidate[] = { 0x1000, 0x0000, 0x1001, 0x0001 };
++	u32 saved_tpr10 = work->tpr10;
++	u32 saved_tpr13 = h700_dram_runtime.current_tpr13;
++	u32 saved_para1 = h700_dram_runtime.current_para1;
++	u32 saved_para2 = h700_dram_runtime.current_para2;
++	unsigned int i;
++
++	work->tpr10 |= BIT(28);
++	h700_dram_runtime.current_tpr13 |= BIT(0);
++	h700_dram_runtime.current_para1 =
++		work->type == SUNXI_DRAM_TYPE_DDR4 ? 0x000060b7 : 0x000020b7;
++
++	for (i = 0; i < ARRAY_SIZE(candidate); i++) {
++		h700_dram_runtime.current_para2 = candidate[i];
++		if (!h700_vendor_decode_config(h700_dram_runtime.current_para1,
++					       h700_dram_runtime.current_para2,
++					       config))
++			continue;
++
++		if (mctl_core_init(work, config)) {
++			u32 found_para2 = h700_dram_runtime.current_para2;
++
++			/*
++			 * boot0 0x274c0..0x274d2 restores the temporary
++			 * rank-scan state before returning success.  Only the
++			 * discovered low 16 bits of para2 survive the scan.
++			 */
++			h700_dram_runtime.current_tpr13 = saved_tpr13;
++			h700_dram_runtime.current_para1 = saved_para1;
++			h700_dram_runtime.current_para2 =
++				(saved_para2 & 0xffff0000U) | (found_para2 & 0xffffU);
++			work->tpr10 = saved_tpr10;
++			return true;
++		}
++	}
++
++	return false;
++}
++
++/* boot0 0x272dc: alias-based column/bank/row scan. */
++static bool h700_vendor_size_scan(struct dram_para *work,
++				  struct dram_config *config)
++{
++	u32 saved_tpr10 = work->tpr10;
++	int rank_factor, temp_groups, col, banks, row;
++	int base_exp;
++	u8 groups;
++
++	work->tpr10 |= BIT(28);
++	h700_dram_runtime.current_para1 =
++		work->type == SUNXI_DRAM_TYPE_DDR4 ? 0x0000b0eb : 0x000030eb;
++	rank_factor = (h700_dram_runtime.current_para2 & 0xf) ? 1 : 2;
++	if (!h700_vendor_decode_config(h700_dram_runtime.current_para1,
++				       h700_dram_runtime.current_para2, config) ||
++	    !mctl_core_init(work, config))
++		return false;
++
++	h700_vendor_write_alias_pattern();
++	groups = h700_vendor_probe_groups(work);
++
++	temp_groups = (h700_dram_runtime.current_para1 >> 14) & 0x3;
++	base_exp = temp_groups + rank_factor;
++	for (col = 7; col <= 10; col++) {
++		if (h700_vendor_aliases(1UL << (base_exp + col)))
++			break;
++	}
++	if (col > 10)
++		col = 11;
++
++	banks = h700_vendor_aliases(1UL << (base_exp + 13)) ? 2 : 3;
++
++	h700_dram_runtime.current_para1 =
++		work->type == SUNXI_DRAM_TYPE_DDR4 ? 0x00006118 : 0x00002118;
++	if (!h700_vendor_decode_config(h700_dram_runtime.current_para1,
++				       h700_dram_runtime.current_para2, config) ||
++	    !mctl_core_init(work, config))
++		return false;
++
++	h700_vendor_write_alias_pattern();
++	temp_groups = (h700_dram_runtime.current_para1 >> 14) & 0x3;
++	base_exp = temp_groups + 10 + rank_factor;
++	for (row = 12; row <= 16; row++) {
++		if (h700_vendor_aliases(1UL << (base_exp + row)))
++			break;
++	}
++	if (row > 16)
++		row = 17;
++
++	h700_dram_runtime.current_para1 = (u32)col | ((u32)row << 4) |
++					 ((u32)banks << 12) |
++					 ((u32)groups << 14);
++	work->tpr10 = saved_tpr10;
++
++	return h700_vendor_decode_config(h700_dram_runtime.current_para1,
++					 h700_dram_runtime.current_para2,
++					 config);
++}
++
++static unsigned int h700_vendor_size_mib(void);
++
++/* boot0 0x2751c autoscan. */
++static bool h700_vendor_autoscan(struct dram_para *work,
++				 struct dram_config *config)
++{
++	u32 tpr13 = h700_dram_runtime.current_tpr13;
++	unsigned int size_mib;
++
++	if (!(tpr13 & BIT(14)) && !h700_vendor_rank_width_scan(work, config))
++		return false;
++	if (!h700_vendor_size_scan(work, config))
++		return false;
++
++	if (!(h700_dram_runtime.current_tpr13 & BIT(15)))
++		h700_dram_runtime.current_tpr13 |= 0x00006001;
++
++	/* boot0 0x27556..0x275e6: optional high-address geometry probe. */
++	if (!(h700_dram_runtime.current_tpr13 & BIT(19)))
++		return true;
++
++	if (!mctl_core_init(work, config))
++		return false;
++
++	size_mib = h700_vendor_size_mib();
++	h700_dram_runtime.current_tpr13 &= ~BIT(19);
++
++	if (size_mib == 4096) {
++		volatile u32 *probe = (volatile u32 *)(uintptr_t)0xa0000000UL;
++
++		*probe = 0xa0a0a0a0;
++		asm volatile("dsb sy" ::: "memory");
++		if (*probe != 0xa0a0a0a0)
++			h700_dram_runtime.current_tpr13 |= BIT(16);
++	} else if (size_mib == 2048) {
++		volatile u32 *probe700 = (volatile u32 *)(uintptr_t)0x70000000UL;
++		volatile u32 *probe800 = (volatile u32 *)(uintptr_t)0x80000000UL;
++		volatile u32 *probea00 = (volatile u32 *)(uintptr_t)0xa0000000UL;
++
++		*probe700 = 0x70707070;
++		asm volatile("dsb sy" ::: "memory");
++		if (*probe700 != 0x70707070) {
++			h700_dram_runtime.current_tpr13 |= BIT(17);
++		} else {
++			*probea00 = 0xa0a0a0a0;
++			*probe800 = 0x80808080;
++			udelay(1);
++			if (*probea00 != 0xa0a0a0a0)
++				h700_dram_runtime.current_tpr13 |= BIT(16) | BIT(18);
++		}
++	}
++
++	return true;
++}
++
++static bool h700_vendor_config(struct dram_config *config)
++{
++	h700_vendor_select_raw(para.para1, para.para2, para.tpr13, config);
++
++	return config->cols && config->rows;
++}
++
++/*
++ * H700 boot0 performs validator memory operations through VFP/NEON bulk
++ * transfers. Keep the validator policy and pattern generation in C, while
++ * the H700-only assembly helpers reproduce the bulk memory semantics.
++ */
++void h700_vendor_fill(volatile u32 *start, unsigned int bytes,
++		      u32 first, u32 second);
++void h700_vendor_copy(volatile u32 *src, volatile u32 *dst,
++		      unsigned int bytes);
++u32 h700_vendor_compare(volatile u32 *a, volatile u32 *b,
++			unsigned int bytes);
++
++static bool h700_vendor_compare_pass(volatile u32 *a, volatile u32 *b,
++				     unsigned int bytes,
++				     unsigned int lane, bool full)
++{
++	u32 mismatch = h700_vendor_compare(a, b, bytes);
++
++	if (full)
++		return mismatch == 0;
++
++	return !((mismatch >> (lane * 8)) & 0xff);
++}
++
++/* Clean-room translation of boot0 helper 0x236d8. */
++static bool h700_vendor_validate(u32 half_size, unsigned int bytes,
++				 unsigned int lane, bool full)
++{
++	static const u32 seeds[] = {
++		0xffffffff, 0x0000ffff, 0x00ff00ff,
++		0x0f0f0f0f, 0x5a5a5a5a, 0x55555555,
++	};
++	volatile u32 *base = (volatile u32 *)CFG_SYS_SDRAM_BASE;
++	volatile u32 *copy = (volatile u32 *)(uintptr_t)(CFG_SYS_SDRAM_BASE +
++						 half_size + 8);
++	volatile u32 *mirror = (volatile u32 *)(uintptr_t)(CFG_SYS_SDRAM_BASE +
++						   half_size / 2 + 12);
++	unsigned int first_bit, last_bit, normalized_lane = lane;
++	unsigned int i, bit, phase;
++
++	if (lane >= 4 && lane <= 7)
++		normalized_lane = lane - 4;
++	else if (lane == 8)
++		normalized_lane = 0;
++	else if (lane > 8)
++		return false;
++
++	for (i = 0; i < ARRAY_SIZE(seeds); i++) {
++		h700_vendor_fill(mirror, bytes, ~seeds[i], seeds[i]);
++		h700_vendor_fill(base, bytes, ~seeds[i], seeds[i]);
++		h700_vendor_copy(base, copy, bytes);
++		if (!h700_vendor_compare_pass(copy, mirror, bytes,
++					      normalized_lane, full))
++			return false;
++	}
++
++	first_bit = normalized_lane * 8;
++	last_bit = first_bit + 8;
++	if (lane == 8)
++		last_bit += 24;
++
++	for (bit = first_bit; bit < last_bit; bit++) {
++		u32 value = BIT(bit);
++
++		h700_vendor_fill(mirror, bytes, ~value, value);
++		h700_vendor_fill(base, bytes, ~value, value);
++		h700_vendor_copy(base, copy, bytes);
++		if (!h700_vendor_compare_pass(copy, mirror, bytes,
++					      normalized_lane, full))
++			return false;
++	}
++
++	for (phase = 0; phase < 2; phase++) {
++		for (bit = first_bit; bit < last_bit; bit++) {
++			u32 value = BIT(bit);
++			u32 first = phase ? 0xffffffff : ~value;
++			u32 second = phase ? value : 0;
++
++			h700_vendor_fill(mirror, bytes, first, second);
++			h700_vendor_fill(base, bytes, first, second);
++			h700_vendor_copy(base, copy, bytes);
++			if (!h700_vendor_compare_pass(copy, mirror, bytes,
++						      normalized_lane, full))
++				return false;
++		}
++	}
++
++	return true;
++}
++
++/* boot0 0x23864 matrix pattern and byte-lane reduction. */
++static void h700_vendor_prepare_matrix(u32 half_size)
++{
++	volatile u32 *base = (volatile u32 *)CFG_SYS_SDRAM_BASE;
++	volatile u32 *mirror = (volatile u32 *)(uintptr_t)(CFG_SYS_SDRAM_BASE +
++						   half_size + 12);
++	u32 index = 0;
++	unsigned int i;
++
++	for (i = 0; i < H700_VENDOR_MATRIX_WORDS; i++) {
++		base[i] = index + 0x01234567;
++		mirror[i] = index + 0xfedcba98;
++		index += 0x01010101;
++	}
++	dmb();
++}
++
++static bool h700_vendor_matrix_test(u32 half_size, unsigned int lane)
++{
++	volatile u32 *base = (volatile u32 *)CFG_SYS_SDRAM_BASE;
++	volatile u32 *mirror = (volatile u32 *)(uintptr_t)(CFG_SYS_SDRAM_BASE +
++						   half_size + 12);
++	u32 index = 0;
++	u32 mismatch = 0;
++	unsigned int i;
++
++	for (i = 0; i < H700_VENDOR_MATRIX_WORDS; i++) {
++		mismatch |= base[i] ^ (index + 0x01234567);
++		mismatch |= mirror[i] ^ (index + 0xfedcba98);
++		index += 0x01010101;
++	}
++
++	return !((mismatch >> (lane * 8)) & 0xff);
++}
++
++static bool h700_vendor_bootstrap(const struct dram_para *nominal,
++				  struct dram_para *work,
++				  struct dram_config *config,
++				  u32 *half_size)
++{
++	static const u16 odt_seed[] = { 0x8888, 0xaaaa, 0xcccc, 0xeeee };
++	u32 nominal_odt = nominal->odt_en;
++	u32 nominal_tpr6 = nominal->tpr6;
++	u32 nominal_tpr10 = nominal->tpr10;
++	unsigned int i;
++
++	*work = *nominal;
++	work->clk = H700_VENDOR_BOOTSTRAP_CLK;
++	work->tpr10 &= 0xffff0000;
++	work->tpr11 = work->type == SUNXI_DRAM_TYPE_LPDDR4 ? 0x10101010 : 0;
++	work->tpr12 = 0;
++
++	for (i = 0; i < ARRAY_SIZE(odt_seed); i++) {
++		bool initial_ok, auto_ok = true, second_ok = true;
++		unsigned int size_mib;
++
++		work->odt_en = odt_seed[i];
++		initial_ok = mctl_core_init(work, config);
++
++		if (!(h700_dram_runtime.current_tpr13 & BIT(0))) {
++			auto_ok = h700_vendor_autoscan(work, config);
++			/* boot0 executes this second core-init regardless of autoscan result. */
++			second_ok = mctl_core_init(work, config);
++		}
++
++		size_mib = h700_vendor_size_mib();
++		if (!size_mib)
++			continue;
++		*half_size = (size_mib / 2) << 20;
++
++		if (initial_ok && auto_ok && second_ok &&
++		    h700_vendor_validate(*half_size, 0x8000, 8, true)) {
++			work->clk = nominal->clk;
++			work->odt_en = nominal_odt;
++			work->tpr6 = nominal_tpr6;
++			work->tpr10 = nominal_tpr10;
++			return true;
++		}
++
++		/* boot0 retries by adding 0x2222 to the current ODT seed. */
++	}
++
++	return false;
++}
++
++static unsigned int h700_vendor_r2d_offset(unsigned int tpr6,
++					       unsigned int delay)
++{
++	/*
++	 * boot0 indexes its 0x800-byte scratch area as
++	 *   scratch[(tpr6 >> 2) * 32 + delay]
++	 * even though delay spans 0..62.  Adjacent TPR6 rows therefore
++	 * overlap by 31 bytes.  Preserve that layout exactly: it affects
++	 * the subsequent eye-selection scans and is not a conventional
++	 * row-major matrix.
++	 */
++	return (tpr6 >> 2) * 32 + delay;
++}
++
++static u8 h700_vendor_r2d_cell(const u8 workspace[H700_VENDOR_R2D_WORKSPACE],
++				    unsigned int tpr6, unsigned int delay)
++{
++	return workspace[h700_vendor_r2d_offset(tpr6, delay)];
++}
++
++/*
++ * Clean-room translation of the LPDDR4 R_2d branch in boot0 0x238b4.
++ * For the 32-bit H700 target boot0 tunes TPR6 byte 3 and TPR12 byte 2.
++ * The scratch-buffer aliasing and both vendor eye-selection scans are
++ * deliberately retained instead of normalising them into a clean matrix.
++ */
++static bool h700_vendor_r2d(struct dram_para *work,
++			    const struct dram_config *config, u32 half_size,
++			    struct h700_vendor_r2d_result *result)
++{
++	u8 workspace[H700_VENDOR_R2D_WORKSPACE];
++	u8 horizontal[H700_VENDOR_TPR6_BUCKETS];
++	int best_start = 0, best_end = 0, best_delay = 0;
++	int best_span = 0;
++	int tpr6, delay;
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(workspace); i++)
++		workspace[i] = 0;
++	for (i = 0; i < ARRAY_SIZE(horizontal); i++)
++		horizontal[i] = 0;
++
++	for (tpr6 = H700_VENDOR_TPR6_FIRST;
++	     tpr6 <= H700_VENDOR_TPR6_LAST;
++	     tpr6 += H700_VENDOR_TPR6_STEP) {
++		struct dram_para candidate = *work;
++
++		candidate.tpr6 = h700_set_tpr6_byte(candidate.tpr6, 3, tpr6);
++		if (!mctl_core_init(&candidate, config))
++			continue;
++
++		for (delay = 0; delay < H700_VENDOR_R2D_DELAYS; delay++) {
++			unsigned int offset = h700_vendor_r2d_offset(tpr6, delay);
++
++			candidate.tpr12 = h700_set_delay_lane(candidate.tpr12, 2,
++							 delay);
++			mctl_phy_bit_delay_compensation(&candidate);
++			workspace[offset] = h700_vendor_matrix_test(half_size, 2) ? 1 : 0;
++		}
++	}
++
++	/*
++	 * First boot0 scan: delay 62..0, TPR6 high..low.  Pick the widest
++	 * contiguous vertical run.  The measured span is in raw TPR6 units
++	 * (end - start + 1), exactly as in boot0; <= 11 is rejected.
++	 */
++	for (delay = H700_VENDOR_R2D_DELAYS - 1; delay >= 0; delay--) {
++		int run_end = -1;
++
++		for (tpr6 = H700_VENDOR_TPR6_LAST;
++		     tpr6 >= H700_VENDOR_TPR6_FIRST;
++		     tpr6 -= H700_VENDOR_TPR6_STEP) {
++			if (h700_vendor_r2d_cell(workspace, tpr6, delay) == 1) {
++				if (run_end < 0)
++					run_end = tpr6;
++				continue;
++			}
++
++			if (run_end >= 0) {
++				int run_start = tpr6 + H700_VENDOR_TPR6_STEP;
++				int span = run_end - run_start + 1;
++
++				if (span > best_span) {
++					best_span = span;
++					best_start = run_start;
++					best_end = run_end;
++					best_delay = delay;
++				}
++				run_end = -1;
++			}
++		}
++
++		if (run_end >= 0) {
++			int span = run_end - H700_VENDOR_TPR6_FIRST + 1;
++
++			if (span > best_span) {
++				best_span = span;
++				best_start = H700_VENDOR_TPR6_FIRST;
++				best_end = run_end;
++				best_delay = delay;
++			}
++		}
++	}
++
++	if (best_span <= 11)
++		return false;
++
++	/*
++	 * Second boot0 scan.  Count the contiguous horizontal eye through
++	 * best_delay for each TPR6 value in the selected vertical run.  The
++	 * count array is indexed by (tpr6 >> 2), just like the vendor stack.
++	 */
++	for (tpr6 = best_start; tpr6 <= best_end;
++	     tpr6 += H700_VENDOR_TPR6_STEP) {
++		unsigned int bucket = tpr6 >> 2;
++		int pos;
++
++		for (pos = best_delay; pos >= 0; pos--) {
++			u8 cell = h700_vendor_r2d_cell(workspace, tpr6, pos);
++
++			if (cell == 1)
++				horizontal[bucket]++;
++			else if (cell == 0)
++				break;
++		}
++		for (pos = best_delay + 1;
++		     pos < H700_VENDOR_R2D_DELAYS; pos++) {
++			u8 cell = h700_vendor_r2d_cell(workspace, tpr6, pos);
++
++			if (cell == 1)
++				horizontal[bucket]++;
++			else if (cell == 0)
++				break;
++		}
++	}
++
++	{
++		int best_tpr6 = best_start;
++		int left, right;
++		u8 best_width = horizontal[best_tpr6 >> 2];
++
++		for (tpr6 = best_start; tpr6 <= best_end;
++		     tpr6 += H700_VENDOR_TPR6_STEP) {
++			u8 width = horizontal[tpr6 >> 2];
++
++			if (width > best_width) {
++				best_width = width;
++				best_tpr6 = tpr6;
++			}
++		}
++
++		left = best_tpr6;
++		while (left - H700_VENDOR_TPR6_STEP >= best_start &&
++		       horizontal[(left - H700_VENDOR_TPR6_STEP) >> 2] + 3 >=
++		       best_width)
++			left -= H700_VENDOR_TPR6_STEP;
++
++		right = best_tpr6;
++		while (right + H700_VENDOR_TPR6_STEP <= best_end &&
++		       horizontal[(right + H700_VENDOR_TPR6_STEP) >> 2] + 1 >=
++		       best_width)
++			right += H700_VENDOR_TPR6_STEP;
++
++		result->start = best_start;
++		result->end = best_end;
++		result->delay = best_delay;
++		result->center = (left + right) / 2;
++	}
++
++	work->tpr6 = h700_set_tpr6_byte(work->tpr6, 3, result->center);
++	return mctl_core_init(work, config);
++}
++
++static bool h700_vendor_lane_test(struct dram_para *work, u32 half_size,
++				 unsigned int lane, bool write, u8 delay)
++{
++	u32 *value = write ? &work->tpr11 : &work->tpr12;
++
++	*value = h700_set_delay_lane(*value, lane, delay);
++	mctl_phy_bit_delay_compensation(work);
++
++	return write ? h700_vendor_validate(half_size, 0x1000, lane, false) :
++		h700_vendor_matrix_test(half_size, lane);
++}
++
++/*
++ * R_1st/W_2st share the same boot0 edge policy.  This is intentionally
++ * streamed instead of first collecting a 64-entry pass array:
++ *
++ * - windows <= 3 codes are discarded as fake and scanning continues;
++ * - a window starting at zero raises the corresponding ODT nibble and
++ *   restarts at delay zero;
++ * - a window reaching 63 lowers ODT, shifts the saved start by two and
++ *   resumes at delay 61 (boot0 sets loop delay to 60, then increments).
++ */
++static bool h700_vendor_sweep_lane(struct dram_para *work, u32 half_size,
++				   unsigned int lane, bool write,
++				   u8 min_window,
++				   struct h700_vendor_window *window)
++{
++	unsigned int odt_nibble = write ? lane + 4 : lane;
++	u8 original_odt = h700_get_odt_nibble(work->odt_en, odt_nibble);
++	u8 adjusted_odt = original_odt;
++	int delay = 0;
++	int start = -1;
++	int end = -1;
++	bool in_window = false;
++
++	while (delay < 64) {
++		bool pass = h700_vendor_lane_test(work, half_size, lane, write,
++						 delay);
++
++		if (pass) {
++			if (!in_window) {
++				start = delay;
++				in_window = true;
++
++				if (delay == 0 && adjusted_odt <= 0xd) {
++					adjusted_odt++;
++					work->odt_en = h700_set_odt_nibble(
++						work->odt_en, odt_nibble, adjusted_odt);
++					start = -1;
++					in_window = false;
++					delay = 0;
++					continue;
++				}
++			}
++
++			if (delay == 63) {
++				end = 63;
++				if (adjusted_odt > 1 && start > 2) {
++					adjusted_odt--;
++					work->odt_en = h700_set_odt_nibble(
++						work->odt_en, odt_nibble, adjusted_odt);
++					start -= 2;
++					/* boot0 stores end=61 and resumes at 61. */
++					end = 61;
++					delay = 61;
++					continue;
++				}
++				break;
++			}
++
++			delay++;
++			continue;
++		}
++
++		if (in_window) {
++			end = delay - 1;
++			if (end - start > 2)
++				break;
++
++			/* Fake eye: resume after this failure looking for another run. */
++			start = -1;
++			end = -1;
++			in_window = false;
++		}
++		delay++;
++	}
++
++	if (start < 0 || end < start)
++		return false;
++
++	window->start = start;
++	window->end = end;
++	window->width = end - start + 1;
++	window->odt = adjusted_odt;
++	if (window->width < min_window)
++		return false;
++
++	{
++		int center = (start + end) / 2 -
++			2 * ((int)adjusted_odt - original_odt);
++
++		center &= 0x3f;
++		window->center = center;
++		if (write)
++			work->tpr11 = h700_set_delay_lane(work->tpr11, lane, center);
++		else
++			work->tpr12 = h700_set_delay_lane(work->tpr12, lane, center);
++		mctl_phy_bit_delay_compensation(work);
++	}
++
++	return true;
++}
++
++static bool h700_vendor_r1st(struct dram_para *work, u32 half_size,
++			     u8 min_window,
++			     struct h700_vendor_window window[H700_VENDOR_LANES])
++{
++	u32 original_odt = work->odt_en;
++	unsigned int lane;
++
++	for (lane = 0; lane < H700_VENDOR_LANES; lane++) {
++		if (!h700_vendor_sweep_lane(work, half_size, lane, false,
++					    min_window, &window[lane]))
++			return false;
++	}
++	work->odt_en = original_odt;
++
++	return true;
++}
++
++static bool h700_vendor_w2st(struct dram_para *work, u32 half_size,
++			     u8 min_window)
++{
++	struct h700_vendor_window window;
++	u32 original_odt = work->odt_en;
++	unsigned int lane;
++
++	for (lane = 0; lane < H700_VENDOR_LANES; lane++) {
++		if (!h700_vendor_sweep_lane(work, half_size, lane, true,
++					    min_window, &window))
++			return false;
++	}
++	work->odt_en = original_odt;
++
++	return true;
++}
++
++static bool h700_vendor_test_read_delay(struct dram_para *work, u32 half_size,
++					unsigned int lane, u8 delay)
++{
++	work->tpr12 = h700_set_delay_lane(work->tpr12, lane, delay);
++	mctl_phy_bit_delay_compensation(work);
++
++	return h700_vendor_validate(half_size, 0x1000, lane, false);
++}
++
++/*
++ * Clean-room translation of boot0 R_2st.  Keep its 4/2/1 state machine
++ * literally, including the existing R_1st bounds as fallbacks and the
++ * modulo-64 initial delay calculation.
++ */
++static bool h700_vendor_r2st(struct dram_para *work, u32 half_size,
++				     u8 min_window,
++				     struct h700_vendor_window window[H700_VENDOR_LANES],
++				     u32 original_odt)
++{
++	static const u8 steps[] = { 1, 2, 4 };
++	unsigned int lane;
++
++	for (lane = 0; lane < H700_VENDOR_LANES; lane++) {
++		u32 baseline_tpr12 = work->tpr12;
++		u8 original = h700_get_odt_nibble(original_odt, lane);
++		int initial = (h700_get_delay_lane(baseline_tpr12, lane) +
++			       window[lane].odt - original) & 0x3f;
++		int current = initial;
++		int step_index = 2;
++		bool upper = false;
++		bool done = false;
++
++		work->odt_en = h700_set_odt_nibble(work->odt_en, lane,
++						      window[lane].odt);
++		work->tpr12 = h700_set_delay_lane(work->tpr12, lane, initial);
++
++		while (!done) {
++			int step = steps[step_index];
++			int candidate;
++			bool pass;
++
++			if (!upper)
++				candidate = current > step ? current - step : 0;
++			else {
++				candidate = current + step;
++				if (candidate > 63)
++					candidate = 63;
++			}
++
++			pass = h700_vendor_test_read_delay(work, half_size, lane,
++						      candidate);
++			if (pass) {
++				current = candidate;
++				if (!upper) {
++					window[lane].start = current;
++					if (current == 0) {
++						upper = true;
++						step_index = 2;
++						work->tpr12 = baseline_tpr12;
++						current = h700_get_delay_lane(
++							baseline_tpr12, lane);
++					}
++				} else {
++					window[lane].end = current;
++					if (current == 63)
++						done = true;
++				}
++				continue;
++			}
++
++			if (!upper) {
++				if (step_index == 0) {
++					upper = true;
++					step_index = 2;
++					work->tpr12 = baseline_tpr12;
++					current = h700_get_delay_lane(
++						baseline_tpr12, lane);
++					continue;
++				}
++
++				/* boot0 backs out the failed lower probe, modulo 64. */
++				current = (candidate + step) & 0x3f;
++				step_index--;
++				work->tpr12 = h700_set_delay_lane(work->tpr12, lane,
++								 current);
++				continue;
++			}
++
++			if (step_index == 0) {
++				done = true;
++				continue;
++			}
++
++			/*
++			 * The upper-side boot0 sequence subtracts the failed step and
++			 * immediately adds it again before reducing the step index;
++			 * retain that observable state transition literally.
++			 */
++			current = candidate;
++			step_index--;
++			work->tpr12 = h700_set_delay_lane(work->tpr12, lane, current);
++		}
++
++		window[lane].width = window[lane].end + 1 - window[lane].start;
++		if (window[lane].width < min_window)
++			return false;
++
++		{
++			int center = (window[lane].start + window[lane].end) / 2 -
++				2 * ((int)window[lane].odt - original);
++
++			center &= 0x3f;
++			window[lane].center = center;
++			work->tpr12 = h700_set_delay_lane(work->tpr12, lane, center);
++		}
++	}
++
++	work->odt_en = original_odt;
++	mctl_phy_bit_delay_compensation(work);
++	return true;
++}
++
++/* boot0 RV_C: TPR6 centre +/-6, step 3; read eye centre +/-3. */
++static bool h700_vendor_rv_c(struct dram_para *work,
++				     const struct dram_config *config, u32 half_size,
++				     const struct h700_vendor_r2d_result *r2d,
++				     const struct h700_vendor_window window[H700_VENDOR_LANES])
++{
++	unsigned int half_eye = (h700_dram_runtime.current_tpr13 >> 8) & 0x7;
++	int first = r2d->center - 6 > r2d->start ?
++		    r2d->center - 6 : r2d->start;
++	int last = r2d->center + 6 < r2d->end ?
++		   r2d->center + 6 : r2d->end;
++	int delay_step;
++	int tpr6;
++
++	if (!half_eye)
++		return true;
++
++	delay_step = half_eye - 1;
++
++	/*
++	 * boot0 RV_C mutates the live parameter block in place.
++	 * TPR6 and TPR12 survive RV_C and are consumed by the
++	 * wrapper's final mctl_core_init().
++	 */
++	for (tpr6 = first; tpr6 <= last; tpr6 += 3) {
++		unsigned int lane;
++
++		work->tpr6 = h700_set_tpr6_byte(work->tpr6, 3, tpr6);
++		if (!mctl_core_init(work, config))
++			return false;
++
++		for (lane = 0; lane < H700_VENDOR_LANES; lane++) {
++			int start = window[lane].center + 1 - half_eye;
++			int end = window[lane].center + delay_step;
++			int delay;
++
++			if ((u32)start > (u32)end)
++				continue;
++
++			for (delay = start; (u32)delay <= (u32)end;
++			     delay += delay_step) {
++				work->tpr12 =
++					h700_set_delay_lane(work->tpr12, lane, delay);
++
++				mctl_phy_bit_delay_compensation(work);
++
++				if (!h700_vendor_validate(half_size, 0x800,
++							  lane, false))
++					return false;
++			}
++		}
++	}
++
++	return true;
++}
++
++static bool h700_vendor_dst_once(struct dram_para *runtime,
++				 struct dram_config *config,
++				 u8 min_window)
++{
++	struct dram_para nominal = *runtime;
++	struct dram_para work;
++	struct h700_vendor_window read_window[H700_VENDOR_LANES];
++	u32 original_odt = nominal.odt_en;
++	struct h700_vendor_r2d_result r2d;
++	u32 half_size = 0;
++
++	if (!h700_vendor_bootstrap(&nominal, &work, config, &half_size)) {
++		*runtime = work;
++		return false;
++	}
++
++	h700_vendor_prepare_matrix(half_size);
++
++	if ((h700_dram_runtime.current_tpr13 & H700_VENDOR_TPR13_R2D) &&
++	    !h700_vendor_r2d(&work, config, half_size, &r2d)) {
++		*runtime = work;
++		return false;
++	}
++
++	if (!h700_vendor_r1st(&work, half_size, min_window, read_window)) {
++		*runtime = work;
++		return false;
++	}
++
++	/* CubeXX/40XX-V have BIT26 clear: boot0 skips W_2d but runs W_2st. */
++	if (h700_dram_runtime.current_tpr13 & H700_VENDOR_TPR13_W2D) {
++		*runtime = work;
++		return false;
++	}
++
++	if (!h700_vendor_w2st(&work, half_size, min_window)) {
++		*runtime = work;
++		return false;
++	}
++
++	if (!h700_vendor_r2st(&work, half_size, min_window, read_window,
++			      original_odt)) {
++		*runtime = work;
++		return false;
++	}
++
++	if ((h700_dram_runtime.current_tpr13 & H700_VENDOR_TPR13_R2D) &&
++	    !h700_vendor_rv_c(&work, config, half_size, &r2d,
++			      read_window)) {
++		*runtime = work;
++		return false;
++	}
++
++	*runtime = work;
++	return true;
++}
++
++/* Clean-room translation of boot0 wrapper 0x24770: four in-place tries. */
++static bool h700_vendor_dst(struct dram_para *runtime,
++			    struct dram_config *config, u8 min_window)
++{
++	unsigned int attempt;
++
++	for (attempt = 0; attempt < H700_VENDOR_RETRIES; attempt++) {
++		unsigned int size_mib;
++		u32 half_size;
++
++		if (!h700_vendor_dst_once(runtime, config, min_window))
++			continue;
++
++		if (!mctl_core_init(runtime, config))
++			continue;
++		size_mib = h700_vendor_size_mib();
++		if (!size_mib)
++			continue;
++		half_size = (size_mib / 2) << 20;
++		if (!h700_vendor_validate(half_size, 0x8000, 8, true))
++			continue;
++
++		return true;
++	}
++
++	return false;
++}
++
++static bool h700_vendor_final_memtest(unsigned int size_mib)
++{
++	volatile u32 *low = (volatile u32 *)CFG_SYS_SDRAM_BASE;
++	volatile u32 *high = (volatile u32 *)(uintptr_t)(CFG_SYS_SDRAM_BASE +
++						 ((size_mib / 2) << 20));
++	unsigned int i;
++
++	for (i = 0; i < 0x1000; i++) {
++		low[i] = 0x01234567U + i;
++		high[i] = 0xfedcba98U + i;
++	}
++	asm volatile("dsb sy" ::: "memory");
++
++	for (i = 0; i < 0x1000; i++) {
++		if (high[i] != 0xfedcba98U + i)
++			return false;
++		if (low[i] != 0x01234567U + i)
++			return false;
++	}
++
++	return true;
++}
++
++#endif /* CONFIG_NUUBOS_H700_VENDOR_DRAM */
++
++unsigned long sunxi_dram_init(void)
++{
++	void *const prcm = (void *)SUNXI_PRCM_BASE;
++	struct dram_config config;
++	unsigned long size;
++
++	setbits_le32(prcm + CCU_PRCM_RES_CAL_CTRL, BIT(8));
++	clrbits_le32(prcm + CCU_PRCM_OHMS240, 0x3f);
++
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	if (h700_vendor_select_profile()) {
++		unsigned int size_mib;
++		if (!h700_vendor_set_dram_voltage())
++			hang();
++
++		if (!h700_vendor_config(&config))
++			hang();
++
++		/*
++		 * TPR13 bit11 selects the vendor DST wrapper.  Profiles which do
++		 * not request DST still use the vendor autoscan and final raw
++		 * geometry/controller path.
++		 */
++		if (h700_dram_runtime.current_tpr13 & BIT(11)) {
++			if (!h700_vendor_dst(&para, &config,
++					     h700_dram_runtime.min_window))
++				hang();
++		} else {
++			if (!(h700_dram_runtime.current_tpr13 & BIT(0)) &&
++			    !h700_vendor_autoscan(&para, &config))
++				hang();
++		}
++
++		/* boot0 performs one final core init with the discovered geometry. */
++		if (!mctl_core_init(&para, &config))
++			hang();
++		size_mib = h700_vendor_finalize_size();
++		if (!size_mib)
++			hang();
++
++		if (!(h700_dram_runtime.current_tpr13 & BIT(27)))
++			mctl_set_master_priority();
++
++		/*
++		 * boot0 final base/half-memory test: one complete re-init and
++		 * retest is permitted before declaring the DRAM unusable.
++		 */
++		if (!h700_vendor_final_memtest(size_mib)) {
++			if (!mctl_core_init(&para, &config))
++				hang();
++			size_mib = h700_vendor_finalize_size();
++			if (!size_mib)
++				hang();
++			if (!(h700_dram_runtime.current_tpr13 & BIT(27)))
++				mctl_set_master_priority();
++			if (!h700_vendor_final_memtest(size_mib))
++				hang();
++		}
++
++		/*
++		 * boot0 top flow 0x27900 -> 0x231e0 always clears the H700
++		 * DRAM/boot scratch register at 0x070001f8 after the final
++		 * memory test succeeds.  On the cold path bit 16 is clear, so
++		 * the remainder of 0x231e0 returns immediately after this write.
++		 */
++		writel(0, (void *)0x070001f8UL);
++
++		return (unsigned long)size_mib << 20;
++	}
++#endif
++
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	/* A successful H700 selector always activates the vendor backend. */
++	hang();
++#endif
++
++	/*
++	 * Historical H616 initialization. H700 always returns or stops above.
++	 */
++	mctl_auto_detect_rank_width(&para, &config);
++	mctl_auto_detect_dram_size(&para, &config);
++	mctl_core_init(&para, &config);
++
++	size = mctl_calc_size(&config);
+ 	mctl_set_master_priority();
+ 
+ 	return size;
+diff --git a/arch/arm/mach-sunxi/dram_timings/Makefile b/arch/arm/mach-sunxi/dram_timings/Makefile
+index 5de9fd5..d800e51 100644
+--- a/arch/arm/mach-sunxi/dram_timings/Makefile
++++ b/arch/arm/mach-sunxi/dram_timings/Makefile
+@@ -3,9 +3,13 @@ obj-$(CONFIG_SUNXI_DRAM_LPDDR3_STOCK)	+= lpddr3_stock.o
+ obj-$(CONFIG_SUNXI_DRAM_DDR2_V3S)	+= ddr2_v3s.o
+ obj-$(CONFIG_SUNXI_DRAM_H6_LPDDR3)	+= h6_lpddr3.o
+ obj-$(CONFIG_SUNXI_DRAM_H6_DDR3_1333)	+= h6_ddr3_1333.o
++ifeq ($(CONFIG_NUUBOS_H700_VENDOR_DRAM),y)
++obj-y	+= h616_ddr3_1333.o h616_lpddr3.o h616_lpddr4_2133.o
++else
+ obj-$(CONFIG_SUNXI_DRAM_H616_DDR3_1333)	+= h616_ddr3_1333.o
+ obj-$(CONFIG_SUNXI_DRAM_H616_LPDDR3)	+= h616_lpddr3.o
+ obj-$(CONFIG_SUNXI_DRAM_H616_LPDDR4)	+= h616_lpddr4_2133.o
++endif
+ obj-$(CONFIG_SUNXI_DRAM_A133_DDR4)	+= a133_ddr4.o
+ obj-$(CONFIG_SUNXI_DRAM_A133_LPDDR4)	+= a133_lpddr4.o
+ obj-$(CONFIG_SUNXI_DRAM_A523_DDR3)	+= a523_ddr3.o
+diff --git a/arch/arm/mach-sunxi/dram_timings/h616_ddr3_1333.c b/arch/arm/mach-sunxi/dram_timings/h616_ddr3_1333.c
+index 3faf8d5..68c1384 100644
+--- a/arch/arm/mach-sunxi/dram_timings/h616_ddr3_1333.c
++++ b/arch/arm/mach-sunxi/dram_timings/h616_ddr3_1333.c
+@@ -14,33 +14,171 @@
+ #include <asm/arch/dram.h>
+ #include <asm/arch/cpu.h>
+ 
+-void mctl_set_timing_params(const struct dram_para *para)
++static const u8 h616_ddr3_phy_init_default[H616_PHY_INIT_LEN] = {
++	0x07, 0x0b, 0x02, 0x16, 0x0d, 0x0e, 0x14, 0x19,
++	0x0a, 0x15, 0x03, 0x13, 0x04, 0x0c, 0x10, 0x06,
++	0x0f, 0x11, 0x1a, 0x01, 0x12, 0x17, 0x00, 0x08,
++	0x09, 0x05, 0x18
++};
++
++static const u8 h616_ddr3_phy_init_addr_map_1[H616_PHY_INIT_LEN] = {
++	0x08, 0x02, 0x12, 0x05, 0x15, 0x17, 0x18, 0x0b,
++	0x14, 0x07, 0x04, 0x13, 0x0c, 0x00, 0x16, 0x1a,
++	0x0a, 0x11, 0x03, 0x10, 0x0e, 0x01, 0x0d, 0x19,
++	0x06, 0x09, 0x0f
++};
++
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++static const u8 h700_phy_init_map1[H616_PHY_INIT_LEN] = {
++	0x08, 0x12, 0x03, 0x16, 0x00, 0x19, 0x0d, 0x04,
++	0x0c, 0x0a, 0x02, 0x1a, 0x10, 0x14, 0x09, 0x18,
++	0x0f, 0x11, 0x06, 0x15, 0x0b, 0x07, 0x13, 0x17,
++	0x05, 0x01, 0x0e
++};
++
++const u8 *h700_phy_get_map0_2(unsigned int map)
++{
++	if (map == 1)
++		return h700_phy_init_map1;
++	if (map == 2)
++		return h616_ddr3_phy_init_addr_map_1;
++	return h616_ddr3_phy_init_default;
++}
++#endif
++
++const u8 *h616_ddr3_get_phy_init(void)
++{
++	if (IS_ENABLED(CONFIG_DRAM_SUNXI_PHY_ADDR_MAP_1))
++		return h616_ddr3_phy_init_addr_map_1;
++
++	return h616_ddr3_phy_init_default;
++}
++
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++static void h700_ddr3_set_timing_params_bank(const struct dram_para *para,
++					      uintptr_t bank_offset)
++{
++	struct sunxi_mctl_ctl_reg * const mctl_ctl =
++		(struct sunxi_mctl_ctl_reg *)(SUNXI_DRAM_CTL0_BASE + bank_offset);
++	struct sunxi_mctl_ctl_reg * const common_ctl =
++		(struct sunxi_mctl_ctl_reg *)SUNXI_DRAM_CTL0_BASE;
++	u8 tfaw = ns_to_t(para, 50);
++	u8 trrd = max(ns_to_t(para, 10), 2);
++	u8 trcd = ns_to_t(para, 15);
++	u8 trc = ns_to_t(para, 53);
++	u8 txp = max(ns_to_t(para, 8), 2);
++	u8 trp = trcd;
++	u8 tras = ns_to_t(para, 38);
++	u16 trefi = ns_to_t(para, 7800) / 32;
++	u16 trfc = ns_to_t(para, 350);
++	u8 txs = ns_to_t(para, 360) / 32;
++	u8 tcksrx = ns_to_t(para, 10);
++	u8 tcksre = ns_to_t(para, 8);
++	u8 tcke = tcksrx <= 2 ? 6 : (tcksre < 2 ? 2 : tcksre);
++	u8 trasmax = (para->clk / 2) / 15;
++	bool high_speed = para->tpr2 & BIT(8);
++	u8 tcl = high_speed ? 5 : 7;
++	u8 tcwl = high_speed ? 4 : 5;
++	u8 dfi_tphy_wrlat = high_speed ? 4 : 6;
++	u8 dfi_trddata_en = high_speed ? 6 : 10;
++	u8 trtp = txp;
++	u8 twtp = tcl + tcwl + 2;
++	u8 twr2rd = txp + tcwl + 2;
++	u8 trd2wr = tcl + 3 - tcwl;
++	u16 mr0 = high_speed ? 0x1b50 : 0x1f14;
++	u16 mr2 = high_speed ? 0x0010 : 0x0020;
++	u32 dfitmg0;
++
++	/* boot0 0x269b4..0x26b76 raises tRTP only when this constraint wins. */
++	if (tcl + 1 >= txp + trp)
++		trtp = tcl + 2 - trp;
++
++	/* boot0 0x26534, type 3. */
++	writel((twtp << 24) | (tfaw << 16) | (trasmax << 8) | tras,
++	       &mctl_ctl->dramtmg[0]);
++	writel((txp << 16) | (trtp << 8) | trc, &mctl_ctl->dramtmg[1]);
++	writel((tcwl << 24) | (tcl << 16) | (trd2wr << 8) | twr2rd,
++	       &mctl_ctl->dramtmg[2]);
++	writel((4U << 12) | 12U, &mctl_ctl->dramtmg[3]);
++	writel((trcd << 24) | (2U << 16) | (trrd << 8) | trp,
++	       &mctl_ctl->dramtmg[4]);
++	writel((tcksrx << 24) | (tcksrx << 16) | (tcksre << 8) | tcke,
++	       &mctl_ctl->dramtmg[5]);
++	writel((txp + 2) | 0x02020000, &mctl_ctl->dramtmg[6]);
++	writel((4U << 24) | (4U << 16) | (16U << 8) | txs,
++	       &mctl_ctl->dramtmg[8]);
++	writel(0x00020208, &mctl_ctl->dramtmg[9]);
++	writel(0x000e0c05, &mctl_ctl->dramtmg[10]);
++	writel(0x440c021c, &mctl_ctl->dramtmg[11]);
++	writel(8, &mctl_ctl->dramtmg[12]);
++	writel(0x0a100002, &mctl_ctl->dramtmg[13]);
++	writel(4, &mctl_ctl->dramtmg[14]);
++
++	/* boot0 common INIT/DFI registers are not banked. */
++	clrsetbits_le32(&common_ctl->init[0], 0xc0000fff,
++			 0x112 | ((readl((void *)0x070001f8UL) >> 16) ?
++				  BIT(30) : 0));
++	writel(0x00420000, &common_ctl->init[1]);
++	clrsetbits_le32(&common_ctl->init[2], 0xff0f, 0x0d05);
++	writel(0, &common_ctl->dfimisc);
++
++	writel((mr0 << 16) | para->mr1, &mctl_ctl->init[3]);
++	writel((mr2 << 16), &mctl_ctl->init[4]);
++	clrsetbits_le32(&mctl_ctl->rankctl, 0xff0, 0x660);
++
++	if (para->tpr13 & BIT(5))
++		dfitmg0 = dfi_tphy_wrlat | 0x02000000 |
++			  (dfi_trddata_en << 16) | 0x00808000;
++	else
++		dfitmg0 = (dfi_tphy_wrlat - 1) | 0x02000000 |
++			  ((dfi_trddata_en - 1) << 16) | 0x00808000;
++	writel(dfitmg0, &mctl_ctl->dfitmg0);
++	writel(0x00100202, &mctl_ctl->dfitmg1);
++	writel((trefi << 16) | trfc, &mctl_ctl->rfshtmg);
++}
++
++void h616_ddr3_set_timing_params(const struct dram_para *para)
++{
++	static const u8 divisors[] = { 4, 3, 2, 1 };
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(divisors); i++) {
++		struct dram_para scaled = *para;
++		u8 div = divisors[i];
++		uintptr_t bank_offset = div == 1 ? 0 : (uintptr_t)div << 12;
++
++		scaled.clk = para->clk / div;
++		h700_ddr3_set_timing_params_bank(&scaled, bank_offset);
++	}
++}
++#else
++void h616_ddr3_set_timing_params(const struct dram_para *para)
+ {
+ 	struct sunxi_mctl_ctl_reg * const mctl_ctl =
+ 			(struct sunxi_mctl_ctl_reg *)SUNXI_DRAM_CTL0_BASE;
+ 
+ 	u8 tccd		= 2;			/* JEDEC: 4nCK */
+-	u8 tfaw		= ns_to_t(50);		/* JEDEC: 30 ns w/ 1K pages */
+-	u8 trrd		= max(ns_to_t(6), 4);	/* JEDEC: max(6 ns, 4nCK) */
+-	u8 trcd		= ns_to_t(15);		/* JEDEC: 13.5 ns */
+-	u8 trc		= ns_to_t(53);		/* JEDEC: 49.5 ns */
+-	u8 txp		= max(ns_to_t(6), 3);	/* JEDEC: max(6 ns, 3nCK) */
+-	u8 trtp		= max(ns_to_t(8), 2);	/* JEDEC: max(7.5 ns, 4nCK) */
+-	u8 trp		= ns_to_t(15);		/* JEDEC: >= 13.75 ns */
+-	u8 tras		= ns_to_t(38);		/* JEDEC >= 36 ns, <= 9*trefi */
+-	u16 trefi	= ns_to_t(7800) / 32;	/* JEDEC: 7.8us@Tcase <= 85C */
+-	u16 trfc	= ns_to_t(350);		/* JEDEC: 160 ns for 2Gb */
++	u8 tfaw		= ns_to_t(para, 50);	/* JEDEC: 30 ns w/ 1K pages */
++	u8 trrd		= max(ns_to_t(para, 6), 4); /* JEDEC: max(6 ns, 4nCK) */
++	u8 trcd		= ns_to_t(para, 15);	/* JEDEC: 13.5 ns */
++	u8 trc		= ns_to_t(para, 53);	/* JEDEC: 49.5 ns */
++	u8 txp		= max(ns_to_t(para, 6), 3); /* JEDEC: max(6 ns, 3nCK) */
++	u8 trtp		= max(ns_to_t(para, 8), 2); /* JEDEC: max(7.5 ns, 4nCK) */
++	u8 trp		= ns_to_t(para, 15);	/* JEDEC: >= 13.75 ns */
++	u8 tras		= ns_to_t(para, 38);	/* JEDEC >= 36 ns, <= 9*trefi */
++	u16 trefi	= ns_to_t(para, 7800) / 32; /* JEDEC: 7.8us@Tcase <= 85C */
++	u16 trfc	= ns_to_t(para, 350);	/* JEDEC: 160 ns for 2Gb */
+ 	u16 txsr	= 4;			/* ? */
+ 
+ 	u8 tmrw		= 0;			/* ? */
+ 	u8 tmrd		= 4;			/* JEDEC: 4nCK */
+-	u8 tmod		= max(ns_to_t(15), 12);	/* JEDEC: max(15 ns, 12nCK) */
+-	u8 tcke		= max(ns_to_t(6), 3);	/* JEDEC: max(5.625 ns, 3nCK) */
+-	u8 tcksrx	= max(ns_to_t(10), 4);	/* JEDEC: max(10 ns, 5nCK) */
+-	u8 tcksre	= max(ns_to_t(10), 4);	/* JEDEC: max(10 ns, 5nCK) */
++	u8 tmod		= max(ns_to_t(para, 15), 12); /* JEDEC: max(15 ns, 12nCK) */
++	u8 tcke		= max(ns_to_t(para, 6), 3); /* JEDEC: max(5.625 ns, 3nCK) */
++	u8 tcksrx	= max(ns_to_t(para, 10), 4); /* JEDEC: max(10 ns, 5nCK) */
++	u8 tcksre	= max(ns_to_t(para, 10), 4); /* JEDEC: max(10 ns, 5nCK) */
+ 	u8 tckesr	= tcke + 1;		/* JEDEC: tCKE(min) + 1nCK */
+ 	u8 trasmax	= (para->clk / 2) / 15;	/* JEDEC: tREFI * 9 */
+-	u8 txs		= ns_to_t(360) / 32;	/* JEDEC: max(5nCK,tRFC+10ns) */
++	u8 txs		= ns_to_t(para, 360) / 32; /* JEDEC: max(5nCK,tRFC+10ns) */
+ 	u8 txsdll	= 16;			/* JEDEC: 512 nCK */
+ 	u8 txsabort	= 4;			/* ? */
+ 	u8 txsfast	= 4;			/* ? */
+@@ -103,3 +241,5 @@ void mctl_set_timing_params(const struct dram_para *para)
+ 	/* set refresh timing */
+ 	writel((trefi << 16) | trfc, &mctl_ctl->rfshtmg);
+ }
++
++#endif
+diff --git a/arch/arm/mach-sunxi/dram_timings/h616_lpddr3.c b/arch/arm/mach-sunxi/dram_timings/h616_lpddr3.c
+index ce2ffa7..4a09019 100644
+--- a/arch/arm/mach-sunxi/dram_timings/h616_lpddr3.c
++++ b/arch/arm/mach-sunxi/dram_timings/h616_lpddr3.c
+@@ -14,33 +14,149 @@
+ #include <asm/arch/dram.h>
+ #include <asm/arch/cpu.h>
+ 
+-void mctl_set_timing_params(const struct dram_para *para)
++static const u8 h616_lpddr3_phy_init_default[H616_PHY_INIT_LEN] = {
++	0x18, 0x06, 0x00, 0x05, 0x04, 0x03, 0x09, 0x02,
++	0x08, 0x01, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
++	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x07,
++	0x17, 0x19, 0x1a
++};
++
++static const u8 h616_lpddr3_phy_init_addr_map_1[H616_PHY_INIT_LEN] = {
++	0x18, 0x00, 0x04, 0x09, 0x06, 0x05, 0x02, 0x19,
++	0x17, 0x03, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
++	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x07,
++	0x08, 0x01, 0x1a
++};
++
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++const u8 *h700_phy_get_map5_6(unsigned int map)
++{
++	return map ? h616_lpddr3_phy_init_addr_map_1 :
++		       h616_lpddr3_phy_init_default;
++}
++#endif
++
++const u8 *h616_lpddr3_get_phy_init(void)
++{
++	if (IS_ENABLED(CONFIG_DRAM_SUNXI_PHY_ADDR_MAP_1))
++		return h616_lpddr3_phy_init_addr_map_1;
++
++	return h616_lpddr3_phy_init_default;
++}
++
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++static void h700_lpddr3_set_timing_params_bank(const struct dram_para *para,
++					       uintptr_t bank_offset)
++{
++	struct sunxi_mctl_ctl_reg * const mctl_ctl =
++		(struct sunxi_mctl_ctl_reg *)(SUNXI_DRAM_CTL0_BASE + bank_offset);
++	struct sunxi_mctl_ctl_reg * const common_ctl =
++		(struct sunxi_mctl_ctl_reg *)SUNXI_DRAM_CTL0_BASE;
++	u8 tfaw = max(ns_to_t(para, 50), 4);
++	u8 trrd = max(ns_to_t(para, 10), 1);
++	u8 trcd = max(ns_to_t(para, 24), 2);
++	u8 trc = ns_to_t(para, 70);
++	u8 txp = max(ns_to_t(para, 8), 2);
++	u8 trtp = max(ns_to_t(para, 8), 2);
++	u8 trp = ns_to_t(para, 27);
++	u8 tras = ns_to_t(para, 42);
++	u16 trefi = ns_to_t(para, 3900) / 32;
++	u16 trfc = ns_to_t(para, 210);
++	u16 txsr = ns_to_t(para, 220);
++	bool high_speed = para->tpr2 & BIT(8);
++	u8 tcl = high_speed ? 6 : 7;
++	u8 tcwl = high_speed ? 3 : 4;
++	u8 t_rdata_en = high_speed ? 10 : 12;
++	u8 t_wr_lat = high_speed ? 4 : 6;
++	u8 mr1 = high_speed ? 0x43 : 0x83;
++	u8 mr2 = high_speed ? 0x1a : 0x1c;
++	u32 dfitmg0;
++
++	/* boot0 0x26534, type 7 (LPDDR3). */
++	writel((16U << 24) | (tfaw << 16) | (24U << 8) | tras,
++	       &mctl_ctl->dramtmg[0]);
++	writel((txp << 16) | (trtp << 8) | trc, &mctl_ctl->dramtmg[1]);
++	writel((tcwl << 24) | (tcl << 16) | (13U << 8) | (trtp + 9),
++	       &mctl_ctl->dramtmg[2]);
++	writel((5U << 20) | (5U << 12) | 12U, &mctl_ctl->dramtmg[3]);
++	writel((trcd << 24) | (2U << 16) | (trrd << 8) | trp,
++	       &mctl_ctl->dramtmg[4]);
++	writel(0x05050503, &mctl_ctl->dramtmg[5]);
++	writel((txp + 2) | 0x02020000, &mctl_ctl->dramtmg[6]);
++	writel(0x04041004, &mctl_ctl->dramtmg[8]);
++	writel(0x00020208, &mctl_ctl->dramtmg[9]);
++	writel(0x000e0c05, &mctl_ctl->dramtmg[10]);
++	writel(0x440c021c, &mctl_ctl->dramtmg[11]);
++	writel(8, &mctl_ctl->dramtmg[12]);
++	writel(0x0a100002, &mctl_ctl->dramtmg[13]);
++	writel(txsr, &mctl_ctl->dramtmg[14]);
++
++	/* boot0 0x26b28..0x26d62: INIT0/1/2 and DFIMISC are common. */
++	clrsetbits_le32(&common_ctl->init[0], 0xc3ff0fff,
++			0x004f0112 |
++			((readl((void *)0x070001f8UL) >> 16) ? BIT(30) : 0));
++	writel(0x00420000, &common_ctl->init[1]);
++	clrsetbits_le32(&common_ctl->init[2], 0xff0f, 0x0d05);
++	writel(0, &common_ctl->dfimisc);
++
++	/* The remaining timing registers are banked by 0x26534. */
++	writel((mr1 << 16) | mr2, &mctl_ctl->init[3]);
++	writel(para->mr3 << 16, &mctl_ctl->init[4]);
++	clrsetbits_le32(&mctl_ctl->rankctl, 0xff0, 0x660);
++
++	if (para->tpr13 & BIT(5))
++		dfitmg0 = t_wr_lat | 0x02000000 |
++			  (t_rdata_en << 16) | 0x00808000;
++	else
++		dfitmg0 = (t_wr_lat - 1) | 0x02000000 |
++			  ((t_rdata_en - 1) << 16) | 0x00808000;
++	writel(dfitmg0, &mctl_ctl->dfitmg0);
++	writel(0x00100202, &mctl_ctl->dfitmg1);
++	writel((trefi << 16) | trfc, &mctl_ctl->rfshtmg);
++}
++
++void h616_lpddr3_set_timing_params(const struct dram_para *para)
++{
++	static const u8 divisors[] = { 4, 3, 2, 1 };
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(divisors); i++) {
++		struct dram_para scaled = *para;
++		u8 div = divisors[i];
++		uintptr_t bank_offset = div == 1 ? 0 : (uintptr_t)div << 12;
++
++		scaled.clk = para->clk / div;
++		h700_lpddr3_set_timing_params_bank(&scaled, bank_offset);
++	}
++}
++#else
++void h616_lpddr3_set_timing_params(const struct dram_para *para)
+ {
+ 	struct sunxi_mctl_ctl_reg * const mctl_ctl =
+ 			(struct sunxi_mctl_ctl_reg *)SUNXI_DRAM_CTL0_BASE;
+ 
+ 	u8 tccd		= 2;
+-	u8 tfaw		= ns_to_t(50);
+-	u8 trrd		= max(ns_to_t(6), 4);
+-	u8 trcd		= ns_to_t(24);
+-	u8 trc		= ns_to_t(70);
+-	u8 txp		= max(ns_to_t(8), 3);
+-	u8 trtp		= max(ns_to_t(8), 2);
+-	u8 trp		= ns_to_t(27);
+-	u8 tras		= ns_to_t(41);
+-	u16 trefi	= ns_to_t(7800) / 64;
+-	u16 trfc	= ns_to_t(210);
++	u8 tfaw		= ns_to_t(para, 50);
++	u8 trrd		= max(ns_to_t(para, 6), 4);
++	u8 trcd		= ns_to_t(para, 24);
++	u8 trc		= ns_to_t(para, 70);
++	u8 txp		= max(ns_to_t(para, 8), 3);
++	u8 trtp		= max(ns_to_t(para, 8), 2);
++	u8 trp		= ns_to_t(para, 27);
++	u8 tras		= ns_to_t(para, 41);
++	u16 trefi	= ns_to_t(para, 7800) / 64;
++	u16 trfc	= ns_to_t(para, 210);
+ 	u16 txsr	= 88;
+ 
+ 	u8 tmrw		= 5;
+ 	u8 tmrd		= 5;
+-	u8 tmod		= max(ns_to_t(15), 12);
+-	u8 tcke		= max(ns_to_t(6), 3);
+-	u8 tcksrx	= max(ns_to_t(12), 4);
+-	u8 tcksre	= max(ns_to_t(12), 4);
++	u8 tmod		= max(ns_to_t(para, 15), 12);
++	u8 tcke		= max(ns_to_t(para, 6), 3);
++	u8 tcksrx	= max(ns_to_t(para, 12), 4);
++	u8 tcksre	= max(ns_to_t(para, 12), 4);
+ 	u8 tckesr	= tcke + 2;
+ 	u8 trasmax	= (para->clk / 2) / 16;
+-	u8 txs		= ns_to_t(360) / 32;
++	u8 txs		= ns_to_t(para, 360) / 32;
+ 	u8 txsdll	= 16;
+ 	u8 txsabort	= 4;
+ 	u8 txsfast	= 4;
+@@ -92,3 +208,5 @@ void mctl_set_timing_params(const struct dram_para *para)
+ 	/* set refresh timing */
+ 	writel((trefi << 16) | trfc, &mctl_ctl->rfshtmg);
+ }
++
++#endif
+diff --git a/arch/arm/mach-sunxi/dram_timings/h616_lpddr4_2133.c b/arch/arm/mach-sunxi/dram_timings/h616_lpddr4_2133.c
+index 6f5c4ac..f3f20bb 100644
+--- a/arch/arm/mach-sunxi/dram_timings/h616_lpddr4_2133.c
++++ b/arch/arm/mach-sunxi/dram_timings/h616_lpddr4_2133.c
+@@ -12,30 +12,66 @@
+ #include <asm/arch/dram.h>
+ #include <asm/arch/cpu.h>
+ 
+-void mctl_set_timing_params(const struct dram_para *para)
++static const u8 h616_lpddr4_phy_init_default[H616_PHY_INIT_LEN] = {
++	0x02, 0x00, 0x17, 0x05, 0x04, 0x19, 0x06, 0x07,
++	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
++	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x01,
++	0x18, 0x03, 0x1a
++};
++
++static const u8 h616_lpddr4_phy_init_addr_map_1[H616_PHY_INIT_LEN] = {
++	0x03, 0x00, 0x17, 0x05, 0x02, 0x19, 0x06, 0x07,
++	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
++	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x01,
++	0x18, 0x04, 0x1a
++};
++
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++const u8 *h700_phy_get_map7_8(unsigned int map)
++{
++	return map ? h616_lpddr4_phy_init_addr_map_1 :
++		       h616_lpddr4_phy_init_default;
++}
++#endif
++
++const u8 *h616_lpddr4_get_phy_init(void)
++{
++	if (IS_ENABLED(CONFIG_DRAM_SUNXI_PHY_ADDR_MAP_1))
++		return h616_lpddr4_phy_init_addr_map_1;
++
++	return h616_lpddr4_phy_init_default;
++}
++
++static void h616_lpddr4_set_timing_params_bank(const struct dram_para *para,
++					       uintptr_t bank_offset)
+ {
+ 	struct sunxi_mctl_ctl_reg * const mctl_ctl =
+-			(struct sunxi_mctl_ctl_reg *)SUNXI_DRAM_CTL0_BASE;
++		(struct sunxi_mctl_ctl_reg *)(SUNXI_DRAM_CTL0_BASE + bank_offset);
++
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	struct sunxi_mctl_ctl_reg * const common_ctl =
++		(struct sunxi_mctl_ctl_reg *)SUNXI_DRAM_CTL0_BASE;
++#endif
+ 
+ 	u8 tccd		= 4;
+-	u8 tfaw		= ns_to_t(40);
+-	u8 trrd		= max(ns_to_t(10), 2);
+-	u8 trcd		= max(ns_to_t(18), 2);
+-	u8 trc		= ns_to_t(65);
+-	u8 txp		= max(ns_to_t(8), 2);
++	u8 tfaw		= ns_to_t(para, 40);
++	u8 trrd		= max(ns_to_t(para, 10), 2);
++	u8 trcd		= max(ns_to_t(para, 18), 2);
++	u8 trc		= ns_to_t(para, 65);
++	u8 txp		= max(ns_to_t(para, 8), 2);
+ 	u8 trtp		= 4;
+-	u8 trp		= ns_to_t(21);
+-	u8 tras		= ns_to_t(42);
+-	u16 trefi	= ns_to_t(3904) / 32;
+-	u16 trfc	= ns_to_t(280);
+-	u16 txsr	= ns_to_t(190);
++	u8 trp		= ns_to_t(para, 21);
++	u8 tras		= ns_to_t(para, 42);
++	u16 trefi	= ns_to_t(para, 3904) / 32;
++	u16 trfc	= ns_to_t(para, 280);
++	u16 txsr	= ns_to_t(para, 190);
+ 
+-	u8 tmrw		= max(ns_to_t(14), 5);
++	u8 tmrw		= max(ns_to_t(para, 14), 5);
+ 	u8 tmrd		= tmrw;
+ 	u8 tmod		= 12;
+-	u8 tcke		= max(ns_to_t(15), 2);
+-	u8 tcksrx	= max(ns_to_t(2), 2);
+-	u8 tcksre	= max(ns_to_t(5), 2);
++	u8 tcke		= max(ns_to_t(para, 15), 2);
++	u8 tcksrx	= max(ns_to_t(para, 2), 2);
++	u8 tcksre	= max(ns_to_t(para, 5), 2);
+ 	u8 tckesr	= tcke;
+ 	u8 trasmax	= (trefi * 9) / 32;
+ 	u8 txs		= 4;
+@@ -49,7 +85,7 @@ void mctl_set_timing_params(const struct dram_para *para)
+ 
+ 	u8 twtp		= 24;
+ 	u8 twr2rd	= max(trrd, (u8)4) + 14;
+-	u8 trd2wr	= (ns_to_t(4) + 17) - ns_to_t(1);
++	u8 trd2wr	= (ns_to_t(para, 4) + 17) - ns_to_t(para, 1);
+ 
+ 	/* set DRAM timing */
+ 	writel((twtp << 24) | (tfaw << 16) | (trasmax << 8) | tras,
+@@ -73,10 +109,20 @@ void mctl_set_timing_params(const struct dram_para *para)
+ 	writel(0xA100002, &mctl_ctl->dramtmg[13]);
+ 	writel(txsr, &mctl_ctl->dramtmg[14]);
+ 
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	/* boot0 0x26d2c..0x26d62: these registers are not banked. */
++	clrsetbits_le32(&common_ctl->init[0], 0xc0000fff,
++		       0x3f0 | ((readl((void *)0x070001f8UL) >> 16) ?
++				BIT(30) : 0));
++	writel(0x01f20000, &common_ctl->init[1]);
++	clrsetbits_le32(&common_ctl->init[2], 0xff0f, 0x0d05);
++	writel(0, &common_ctl->dfimisc);
++#else
+ 	clrsetbits_le32(&mctl_ctl->init[0], 0xC0000FFF, 0x3f0);
+ 	writel(0x01f20000, &mctl_ctl->init[1]);
+ 	writel(0x00000d05, &mctl_ctl->init[2]);
+ 	writel(0, &mctl_ctl->dfimisc);
++#endif
+ 	writel(0x0034001b, &mctl_ctl->init[3]);
+ 	writel(0x00330000, &mctl_ctl->init[4]);
+ 	writel(0x00040072, &mctl_ctl->init[6]);
+@@ -92,3 +138,31 @@ void mctl_set_timing_params(const struct dram_para *para)
+ 	/* set refresh timing */
+ 	writel((trefi << 16) | trfc, &mctl_ctl->rfshtmg);
+ }
++
++void h616_lpddr4_set_timing_params(const struct dram_para *para)
++{
++#ifdef CONFIG_NUUBOS_H700_VENDOR_DRAM
++	/*
++	 * H700 boot0 0x26534 programs four controller timing banks.
++	 * For a nominal DRAM clock, the controller clock is clk / 2 and
++	 * boot0 successively uses divisors 4, 3, 2 and 1, mapping them to
++	 * banks +0x4000, +0x3000, +0x2000 and +0x0000 respectively.
++	 *
++	 * Keep the normal H616 path unchanged and reproduce this only for
++	 * the H700 vendor backend.
++	 */
++	static const u8 divisors[] = { 4, 3, 2, 1 };
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(divisors); i++) {
++		struct dram_para scaled = *para;
++		u8 div = divisors[i];
++		uintptr_t bank_offset = div == 1 ? 0 : (uintptr_t)div << 12;
++
++		scaled.clk = para->clk / div;
++		h616_lpddr4_set_timing_params_bank(&scaled, bank_offset);
++	}
++#else
++	h616_lpddr4_set_timing_params_bank(para, 0);
++#endif
++}
+diff --git a/arch/arm/mach-sunxi/dram_timings/h700_ddr4.c b/arch/arm/mach-sunxi/dram_timings/h700_ddr4.c
+new file mode 100644
+index 0000000..569800f
+--- /dev/null
++++ b/arch/arm/mach-sunxi/dram_timings/h700_ddr4.c
+@@ -0,0 +1,118 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Allwinner H700 DDR4 timings, clean-room translated from vendor boot0.
++ */
++
++#include <asm/arch/cpu.h>
++#include <asm/arch/dram.h>
++
++static const u8 h700_phy_init_map3[H616_PHY_INIT_LEN] = {
++	0x12, 0x02, 0x0d, 0x13, 0x07, 0x05, 0x06, 0x0e,
++	0x00, 0x17, 0x09, 0x16, 0x0a, 0x01, 0x08, 0x10,
++	0x0b, 0x11, 0x18, 0x0f, 0x03, 0x15, 0x0c, 0x04,
++	0x14, 0x19, 0x1a
++};
++
++static const u8 h700_phy_init_map4[H616_PHY_INIT_LEN] = {
++	0x00, 0x01, 0x03, 0x06, 0x04, 0x13, 0x16, 0x0c,
++	0x10, 0x09, 0x0a, 0x0b, 0x07, 0x0d, 0x0e, 0x0f,
++	0x18, 0x11, 0x12, 0x05, 0x14, 0x08, 0x02, 0x17,
++	0x15, 0x19, 0x1a
++};
++
++const u8 *h700_phy_get_map3_4(unsigned int map)
++{
++	return map ? h700_phy_init_map4 : h700_phy_init_map3;
++}
++
++static void h700_ddr4_set_timing_params_bank(const struct dram_para *para,
++					      uintptr_t bank_offset)
++{
++	struct sunxi_mctl_ctl_reg * const mctl_ctl =
++		(struct sunxi_mctl_ctl_reg *)(SUNXI_DRAM_CTL0_BASE + bank_offset);
++	struct sunxi_mctl_ctl_reg * const common_ctl =
++		(struct sunxi_mctl_ctl_reg *)SUNXI_DRAM_CTL0_BASE;
++	u8 tfaw = ns_to_t(para, 35);
++	u8 trrd = max(ns_to_t(para, 8), 2);
++	u8 txp = max(ns_to_t(para, 6), 2);
++	u8 tmrd_pda = max(ns_to_t(para, 10), 8);
++	u8 trp = ns_to_t(para, 15);
++	u8 trc = ns_to_t(para, 49);
++	u8 wr2rd_s = max(ns_to_t(para, 3), 1) + 7;
++	u8 tras = ns_to_t(para, 34);
++	u16 trefi = ns_to_t(para, 7800) / 32;
++	u16 trfc = ns_to_t(para, 350);
++	u8 txs = ns_to_t(para, 360) / 32;
++	u8 tmod = max(ns_to_t(para, 15), 12);
++	u8 tcke = max(ns_to_t(para, 5), 2);
++	u8 tcksrx = max(ns_to_t(para, 10), 3);
++	u8 txsabort = ns_to_t(para, 170) / 32;
++	u8 trasmax = ns_to_t(para, 70200) / 1024;
++	u8 rd2pre = trp < 5 ? 9 - trp : 4;
++	u8 wr2rd = trrd + 7;
++	u8 tckesr = tcke + 1;
++	u8 dfi_tphy_wrlat = 6;
++	u8 dfi_trddata_en = 10;
++	u32 dfitmg0;
++
++	/* boot0 0x26534, type 4. */
++	writel(tras | (trasmax << 8) | (tfaw << 16) | (14U << 24),
++	       &mctl_ctl->dramtmg[0]);
++	writel(trc | (rd2pre << 8) | (txp << 16), &mctl_ctl->dramtmg[1]);
++	writel(wr2rd | (5U << 8) | (7U << 16) | (5U << 24),
++	       &mctl_ctl->dramtmg[2]);
++	writel(tmod | (4U << 12), &mctl_ctl->dramtmg[3]);
++	writel(trp | (trrd << 8) | (3U << 16) | (trp << 24),
++	       &mctl_ctl->dramtmg[4]);
++	writel(tcke | (tckesr << 8) | (tcksrx << 16) | (tcksrx << 24),
++	       &mctl_ctl->dramtmg[5]);
++	writel((txp + 2) | 0x02020000, &mctl_ctl->dramtmg[6]);
++	writel(txs | (16U << 8) | (txsabort << 16) | (txsabort << 24),
++	       &mctl_ctl->dramtmg[8]);
++	writel(wr2rd_s | (txp << 8) | 0x00020000, &mctl_ctl->dramtmg[9]);
++	writel(0x000e0c05, &mctl_ctl->dramtmg[10]);
++	writel(0x440c021c, &mctl_ctl->dramtmg[11]);
++	writel(tmrd_pda, &mctl_ctl->dramtmg[12]);
++	writel(0x0a100002, &mctl_ctl->dramtmg[13]);
++	writel(4, &mctl_ctl->dramtmg[14]);
++
++	/* boot0 0x26b28..0x26d62: these registers are common, not banked. */
++	clrsetbits_le32(&common_ctl->init[0], 0xc0000fff,
++			 0x112 | ((readl((void *)0x070001f8UL) >> 16) ?
++				  BIT(30) : 0));
++	writel(0x01f20000, &common_ctl->init[1]);
++	clrsetbits_le32(&common_ctl->init[2], 0xff0f, 0x0d05);
++	writel(0, &common_ctl->dfimisc);
++
++	/* 0x26534 normalizes DDR4 MR0/MR2 before INIT and DFI programming. */
++	writel((0x0520U << 16) | para->mr1, &mctl_ctl->init[3]);
++	writel((0x0008U << 16) | para->mr3, &mctl_ctl->init[4]);
++	writel((para->mr4 << 16) | para->mr5, &mctl_ctl->init[6]);
++	writel(para->mr6, &mctl_ctl->init[7]);
++	clrsetbits_le32(&mctl_ctl->rankctl, 0xff0, 0x660);
++
++	if (para->tpr13 & BIT(5))
++		dfitmg0 = dfi_tphy_wrlat | 0x02000000 |
++			  (dfi_trddata_en << 16) | 0x00808000;
++	else
++		dfitmg0 = (dfi_tphy_wrlat - 1) | 0x02000000 |
++			  ((dfi_trddata_en - 1) << 16) | 0x00808000;
++	writel(dfitmg0, &mctl_ctl->dfitmg0);
++	writel(0x00100202, &mctl_ctl->dfitmg1);
++	writel((trefi << 16) | trfc, &mctl_ctl->rfshtmg);
++}
++
++void h700_ddr4_set_timing_params(const struct dram_para *para)
++{
++	static const u8 divisors[] = { 4, 3, 2, 1 };
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(divisors); i++) {
++		struct dram_para scaled = *para;
++		u8 div = divisors[i];
++		uintptr_t bank_offset = div == 1 ? 0 : (uintptr_t)div << 12;
++
++		scaled.clk = para->clk / div;
++		h700_ddr4_set_timing_params_bank(&scaled, bank_offset);
++	}
++}
+diff --git a/arch/arm/mach-sunxi/h700_dram_memops.S b/arch/arm/mach-sunxi/h700_dram_memops.S
+new file mode 100644
+index 0000000..15b7f7b
+--- /dev/null
++++ b/arch/arm/mach-sunxi/h700_dram_memops.S
+@@ -0,0 +1,126 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * H700 DRAM validator bulk memory operations.
++ *
++ * H700 boot0 uses VFP/NEON bulk transfers for these helpers. Keep the
++ * validator algorithm in C and reproduce the bulk memory semantics here.
++ *
++ * Operate on 64-byte blocks. Scalar tails preserve the original API for
++ * arbitrary word-aligned byte counts.
++ */
++
++	.text
++	.align	2
++
++	.global	h700_vendor_fill
++	.type	h700_vendor_fill, %function
++h700_vendor_fill:
++	dup	v0.4s, w2
++	dup	v1.4s, w3
++	zip1	v0.4s, v0.4s, v1.4s
++	mov	v1.16b, v0.16b
++	mov	v2.16b, v0.16b
++	mov	v3.16b, v0.16b
++
++	lsr	w4, w1, #6
++	cbz	w4, 2f
++1:
++	st1	{v0.16b-v3.16b}, [x0], #64
++	subs	w4, w4, #1
++	b.ne	1b
++
++2:
++	and	w1, w1, #63
++	lsr	w1, w1, #2
++	cbz	w1, 4f
++3:
++	str	w2, [x0], #4
++	subs	w1, w1, #1
++	b.eq	4f
++	str	w3, [x0], #4
++	subs	w1, w1, #1
++	b.ne	3b
++
++4:
++	dmb	sy
++	ret
++	.size	h700_vendor_fill, .-h700_vendor_fill
++
++
++	.align	2
++	.global	h700_vendor_copy
++	.type	h700_vendor_copy, %function
++h700_vendor_copy:
++	lsr	w3, w2, #6
++	cbz	w3, 2f
++1:
++	ld1	{v0.16b-v3.16b}, [x0], #64
++	st1	{v0.16b-v3.16b}, [x1], #64
++	subs	w3, w3, #1
++	b.ne	1b
++
++2:
++	and	w2, w2, #63
++	lsr	w2, w2, #2
++	cbz	w2, 4f
++3:
++	ldr	w3, [x0], #4
++	str	w3, [x1], #4
++	subs	w2, w2, #1
++	b.ne	3b
++
++4:
++	dmb	sy
++	ret
++	.size	h700_vendor_copy, .-h700_vendor_copy
++
++
++	.align	2
++	.global	h700_vendor_compare
++	.type	h700_vendor_compare, %function
++h700_vendor_compare:
++	eor	v0.16b, v0.16b, v0.16b
++
++	lsr	w3, w2, #6
++	cbz	w3, 2f
++1:
++	ld1	{v1.16b-v2.16b}, [x0], #32
++	ld1	{v3.16b-v4.16b}, [x1], #32
++	eor	v1.16b, v1.16b, v3.16b
++	eor	v2.16b, v2.16b, v4.16b
++	orr	v0.16b, v0.16b, v1.16b
++	orr	v0.16b, v0.16b, v2.16b
++
++	ld1	{v1.16b-v2.16b}, [x0], #32
++	ld1	{v3.16b-v4.16b}, [x1], #32
++	eor	v1.16b, v1.16b, v3.16b
++	eor	v2.16b, v2.16b, v4.16b
++	orr	v0.16b, v0.16b, v1.16b
++	orr	v0.16b, v0.16b, v2.16b
++
++	subs	w3, w3, #1
++	b.ne	1b
++
++2:
++	umov	w3, v0.s[0]
++	umov	w4, v0.s[1]
++	umov	w5, v0.s[2]
++	umov	w6, v0.s[3]
++	orr	w7, w3, w4
++	orr	w7, w7, w5
++	orr	w7, w7, w6
++
++	and	w2, w2, #63
++	lsr	w2, w2, #2
++	cbz	w2, 4f
++3:
++	ldr	w3, [x0], #4
++	ldr	w4, [x1], #4
++	eor	w3, w3, w4
++	orr	w7, w7, w3
++	subs	w2, w2, #1
++	b.ne	3b
++
++4:
++	mov	w0, w7
++	ret
+diff --git a/configs/anbernic_rg35xx_h700_defconfig b/configs/anbernic_rg35xx_h700_defconfig
+index 16e5760..992d783 100644
+--- a/configs/anbernic_rg35xx_h700_defconfig
++++ b/configs/anbernic_rg35xx_h700_defconfig
+@@ -17,6 +17,7 @@ CONFIG_DRAM_SUNXI_TPR12=0x06060606
+ CONFIG_DRAM_SUNXI_PHY_ADDR_MAP_1=y
+ CONFIG_MACH_SUN50I_H616=y
+ CONFIG_SUNXI_DRAM_H616_LPDDR4=y
++CONFIG_NUUBOS_H700_VENDOR_DRAM=y
+ CONFIG_R_I2C_ENABLE=y
+ CONFIG_SPL_SUNXI_LED_STATUS=y
+ CONFIG_SPL_SUNXI_LED_STATUS_GPIO=268
+@@ -29,3 +30,5 @@ CONFIG_REGULATOR_AXP=y
+ CONFIG_AXP717_POWER=y
+ CONFIG_AXP_DCDC2_VOLT=940
+ CONFIG_AXP_DCDC3_VOLT=1100
++
++CONFIG_SPL_BSS_START_ADDR=0x30000

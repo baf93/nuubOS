@@ -1,0 +1,50 @@
+#!/bin/sh
+
+DAEMON=/usr/bin/bluealsa
+PIDFILE=/run/bluealsa.pid
+
+start_bluealsa()
+{
+	[ -x "$DAEMON" ] || return 0
+
+	echo "Starting BlueALSA..."
+
+	start-stop-daemon \
+		-S -q -b -m \
+		-p "$PIDFILE" \
+		-x "$DAEMON" \
+		-- \
+		-p a2dp-source
+}
+
+stop_bluealsa()
+{
+	echo "Stopping BlueALSA..."
+
+	start-stop-daemon \
+		-K -q \
+		-p "$PIDFILE" \
+		-x "$DAEMON" \
+		2>/dev/null || true
+
+	rm -f "$PIDFILE"
+}
+
+case "${1:-}" in
+	start)
+		start_bluealsa
+		;;
+	stop)
+		stop_bluealsa
+		;;
+	restart|reload)
+		stop_bluealsa
+		start_bluealsa
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit 0

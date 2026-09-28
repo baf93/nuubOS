@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nuubOS <nuubos@localhost>
+Date: Sun, 28 Sep 2026 10:00:00 +0200
+Subject: [PATCH] drm: sun4i: preserve H700 final frame during shutdown
+
+nuubOS deliberately renders its final Restart/Power Off frame into the
+kernel-owned DRM fbdev buffer before entering the kernel reboot/poweroff
+path.
+
+The generic sun4i platform-driver shutdown callback subsequently calls
+drm_atomic_helper_shutdown(), disabling the active CRTC/panel and turning
+the display black well before the SoC actually resets or powers off.
+
+H700 handhelds use the display as part of the product lifecycle UX.
+Preserve the already-programmed scanout state during platform-driver
+shutdown on H700 only. Normal driver unbind/remove still uses the generic
+DRM shutdown path.
+
+This keeps the final framebuffer visible until reset/power removal without
+changing shutdown semantics on non-H700 sun4i platforms.
+
+---
+ drivers/gpu/drm/sun4i/sun4i_drv.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/gpu/drm/sun4i/sun4i_drv.c b/drivers/gpu/drm/sun4i/sun4i_drv.c
+--- a/drivers/gpu/drm/sun4i/sun4i_drv.c
++++ b/drivers/gpu/drm/sun4i/sun4i_drv.c
+@@ -10,6 +10,7 @@
+ #include <linux/dma-mapping.h>
+ #include <linux/kfifo.h>
+ #include <linux/module.h>
++#include <linux/of.h>
+ #include <linux/of_graph.h>
+ #include <linux/of_reserved_mem.h>
+ #include <linux/platform_device.h>
+@@ -419,6 +420,15 @@ static void sun4i_drv_remove(struct platform_device *pdev)
+
+ static void sun4i_drv_shutdown(struct platform_device *pdev)
+ {
++	/*
++	 * nuubOS H700 lifecycle frames are intentionally left in the
++	 * kernel-owned fbdev scanout until the machine actually resets or
++	 * loses power. drm_atomic_helper_shutdown() would blank the panel
++	 * prematurely during device_shutdown().
++	 */
++	if (of_machine_is_compatible("allwinner,sun50i-h700"))
++		return;
++
+ 	drm_atomic_helper_shutdown(platform_get_drvdata(pdev));
+ }
+
+-- 
+2.51.0

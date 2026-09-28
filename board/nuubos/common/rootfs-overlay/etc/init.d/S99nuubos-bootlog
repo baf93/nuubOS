@@ -1,0 +1,32 @@
+#!/bin/sh
+
+LOGDIR=/boot/nuubos-debug
+
+mkdir -p "$LOGDIR"
+
+echo "late userspace reached" > "$LOGDIR/90-late-userspace-reached.txt"
+
+dmesg > "$LOGDIR/91-dmesg-late.txt" 2>&1
+ip link > "$LOGDIR/92-ip-link.txt" 2>&1
+ip addr > "$LOGDIR/93-ip-addr.txt" 2>&1
+ip route > "$LOGDIR/94-ip-route.txt" 2>&1
+lsmod > "$LOGDIR/95-lsmod.txt" 2>&1
+
+ps > "$LOGDIR/96-processes.txt" 2>&1
+
+{
+    echo "=== modules ==="
+    find /lib/modules -type f | sort
+
+    echo
+    echo "=== firmware ==="
+    find /lib/firmware -type f | sort
+
+    echo
+    echo "=== wlan ==="
+    iw dev 2>&1 || true
+} > "$LOGDIR/97-hardware.txt" 2>&1
+
+sync
+
+exit 0

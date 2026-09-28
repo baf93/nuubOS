@@ -1,0 +1,41 @@
+From: nuubOS Project
+Subject: [PATCH] mmc: pwrseq_simple: fall back to GPIO reset on -ENOENT
+
+Some GPIO controllers, including the Allwinner sunxi GPIO controller,
+use more than two GPIO cells. The generic reset-gpio controller
+currently supports only GPIO providers using two cells.
+
+When mmc-pwrseq-simple has a single reset-gpios entry it first tries
+to acquire it through the reset controller API. On unsupported GPIO
+providers this can return -ENOENT, causing the power sequence probe
+to fail before the existing GPIO fallback can be used.
+
+Treat -ENOENT as an unavailable reset controller and continue with
+the GPIO-based reset path. Other errors, including probe deferral,
+are still propagated.
+
+Signed-off-by: nuubOS Project
+---
+ drivers/mmc/core/pwrseq_simple.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/mmc/core/pwrseq_simple.c b/drivers/mmc/core/pwrseq_simple.c
+--- a/drivers/mmc/core/pwrseq_simple.c
++++ b/drivers/mmc/core/pwrseq_simple.c
+@@ -132,9 +132,13 @@ static int mmc_pwrseq_simple_probe(struct platform_device *pdev)
+ 	ngpio = of_count_phandle_with_args(dev->of_node, "reset-gpios", "#gpio-cells");
+ 	if (ngpio == 1) {
+ 		pwrseq->reset_ctrl = devm_reset_control_get_optional_shared(dev, NULL);
+-		if (IS_ERR(pwrseq->reset_ctrl))
++		if (IS_ERR(pwrseq->reset_ctrl) &&
++		    PTR_ERR(pwrseq->reset_ctrl) != -ENOENT)
+ 			return dev_err_probe(dev, PTR_ERR(pwrseq->reset_ctrl),
+ 					     "reset control not ready\n");
++
++		if (IS_ERR(pwrseq->reset_ctrl))
++			pwrseq->reset_ctrl = NULL;
+ 	}
+
+ 	/*
+--
+2.39.2

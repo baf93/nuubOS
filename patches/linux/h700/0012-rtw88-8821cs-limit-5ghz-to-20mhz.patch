@@ -1,0 +1,42 @@
+From: nuubOS Project <nuubos@localhost>
+Subject: [PATCH] wifi: rtw88: limit RTL8821CS 5 GHz to 20 MHz
+
+RTL8821CS SDIO devices used on H700 systems can exhibit severe
+transmit stalls when operating on 5 GHz with channel widths above
+20 MHz.
+
+Testing on the RG35XX Pro shows stable operation on both 2.4 GHz
+HT20 and 5 GHz HT20. In contrast, 5 GHz HT40 and VHT80 can produce
+multi-second transmit latency and severe packet batching.
+
+Keep 5 GHz support available, but disable HT40 and 80 MHz channel
+widths for RTL8821C devices connected over SDIO.
+
+Signed-off-by: nuubOS Project <nuubos@localhost>
+---
+--- a/drivers/net/wireless/realtek/rtw88/main.c
++++ b/drivers/net/wireless/realtek/rtw88/main.c
+@@ -1707,6 +1707,23 @@
+ 		sband = rtw_sband_dup(rtwdev, &rtw_band_5ghz);
+ 		if (!sband)
+ 			goto err_out;
++
++		/*
++		 * RTL8821CS on H700 systems can exhibit severe TX stalls on
++		 * 5 GHz when operating with channel widths above 20 MHz.
++		 * Keep 5 GHz available while restricting it to 20 MHz.
++		 */
++		if (chip->id == RTW_CHIP_TYPE_8821C &&
++		    rtw_hci_type(rtwdev) == RTW_HCI_TYPE_SDIO) {
++			int i;
++
++			for (i = 0; i < sband->n_channels; i++)
++				sband->channels[i].flags |=
++					IEEE80211_CHAN_NO_80MHZ |
++					IEEE80211_CHAN_NO_HT40PLUS |
++					IEEE80211_CHAN_NO_HT40MINUS;
++		}
++
+ 		if (chip->ht_supported)
+ 			rtw_init_ht_cap(rtwdev, &sband->ht_cap);
+ 		if (chip->vht_supported)

@@ -1,0 +1,43 @@
+#!/bin/sh
+
+POWER_STATE=/sys/power/state
+DEVICE_HOOK=/usr/lib/nuubos/device-suspend-hook
+
+suspend_log()
+{
+	echo "nuubOS suspend: $*"
+}
+
+run_device_hook()
+{
+	ACTION="$1"
+
+	if [ -x "$DEVICE_HOOK" ]; then
+		"$DEVICE_HOOK" "$ACTION"
+	fi
+}
+
+[ -w "$POWER_STATE" ] || {
+	suspend_log "power state interface unavailable" >&2
+	exit 1
+}
+
+run_device_hook prepare || {
+	suspend_log "device suspend preparation failed" >&2
+	exit 1
+}
+
+sync
+
+if ! echo freeze > "$POWER_STATE"; then
+	run_device_hook resume >/dev/null 2>&1 || true
+	suspend_log "s2idle entry failed" >&2
+	exit 1
+fi
+
+if ! run_device_hook resume; then
+	suspend_log "device resume handling failed" >&2
+	exit 1
+fi
+
+exit 0

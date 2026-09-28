@@ -1,0 +1,17 @@
+config BR2_PACKAGE_LABWC
+    bool "labwc"
+    depends on BR2_PACKAGE_WAYLAND
+    depends on BR2_PACKAGE_WLROOTS
+    depends on BR2_TOOLCHAIN_HAS_THREADS
+    depends on BR2_USE_WCHAR
+    select BR2_PACKAGE_CAIRO
+    select BR2_PACKAGE_LIBXML2
+    select BR2_PACKAGE_PANGO
+    select BR2_PACKAGE_XKEYBOARD_CONFIG
+	select BR2_PACKAGE_LIBPNG
+	select BR2_PACKAGE_CAIRO_PNG
+    help
+      A wayland stacking compositor built on wlroots.
+
+comment "labwc needs a toolchain w/ wchar, threads, wayland and wlroots"
+    depends on !BR2_PACKAGE_LABWC

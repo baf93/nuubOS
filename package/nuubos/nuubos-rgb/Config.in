@@ -1,0 +1,10 @@
+config BR2_PACKAGE_NUUBOS_RGB
+	bool "nuubOS RGB lighting service"
+	help
+	  nuubOS RGB lighting subsystem.
+
+	  Provides device-aware RGB topology, the H700 UART RGB backend,
+	  the nuubos-rgbd renderer daemon, and the nuubos-rgbctl client.
+
+	  Devices without RGB capability are handled as a normal,
+	  unsupported capability and do not activate RGB hardware.

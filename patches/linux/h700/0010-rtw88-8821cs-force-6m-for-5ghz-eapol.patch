@@ -1,0 +1,38 @@
+From: baf <oibaf.vallo@gmail.com>
+Subject: [PATCH] wifi: rtw88: force 6 Mbps for RTL8821CS 5 GHz EAPOL
+
+RTL8821CS over SDIO can intermittently delay or fail EAPOL
+transmissions on 5 GHz when they are left to firmware rate adaptation,
+causing WPA 4-way handshake timeouts.
+
+For RTL8821C SDIO on 5 GHz only, force EAPOL frames to the robust
+6 Mbps OFDM rate and disable rate fallback. Leave all normal data
+traffic under the existing firmware rate-control path.
+
+Signed-off-by: baf <oibaf.vallo@gmail.com>
+---
+diff --git a/drivers/net/wireless/realtek/rtw88/tx.c b/drivers/net/wireless/realtek/rtw88/tx.c
+--- a/drivers/net/wireless/realtek/rtw88/tx.c
++++ b/drivers/net/wireless/realtek/rtw88/tx.c
+@@ -647,6 +647,21 @@
+ 	pkt_info->stbc = stbc;
+ 	pkt_info->ldpc = ldpc;
+ 
++	/*
++	 * RTL8821CS SDIO can intermittently fail to transmit EAPOL frames
++	 * reliably on 5 GHz when using firmware rate adaptation.  Use the
++	 * robust 6 Mbps OFDM rate for EAPOL while leaving normal data traffic
++	 * under firmware rate control.
++	 */
++	if (rtwdev->chip->id == RTW_CHIP_TYPE_8821C &&
++	    rtwdev->hci.type == RTW_HCI_TYPE_SDIO &&
++	    rtwdev->hal.current_band_type == RTW_BAND_5G &&
++	    skb->protocol == cpu_to_be16(ETH_P_PAE)) {
++		pkt_info->rate = DESC_RATE6M;
++		pkt_info->dis_rate_fallback = true;
++		pkt_info->use_rate = true;
++	}
++
+ 	fix_rate = dm_info->fix_rate;
+ 	if (fix_rate < DESC_RATE_MAX) {
+ 		pkt_info->rate = fix_rate;

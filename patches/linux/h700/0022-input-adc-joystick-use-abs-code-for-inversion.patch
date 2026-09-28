@@ -1,0 +1,40 @@
+From: nuubOS Project
+Subject: [PATCH] Input: adc-joystick: use ABS code when inverting axes
+
+adc-joystick stores the EV_ABS code associated with each ADC channel, but
+passes the channel index to adc_joystick_invert().
+
+This only works accidentally while the channel index matches the EV_ABS
+code. For a four-axis joystick using ABS_X, ABS_Y, ABS_RX and ABS_RY, the
+third channel has index 2 while its input code is ABS_RX (3). The driver
+therefore reads the min/max parameters for ABS_Z and can generate invalid
+negative values when the axis is inverted.
+
+Use the configured EV_ABS code for the axis when looking up its range.
+
+Signed-off-by: nuubOS Project
+---
+ drivers/input/joystick/adc-joystick.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/input/joystick/adc-joystick.c b/drivers/input/joystick/adc-joystick.c
+--- a/drivers/input/joystick/adc-joystick.c
++++ b/drivers/input/joystick/adc-joystick.c
+@@ -45,7 +45,7 @@ static void adc_joystick_poll(struct input_dev *input)
+ 		if (ret < 0)
+ 			return;
+ 		if (joy->axes[i].inverted)
+-			val = adc_joystick_invert(input, i, val);
++			val = adc_joystick_invert(input, joy->axes[i].code, val);
+ 		input_report_abs(input, joy->axes[i].code, val);
+ 	}
+ 	input_sync(input);
+@@ -95,7 +95,7 @@ static int adc_joystick_handle(const void *data, void *private)
+ 		else
+ 			val &= GENMASK(msb, 0);
+ 		if (joy->axes[i].inverted)
+-			val = adc_joystick_invert(joy->input, i, val);
++			val = adc_joystick_invert(joy->input, joy->axes[i].code, val);
+ 		input_report_abs(joy->input, joy->axes[i].code, val);
+ 	}
+

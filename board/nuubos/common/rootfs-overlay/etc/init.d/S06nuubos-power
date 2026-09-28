@@ -1,0 +1,17 @@
+#!/bin/sh
+
+case "${1:-}" in
+	start|restart)
+		if [ -x /usr/lib/nuubos/platform-power-init ]; then
+			/usr/lib/nuubos/platform-power-init || exit 1
+		fi
+
+		/usr/sbin/nuubos-power-mode apply
+		;;
+	stop)
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}" >&2
+		exit 1
+		;;
+esac

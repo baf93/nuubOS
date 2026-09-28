@@ -1,0 +1,80 @@
+#!/bin/sh
+
+DAEMON=/usr/sbin/nuubos-displayd
+CONTROL=/usr/bin/nuubos-displayctl
+PIDFILE=/run/nuubos-displayd.pid
+
+FBDEV_PARAM=/sys/module/drm_kms_helper/parameters/fbdev_emulation
+FBDEV_SAVED=/run/nuubos/displayd.fbdev_emulation
+
+disable_fbdev_hotplug()
+{
+	if [ ! -w "$FBDEV_PARAM" ]; then
+		return 0
+	fi
+
+	if [ ! -f "$FBDEV_SAVED" ]; then
+		cat "$FBDEV_PARAM" > "$FBDEV_SAVED"
+	fi
+
+	echo 0 > "$FBDEV_PARAM"
+}
+
+restore_fbdev_hotplug()
+{
+	if [ ! -w "$FBDEV_PARAM" ] || [ ! -f "$FBDEV_SAVED" ]; then
+		return 0
+	fi
+
+	cat "$FBDEV_SAVED" > "$FBDEV_PARAM"
+	rm -f "$FBDEV_SAVED"
+}
+
+case "$1" in
+	start)
+		if [ -x "$CONTROL" ] && ! "$CONTROL" restore; then
+			echo "nuubOS display: brightness restore failed" >&2
+		fi
+
+		if ! "$DAEMON" --supported; then
+			exit 0
+		fi
+
+		mkdir -p /run/nuubos
+
+		# fbdev owns the initial boot console; nuubos-displayd owns
+		# runtime display hotplug policy.
+		disable_fbdev_hotplug
+
+		if ! start-stop-daemon \
+			-S -q -b -m \
+			-p "$PIDFILE" \
+			-x "$DAEMON"; then
+			restore_fbdev_hotplug
+			exit 1
+		fi
+		;;
+
+	stop)
+		start-stop-daemon \
+			-K -q \
+			-p "$PIDFILE" \
+			-x "$DAEMON" \
+			2>/dev/null || true
+
+		rm -f "$PIDFILE"
+		restore_fbdev_hotplug
+		;;
+
+	restart)
+		"$0" stop
+		"$0" start
+		;;
+
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit 0

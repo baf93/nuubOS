@@ -1,0 +1,9 @@
+config BR2_PACKAGE_NUUBOS_DISPLAYD
+	bool "nuubOS display hotplug service"
+	select BR2_PACKAGE_LIBDRM
+	help
+	  nuubOS display hotplug policy service.
+
+	  Tracks DRM hotplug events directly through the kernel uevent
+	  netlink interface. Display routing and audio policy are applied
+	  by the service without requiring udev or polling.

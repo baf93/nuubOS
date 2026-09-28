@@ -1,0 +1,802 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] arm64: dts: allwinner: add Anbernic H700 handheld family
+
+Add the consolidated Anbernic H700 handheld device-tree family and shared hardware topology used by the nuubOS universal H700 image.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+--- a/arch/arm64/boot/dts/allwinner/Makefile
++++ b/arch/arm64/boot/dts/allwinner/Makefile
+@@ -62,6 +62,21 @@
+ dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg35xx-h.dtb
+ dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg35xx-plus.dtb
+ dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg35xx-sp.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg-sp.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg28xx.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg34xx-sp-v2-panel.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg34xx-sp.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg34xx.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg35xx-2024-rev6-panel.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg35xx-h-rev6-panel.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg35xx-plus-rev6-panel.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg35xx-pro.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg35xx-sp-v2-panel.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg40xx-h-v2-panel.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg40xx-h.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg40xx-v-v2-panel.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rg40xx-v.dtb
++dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h700-anbernic-rgcubexx.dtb
+ dtb-$(CONFIG_ARCH_SUNXI) += sun55i-a527-cubie-a5e.dtb
+ dtb-$(CONFIG_ARCH_SUNXI) += sun55i-h728-x96qpro+.dtb
+ dtb-$(CONFIG_ARCH_SUNXI) += sun55i-t527-avaota-a1.dtb
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-dual-analog.dtsi
+@@ -0,0 +1,87 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Analog joystick support derived from the mainline Anbernic H700
++ * adc-joystick/io-channel-mux implementation.
++ */
++
++/ {
++	adc-joystick {
++		compatible = "adc-joystick";
++		io-channels = <&adc_mux 0>,
++			      <&adc_mux 1>,
++			      <&adc_mux 2>,
++			      <&adc_mux 3>;
++		pinctrl-0 = <&joy_mux_pin>;
++		pinctrl-names = "default";
++		poll-interval = <4>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		axis@0 {
++			reg = <0>;
++			abs-flat = <32>;
++			abs-fuzz = <32>;
++			abs-range = <4096 0>;
++			linux,code = <ABS_X>;
++		};
++
++		axis@1 {
++			reg = <1>;
++			abs-flat = <32>;
++			abs-fuzz = <32>;
++			abs-range = <4096 0>;
++			linux,code = <ABS_Y>;
++		};
++
++		axis_rx: axis@2 {
++			reg = <2>;
++			abs-flat = <32>;
++			abs-fuzz = <32>;
++			abs-range = <0 4096>;
++			linux,code = <ABS_RX>;
++		};
++
++		axis_ry: axis@3 {
++			reg = <3>;
++			abs-flat = <32>;
++			abs-fuzz = <32>;
++			abs-range = <0 4096>;
++			linux,code = <ABS_RY>;
++		};
++	};
++
++	adc_mux: adc-mux {
++		compatible = "io-channel-mux";
++		channels = "left_x", "left_y", "right_x", "right_y";
++		#io-channel-cells = <1>;
++		io-channels = <&gpadc 0>;
++		io-channel-names = "parent";
++		mux-controls = <&gpio_mux>;
++		settle-time-us = <100>;
++	};
++
++	gpio_mux: mux-controller {
++		compatible = "gpio-mux";
++		mux-gpios = <&pio 8 1 GPIO_ACTIVE_LOW>,
++			    <&pio 8 2 GPIO_ACTIVE_LOW>;
++		#mux-control-cells = <0>;
++	};
++};
++
++&gpadc {
++	#address-cells = <1>;
++	#size-cells = <0>;
++	status = "okay";
++
++	channel@0 {
++		reg = <0>;
++	};
++};
++
++&pio {
++	joy_mux_pin: joy-mux-pin {
++		pins = "PI0";
++		function = "gpio_out";
++	};
++
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-dual-analog-inverted.dtsi
+@@ -0,0 +1,11 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++
++#include "sun50i-h700-anbernic-dual-analog.dtsi"
++
++&axis_rx {
++	abs-range = <4096 0>;
++};
++
++&axis_ry {
++	abs-range = <4096 0>;
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-pwm0-backlight.dtsi
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++
++/*
++ * The LCD backlight is connected to PWM0 on PD28.
++ * Use the vendor-matched 50 kHz PWM frequency with Linux normal polarity.
++ * Expose a native 0..100 brightness scale to userspace.
++ */
++&backlight {
++	compatible = "pwm-backlight";
++
++	/delete-property/ gpios;
++	/delete-property/ default-on;
++
++	pwms = <&pwm 0 20000 0>;
++
++	pinctrl-names = "default";
++	pinctrl-0 = <&pwm0_pin>;
++
++	brightness-levels =
++		<0 1 2 3 4 5 6 7 8 9
++		 10 11 12 13 14 15 16 17 18 19
++		 20 21 22 23 24 25 26 27 28 29
++		 30 31 32 33 34 35 36 37 38 39
++		 40 41 42 43 44 45 46 47 48 49
++		 50 51 52 53 54 55 56 57 58 59
++		 60 61 62 63 64 65 66 67 68 69
++		 70 71 72 73 74 75 76 77 78 79
++		 80 81 82 83 84 85 86 87 88 89
++		 90 91 92 93 94 95 96 97 98 99
++		 100>;
++
++	default-brightness-level = <60>;
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-pwm3-rumble.dtsi
+@@ -0,0 +1,15 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++
++/ {
++	pwm-vibrator {
++		compatible = "pwm-vibrator";
++		pwms = <&pwm 3 1000000 0>;
++		pwm-names = "enable";
++		pinctrl-names = "default";
++		pinctrl-0 = <&pwm3_pin>;
++	};
++};
++
++&pwm {
++	status = "okay";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-pwm3-rumble-pi13.dtsi
+@@ -0,0 +1,18 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++
++#include "sun50i-h700-anbernic-pwm3-rumble.dtsi"
++
++/*
++ * Shared PI13 PWM3 routing used by the RG40XX-V and RG CubeXX.
++ * PH0 is reserved by UART0 on these boards.
++ */
++&pio {
++	pwm3_pi13_pin: pwm3-pi13-pin {
++		pins = "PI13";
++		function = "pwm3";
++	};
++};
++
++&{/pwm-vibrator} {
++	pinctrl-0 = <&pwm3_pi13_pin>;
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg28xx.dts
+@@ -0,0 +1,16 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-plus.dts"
++
++/ {
++	model = "Anbernic RG28XX";
++	compatible = "anbernic,rg28xx", "allwinner,sun50i-h700";
++};
++
++&panel {
++	compatible = "anbernic,rg28xx-panel";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg34xx.dts
+@@ -0,0 +1,16 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-plus.dts"
++
++/ {
++	model = "Anbernic RG34XX";
++	compatible = "anbernic,rg34xx", "allwinner,sun50i-h700";
++};
++
++&panel {
++	compatible = "anbernic,rg34xx-panel", "panel-mipi-dpi-spi";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg34xx-sp.dts
+@@ -0,0 +1,18 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-sp.dts"
++#include "sun50i-h700-anbernic-dual-analog-inverted.dtsi"
++
++/ {
++	model = "Anbernic RG34XX-SP";
++	compatible = "anbernic,rg34xx-sp", "allwinner,sun50i-h700";
++};
++
++&panel {
++	compatible = "anbernic,rg34xx-sp-panel", "panel-mipi-dpi-spi";
++};
++
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg34xx-sp-v2-panel.dts
+@@ -0,0 +1,17 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg34xx-sp.dts"
++
++/ {
++	model = "Anbernic RG34XX-SP";
++	compatible = "anbernic,rg34xx-sp", "allwinner,sun50i-h700";
++};
++
++&panel {
++	compatible = "anbernic,rg34xx-sp-v2-panel", "panel-mipi-dpi-spi";
++};
++
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-2024.dts
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-2024.dts
+@@ -510,3 +510,5 @@
+ &tcon_lcd0_out_lcd {
+ 	remote-endpoint = <&panel_in_rgb>;
+ };
++
++#include "sun50i-h700-anbernic-usb0-otg.dtsi"
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-2024-rev6-panel.dts
+@@ -0,0 +1,14 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-2024.dts"
++
++/ {
++};
++
++&panel {
++	compatible = "anbernic,rg35xx-plus-rev6-panel", "panel-mipi-dpi-spi";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-h-rev6-panel.dts
+@@ -0,0 +1,14 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-h.dts"
++
++/ {
++};
++
++&panel {
++	compatible = "anbernic,rg35xx-plus-rev6-panel", "panel-mipi-dpi-spi";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-plus-rev6-panel.dts
+@@ -0,0 +1,14 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-plus.dts"
++
++/ {
++};
++
++&panel {
++	compatible = "anbernic,rg35xx-plus-rev6-panel", "panel-mipi-dpi-spi";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-pro.dts
+@@ -0,0 +1,113 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-plus.dts"
++#include "sun50i-h700-anbernic-tf2.dtsi"
++#include "sun50i-h700-anbernic-dual-analog.dtsi"
++
++/ {
++	model = "Anbernic RG35XX Pro";
++	compatible = "anbernic,rg35xx-pro", "allwinner,sun50i-h700";
++
++
++};
++
++
++&gpio_keys_gamepad {
++	/*
++	 * RG35XX Pro physical wiring differs from the inherited mapping:
++	 * physical X is PA2 and physical Y is PA3.
++	 */
++	button-x {
++		gpios = <&pio 0 2 GPIO_ACTIVE_LOW>; /* PA2 */
++	};
++
++	button-y {
++		gpios = <&pio 0 3 GPIO_ACTIVE_LOW>; /* PA3 */
++	};
++
++	button-thumbl {
++		label = "GPIO Thumb Left";
++		gpios = <&pio 4 8 GPIO_ACTIVE_LOW>; /* PE8 */
++		linux,input-type = <EV_KEY>;
++		linux,code = <BTN_THUMBL>;
++	};
++
++	button-thumbr {
++		label = "GPIO Thumb Right";
++		gpios = <&pio 4 9 GPIO_ACTIVE_LOW>; /* PE9 */
++		linux,input-type = <EV_KEY>;
++		linux,code = <BTN_THUMBR>;
++	};
++};
++
++&pio {
++	pwm2_pi12_pin: pwm2-pi12-pin {
++		pins = "PI12";
++		function = "pwm2";
++	};
++
++	pwm2_ph2_pin: pwm2-ph2-pin {
++		pins = "PH2";
++		function = "pwm2";
++	};
++
++	ph2_gpio_in_pin: ph2-gpio-in-pin {
++		pins = "PH2";
++		function = "gpio_in";
++	};
++
++};
++
++
++&mmc1 {
++	keep-power-in-suspend;
++};
++
++&{/gpio-keys-gamepad/button-start} {
++	wakeup-source;
++};
++
++/*
++ * PI12 is the RG35XX Pro power LED and can be muxed to PWM2.
++ * Keep the inherited status LED on GPIO, but replace the inherited
++ * GPIO power LED with a hardware-PWM driven power LED.
++ */
++&{/leds} {
++	/delete-node/ led-0;
++};
++
++&pwm {
++	status = "okay";
++};
++
++
++/*
++ * RG35XX Pro PWM2 ownership:
++ *
++ * runtime:
++ *   PH2  -> PWM2 -> vibration motor
++ *   PI12 -> GPIO -> power LED
++ *
++ * suspend:
++ *   PH2  -> GPIO input
++ *   PI12 -> PWM2 -> suspend LED
++ */
++
++/ {
++	haptics_led {
++		compatible = "anbernic,rg35xx-pro-haptics";
++
++		pinctrl-names = "default", "sleep";
++		pinctrl-0 = <&pwm2_ph2_pin>;
++		pinctrl-1 = <&ph2_gpio_in_pin>, <&pwm2_pi12_pin>;
++
++		power-led-gpios = <&pio 8 12 GPIO_ACTIVE_HIGH>;
++
++		pwms = <&pwm 2 1000000 0>;
++		pwm-names = "enable";
++	};
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-sp-v2-panel.dts
+@@ -0,0 +1,14 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-sp.dts"
++
++/ {
++};
++
++&panel {
++	compatible = "anbernic,rg35xx-sp-v2-panel", "panel-mipi-dpi-spi";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-h.dts
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Philippe Simons <simons.philippe@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-plus.dts"
++#include "sun50i-h700-anbernic-uart5-ph.dtsi"
++#include <dt-bindings/leds/common.h>
++#include "sun50i-h700-anbernic-pwm3-rumble.dtsi"
++#include "sun50i-h700-anbernic-dual-analog-inverted.dtsi"
++
++/ {
++	model = "Anbernic RG40XX H";
++	compatible = "anbernic,rg40xx-h", "allwinner,sun50i-h700";
++};
++
++&uart5 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart5_ph_pins>;
++	status = "okay";
++};
++
++&{/leds} {
++	led-rgb {
++		function = LED_FUNCTION_KBD_BACKLIGHT;
++		color = <LED_COLOR_ID_RGB>;
++		gpios = <&pio 8 7 GPIO_ACTIVE_HIGH>; /* PI7 */
++	};
++};
++
++&panel {
++	compatible = "anbernic,rg40xx-panel", "panel-mipi-dpi-spi";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-h-v2-panel.dts
+@@ -0,0 +1,13 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Philippe Simons <simons.philippe@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg40xx-h.dts"
++
++/ {
++};
++
++&panel {
++	compatible = "anbernic,rg40xx-v2-panel", "panel-mipi-dpi-spi";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-v.dts
+@@ -0,0 +1,85 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Philippe Simons <simons.philippe@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-plus.dts"
++#include "sun50i-h700-anbernic-uart5-ph.dtsi"
++#include "sun50i-h700-anbernic-tf2.dtsi"
++#include "sun50i-h700-anbernic-pwm0-backlight.dtsi"
++#include "sun50i-h700-anbernic-pwm3-rumble-pi13.dtsi"
++#include "sun50i-h700-anbernic-dual-analog.dtsi"
++
++/ {
++	model = "Anbernic RG40XX V";
++	compatible = "anbernic,rg40xx-V", "allwinner,sun50i-h700";
++
++};
++
++
++/*
++ * nuubOS: RG40XX-V physical X/Y wiring differs from the inherited
++ * RG35XX Plus mapping: physical X is PA2 and physical Y is PA3.
++ */
++&{/gpio-keys-gamepad/button-x} {
++	gpios = <&pio 0 2 GPIO_ACTIVE_LOW>; /* PA2 */
++};
++
++&{/gpio-keys-gamepad/button-y} {
++	gpios = <&pio 0 3 GPIO_ACTIVE_LOW>; /* PA3 */
++};
++
++/*
++ * RG40XX-V has one physical analog stick.  The shared dual-analog
++ * description provides RX/RY for a second stick which is not present.
++ */
++&{/adc-joystick} {
++	io-channels = <&adc_mux 0>,
++		      <&adc_mux 1>;
++	/delete-node/ axis@2;
++	/delete-node/ axis@3;
++};
++
++/*
++ * The RG40XX-V vibration motor uses PWM3 on PI13.
++ * Do not use the generic PH0 PWM3 route: PH0 belongs to UART0 here.
++ */
++
++
++/*
++ * RGB controller interface.
++ *
++ * UART5 on PH2/PH3 carries RGB frames to the controller MCU.
++ * PE5 powers the MCU and PI7 powers the LED rail.  Those enable
++ * lines are controlled by nuubOS userspace through the GPIO
++ * character interface.
++ */
++&uart5 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart5_ph_pins>;
++	status = "okay";
++};
++
++&panel {
++	compatible = "anbernic,rg40xx-panel", "panel-mipi-dpi-spi";
++};
++
++/*
++ * RG40XX-V has one physical analog stick.
++ * Its stick click is wired to PE8.
++ */
++&gpio_keys_gamepad {
++	button-thumbl {
++		label = "GPIO Thumb Left";
++		gpios = <&pio 4 8 GPIO_ACTIVE_LOW>; /* PE8 */
++		linux,input-type = <EV_KEY>;
++		linux,code = <BTN_THUMBL>;
++	};
++};
++
++
++/*
++ * TF2 microSD slot.
++ * Power enable: PE4
++ * Card detect:  PE22, active low
++ */
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-v-v2-panel.dts
+@@ -0,0 +1,13 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Philippe Simons <simons.philippe@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg40xx-v.dts"
++
++/ {
++};
++
++&panel {
++	compatible = "anbernic,rg40xx-v2-panel", "panel-mipi-dpi-spi";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rgcubexx.dts
+@@ -0,0 +1,68 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-plus.dts"
++#include "sun50i-h700-anbernic-uart5-ph.dtsi"
++#include "sun50i-h700-anbernic-tf2.dtsi"
++#include "sun50i-h700-anbernic-pwm0-backlight.dtsi"
++#include <dt-bindings/leds/common.h>
++#include "sun50i-h700-anbernic-pwm3-rumble-pi13.dtsi"
++#include "sun50i-h700-anbernic-dual-analog-inverted.dtsi"
++
++/ {
++	model = "Anbernic RG CubeXX";
++	compatible = "anbernic,rgcubexx", "allwinner,sun50i-h700";
++
++
++};
++
++
++&gpio_keys_gamepad {
++	button-x {
++		gpios = <&pio 0 2 GPIO_ACTIVE_LOW>; /* PA2 */
++	};
++
++	button-y {
++		gpios = <&pio 0 3 GPIO_ACTIVE_LOW>; /* PA3 */
++	};
++
++	button-thumbl {
++		label = "GPIO Thumb Left";
++		gpios = <&pio 4 8 GPIO_ACTIVE_LOW>; /* PE8 */
++		linux,input-type = <EV_KEY>;
++		linux,code = <BTN_THUMBL>;
++	};
++
++	button-thumbr {
++		label = "GPIO Thumb Right";
++		gpios = <&pio 4 9 GPIO_ACTIVE_LOW>; /* PE9 */
++		linux,input-type = <EV_KEY>;
++		linux,code = <BTN_THUMBR>;
++	};
++};
++
++
++/*
++ * The RG CubeXX vibration motor uses PWM3 on PI13.
++ * The generic PH0 PWM3 route conflicts with UART0.
++ */
++
++
++&uart5 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart5_ph_pins>;
++	status = "okay";
++};
++
++&reg_lcd {
++	regulator-min-microvolt = <2800000>;
++	regulator-max-microvolt = <2800000>;
++};
++
++&panel {
++	compatible = "anbernic,rgcubexx-panel", "panel-mipi-dpi-spi";
++};
++
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg-sp.dts
+@@ -0,0 +1,16 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
++ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
++ */
++
++#include "sun50i-h700-anbernic-rg35xx-sp.dts"
++
++/ {
++	model = "Anbernic RG-SP";
++	compatible = "anbernic,rg-sp", "allwinner,sun50i-h700";
++};
++
++&panel {
++	compatible = "anbernic,rg34xx-sp-v2-panel", "panel-mipi-dpi-spi";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-tf2.dtsi
+@@ -0,0 +1,21 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++
++/ {
++	reg_tf2_vcc: regulator-tf2-vcc {
++		compatible = "regulator-fixed";
++		regulator-name = "tf2-vcc";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		gpio = <&pio 4 4 GPIO_ACTIVE_HIGH>; /* PE4 */
++		enable-active-high;
++	};
++};
++&mmc2 {
++	vmmc-supply = <&reg_tf2_vcc>;
++	cd-gpios = <&pio 4 22 GPIO_ACTIVE_LOW>; /* PE22 */
++	bus-width = <4>;
++	max-frequency = <50000000>;
++	no-sdio;
++	no-mmc;
++	status = "okay";
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-uart5-ph.dtsi
+@@ -0,0 +1,12 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++
++/*
++ * Shared UART5 routing on PH2/PH3 for Anbernic H700 boards
++ * using the external RGB controller interface.
++ */
++&pio {
++	uart5_ph_pins: uart5-ph-pins {
++		pins = "PH2", "PH3";
++		function = "uart5";
++	};
++};
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-usb0-otg.dtsi
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++
++/*
++ * Common USB0 OTG wiring for the Anbernic H700 platform.
++ *
++ * PI4  - USB ID detection
++ * PI16 - switched 5 V VBUS enable
++ *
++ * The AXP717 boost regulator provides the upstream 5 V source.
++ */
++
++/ {
++	reg_usb0_vbus: regulator-usb0-vbus {
++		compatible = "regulator-fixed";
++		regulator-name = "usb0-vbus";
++		regulator-min-microvolt = <5000000>;
++		regulator-max-microvolt = <5000000>;
++		vin-supply = <&reg_boost>;
++		gpio = <&pio 8 16 GPIO_ACTIVE_HIGH>; /* PI16 */
++		enable-active-high;
++	};
++};
++
++&usbphy {
++	usb0_id_det-gpios =
++		<&pio 8 4 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>; /* PI4 */
++	usb0_vbus_power-supply = <&usb_power>;
++	usb0_vbus-supply = <&reg_usb0_vbus>;
++};
++
++&usbotg {
++	dr_mode = "otg";
++};

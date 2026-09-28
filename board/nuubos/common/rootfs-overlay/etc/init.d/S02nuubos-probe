@@ -1,0 +1,54 @@
+#!/bin/sh
+
+LOGDIR=/boot/nuubos-debug
+mkdir -p "$LOGDIR"
+
+mount -t debugfs none /sys/kernel/debug 2>/dev/null || true
+
+{
+    echo "=== BEFORE MODPROBE ==="
+    cat /sys/kernel/debug/devices_deferred 2>/dev/null || true
+
+    echo
+    echo "=== WIFI MODPROBE ==="
+    modprobe rtw88_8821cs 2>&1 || true
+
+    echo
+    echo "=== BLUETOOTH MODPROBE ==="
+    modprobe hci_uart 2>&1 || true
+
+    echo
+    echo "=== DRM MODPROBE ==="
+    modprobe sun8i_dw_hdmi 2>&1 || true
+    modprobe sun8i_mixer 2>&1 || true
+    modprobe panfrost 2>&1 || true
+
+    sleep 2
+
+    echo
+    echo "=== AFTER MODPROBE ==="
+    cat /sys/kernel/debug/devices_deferred 2>/dev/null || true
+
+    echo
+    echo "=== MODULES ==="
+    lsmod
+
+    echo
+    echo "=== MMC DEVICES ==="
+    find /sys/bus/mmc/devices -maxdepth 2 -print 2>/dev/null || true
+
+    echo
+    echo "=== PLATFORM DRIVERS ==="
+    find /sys/bus/platform/devices -maxdepth 2 -type l -name driver -print -exec readlink {} \; 2>/dev/null || true
+
+    echo
+    echo "=== DRM ==="
+    find /sys/class/drm -maxdepth 2 -print 2>/dev/null || true
+
+    echo
+    echo "=== DMESG ==="
+    dmesg
+} > "$LOGDIR/20-probe-debug.txt" 2>&1
+
+sync
+exit 0

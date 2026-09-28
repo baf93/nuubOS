@@ -1,0 +1,703 @@
+#!/bin/sh
+
+STATE_DIR=/state
+USERS_DIR="$STATE_DIR/users"
+USER_RUNTIME_DIR=/run/nuubos/user
+
+USER_REGISTRY_VERSION=1
+USER_PROFILE_VERSION=1
+USER_SETTINGS_VERSION=1
+
+log()
+{
+    echo "nuubOS state: $*"
+}
+
+root_device()
+{
+    sed -n 's/.*root=\([^ ]*\).*/\1/p' /proc/cmdline
+}
+
+state_device()
+{
+    ROOT_DEV="$(root_device)"
+
+    case "$ROOT_DEV" in
+        /dev/mmcblk*p1)
+            printf '%sp3\n' "${ROOT_DEV%p1}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+mount_state()
+{
+    STATE_DEV="$(state_device)" || {
+        log "unable to derive STATE device from root"
+        return 1
+    }
+
+    mkdir -p "$STATE_DIR"
+
+    if [ ! -b "$STATE_DEV" ]; then
+        log "STATE partition missing: $STATE_DEV"
+        return 1
+    fi
+
+    if ! grep -qs " $STATE_DIR " /proc/mounts; then
+        if ! mount -t ext4 -o rw,noatime "$STATE_DEV" "$STATE_DIR"; then
+            log "failed to mount $STATE_DEV on $STATE_DIR"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+prepare_layout()
+{
+    mkdir -p \
+        "$STATE_DIR/config" \
+        "$STATE_DIR/network" \
+        "$STATE_DIR/migrations" \
+        "$STATE_DIR/bluetooth" \
+        "$STATE_DIR/ssh/dropbear" \
+        "$STATE_DIR/ssh/root" \
+        "$USERS_DIR"
+
+    chmod 700 \
+        "$STATE_DIR/network" \
+        "$STATE_DIR/bluetooth" \
+        "$STATE_DIR/ssh" \
+        "$STATE_DIR/ssh/dropbear" \
+        "$STATE_DIR/ssh/root" \
+        "$USERS_DIR"
+}
+
+init_config()
+{
+    CONFIG="$STATE_DIR/config/nuubos.conf"
+
+    if [ ! -f "$CONFIG" ]; then
+        cat > "$CONFIG" <<'CONFIG_EOF'
+NUUBOS_CONFIG_VERSION=5
+STORAGE_MODE=AUTO
+USER_LOGIN_MODE=AUTO
+POWER_MODE=AUTO
+AUDIO_OUTPUT=AUTO
+AUDIO_VOLUME_SPEAKER=100
+AUDIO_VOLUME_HEADPHONES=100
+AUDIO_VOLUME_BLUETOOTH=100
+DISPLAY_BRIGHTNESS=60
+CONFIG_EOF
+    else
+        VERSION="$(sed -n 's/^NUUBOS_CONFIG_VERSION=//p' "$CONFIG" | head -n 1)"
+
+        case "$VERSION" in
+            1)
+                if ! grep -q '^POWER_MODE=' "$CONFIG"; then
+                    echo 'POWER_MODE=AUTO' >> "$CONFIG"
+                fi
+
+                grep -q '^AUDIO_OUTPUT=' "$CONFIG" ||
+                    echo 'AUDIO_OUTPUT=AUTO' >> "$CONFIG"
+                grep -q '^AUDIO_VOLUME_SPEAKER=' "$CONFIG" ||
+                    echo 'AUDIO_VOLUME_SPEAKER=100' >> "$CONFIG"
+                grep -q '^AUDIO_VOLUME_HEADPHONES=' "$CONFIG" ||
+                    echo 'AUDIO_VOLUME_HEADPHONES=100' >> "$CONFIG"
+                grep -q '^AUDIO_VOLUME_BLUETOOTH=' "$CONFIG" ||
+                    echo 'AUDIO_VOLUME_BLUETOOTH=100' >> "$CONFIG"
+                grep -q '^DISPLAY_BRIGHTNESS=' "$CONFIG" ||
+                    echo 'DISPLAY_BRIGHTNESS=60' >> "$CONFIG"
+
+                sed -i \
+                    's/^NUUBOS_CONFIG_VERSION=.*/NUUBOS_CONFIG_VERSION=5/' \
+                    "$CONFIG"
+
+                log "migrated config v1 to v5"
+                ;;
+            2)
+                grep -q '^AUDIO_OUTPUT=' "$CONFIG" ||
+                    echo 'AUDIO_OUTPUT=AUTO' >> "$CONFIG"
+                grep -q '^AUDIO_VOLUME_SPEAKER=' "$CONFIG" ||
+                    echo 'AUDIO_VOLUME_SPEAKER=100' >> "$CONFIG"
+                grep -q '^AUDIO_VOLUME_HEADPHONES=' "$CONFIG" ||
+                    echo 'AUDIO_VOLUME_HEADPHONES=100' >> "$CONFIG"
+                grep -q '^AUDIO_VOLUME_BLUETOOTH=' "$CONFIG" ||
+                    echo 'AUDIO_VOLUME_BLUETOOTH=100' >> "$CONFIG"
+                grep -q '^DISPLAY_BRIGHTNESS=' "$CONFIG" ||
+                    echo 'DISPLAY_BRIGHTNESS=60' >> "$CONFIG"
+
+                sed -i \
+                    's/^NUUBOS_CONFIG_VERSION=.*/NUUBOS_CONFIG_VERSION=5/' \
+                    "$CONFIG"
+
+                log "migrated config v2 to v5"
+                ;;
+            3)
+                grep -q '^DISPLAY_BRIGHTNESS=' "$CONFIG" ||
+                    echo 'DISPLAY_BRIGHTNESS=60' >> "$CONFIG"
+
+                sed -i \
+                    's/^NUUBOS_CONFIG_VERSION=.*/NUUBOS_CONFIG_VERSION=5/' \
+                    "$CONFIG"
+
+                log "migrated config v3 to v5"
+                ;;
+            4)
+                sed -i \
+                    's/^NUUBOS_CONFIG_VERSION=.*/NUUBOS_CONFIG_VERSION=5/' \
+                    "$CONFIG"
+
+                log "migrated config v4 to v5"
+                ;;
+            5)
+                ;;
+            *)
+                log "unsupported config version: ${VERSION:-<none>}"
+                return 1
+                ;;
+        esac
+    fi
+
+    if ! grep -q '^USER_LOGIN_MODE=' "$CONFIG"; then
+        echo 'USER_LOGIN_MODE=AUTO' >> "$CONFIG"
+    fi
+
+    chmod 600 "$CONFIG"
+}
+
+config_value()
+{
+    KEY="$1"
+    CONFIG="$STATE_DIR/config/nuubos.conf"
+
+    sed -n "s/^${KEY}=//p" "$CONFIG" | head -n 1
+}
+
+set_config_value()
+{
+    KEY="$1"
+    VALUE="$2"
+    CONFIG="$STATE_DIR/config/nuubos.conf"
+    TMP="${CONFIG}.tmp.$$"
+
+    awk -v key="$KEY" -v value="$VALUE" '
+        BEGIN {
+            found = 0
+        }
+
+        index($0, key "=") == 1 {
+            if (!found) {
+                print key "=" value
+                found = 1
+            }
+            next
+        }
+
+        {
+            print
+        }
+
+        END {
+            if (!found)
+                print key "=" value
+        }
+    ' "$CONFIG" > "$TMP" || {
+        rm -f "$TMP"
+        return 1
+    }
+
+    chmod 600 "$TMP" || {
+        rm -f "$TMP"
+        return 1
+    }
+
+    mv "$TMP" "$CONFIG" || {
+        rm -f "$TMP"
+        return 1
+    }
+
+    return 0
+}
+
+valid_uuid()
+{
+    printf '%s\n' "$1" |
+        grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+}
+
+generate_uuid()
+{
+    ID=""
+
+    if [ -r /proc/sys/kernel/random/uuid ]; then
+        ID="$(cat /proc/sys/kernel/random/uuid)"
+    elif command -v uuidgen >/dev/null 2>&1; then
+        ID="$(uuidgen | tr 'A-F' 'a-f')"
+    fi
+
+    valid_uuid "$ID" || {
+        log "unable to generate valid user UUID"
+        return 1
+    }
+
+    printf '%s\n' "$ID"
+}
+
+init_user_registry()
+{
+    MARKER="$USERS_DIR/.nuubos-users"
+
+    if [ ! -f "$MARKER" ]; then
+        TMP="${MARKER}.tmp.$$"
+
+        printf 'NUUBOS_USERS_VERSION=%s\n' \
+            "$USER_REGISTRY_VERSION" > "$TMP" || return 1
+
+        chmod 600 "$TMP" || {
+            rm -f "$TMP"
+            return 1
+        }
+
+        mv "$TMP" "$MARKER" || {
+            rm -f "$TMP"
+            return 1
+        }
+
+        sync
+    fi
+
+    grep -qx \
+        "NUUBOS_USERS_VERSION=$USER_REGISTRY_VERSION" \
+        "$MARKER" || {
+            log "unsupported user registry version"
+            return 1
+        }
+
+    chmod 600 "$MARKER"
+}
+
+valid_user_profile()
+{
+    ID="$1"
+    DIR="$USERS_DIR/$ID"
+
+    valid_uuid "$ID" || return 1
+    [ -d "$DIR" ] || return 1
+    [ -d "$DIR/secrets" ] || return 1
+    [ -f "$DIR/profile.conf" ] || return 1
+    [ -f "$DIR/settings.conf" ] || return 1
+
+    grep -qx \
+        "NUUBOS_USER_PROFILE_VERSION=$USER_PROFILE_VERSION" \
+        "$DIR/profile.conf" || return 1
+
+    grep -qx \
+        "USER_ID=$ID" \
+        "$DIR/profile.conf" || return 1
+
+    grep -qx \
+        "NUUBOS_USER_SETTINGS_VERSION=$USER_SETTINGS_VERSION" \
+        "$DIR/settings.conf" || return 1
+
+    return 0
+}
+
+scan_users()
+{
+    USER_COUNT=0
+    FIRST_USER=""
+
+    for DIR in "$USERS_DIR"/*; do
+        [ -d "$DIR" ] || continue
+
+        ID="${DIR##*/}"
+
+        if ! valid_user_profile "$ID"; then
+            log "invalid user profile directory: $ID"
+            return 1
+        fi
+
+        USER_COUNT=$((USER_COUNT + 1))
+
+        if [ "$USER_COUNT" -eq 1 ]; then
+            FIRST_USER="$ID"
+        fi
+    done
+
+    return 0
+}
+
+create_initial_user()
+{
+    ID="$(generate_uuid)" || return 1
+
+    while [ -e "$USERS_DIR/$ID" ]; do
+        ID="$(generate_uuid)" || return 1
+    done
+
+    TMP="$USERS_DIR/.new.$$"
+    rm -rf "$TMP"
+
+    mkdir "$TMP" || return 1
+    chmod 700 "$TMP" || {
+        rm -rf "$TMP"
+        return 1
+    }
+
+    mkdir "$TMP/secrets" || {
+        rm -rf "$TMP"
+        return 1
+    }
+
+    chmod 700 "$TMP/secrets" || {
+        rm -rf "$TMP"
+        return 1
+    }
+
+    cat > "$TMP/profile.conf" <<EOF2
+NUUBOS_USER_PROFILE_VERSION=$USER_PROFILE_VERSION
+USER_ID=$ID
+USER_NAME=Player 1
+EOF2
+
+    cat > "$TMP/settings.conf" <<EOF2
+NUUBOS_USER_SETTINGS_VERSION=$USER_SETTINGS_VERSION
+EOF2
+
+    chmod 600 \
+        "$TMP/profile.conf" \
+        "$TMP/settings.conf" || {
+            rm -rf "$TMP"
+            return 1
+        }
+
+    mv "$TMP" "$USERS_DIR/$ID" || {
+        rm -rf "$TMP"
+        return 1
+    }
+
+    sync
+
+    INITIAL_USER_ID="$ID"
+    log "created initial user $ID"
+    return 0
+}
+
+publish_active_user()
+{
+    ID="$1"
+
+    mkdir -p /run/nuubos "$USER_RUNTIME_DIR" || return 1
+    chmod 755 /run/nuubos "$USER_RUNTIME_DIR"
+
+    TMP="$USER_RUNTIME_DIR/.active.$$"
+
+    printf '%s\n' "$ID" > "$TMP" || return 1
+
+    chmod 644 "$TMP" || {
+        rm -f "$TMP"
+        return 1
+    }
+
+    mv "$TMP" "$USER_RUNTIME_DIR/active" || {
+        rm -f "$TMP"
+        return 1
+    }
+
+    return 0
+}
+
+init_users()
+{
+    init_user_registry || return 1
+    scan_users || return 1
+
+    DEFAULT_USER="$(config_value DEFAULT_USER)"
+
+    if [ -n "$DEFAULT_USER" ]; then
+        valid_user_profile "$DEFAULT_USER" || {
+            log "invalid DEFAULT_USER: $DEFAULT_USER"
+            return 1
+        }
+    else
+        case "$USER_COUNT" in
+            0)
+                create_initial_user || return 1
+                DEFAULT_USER="$INITIAL_USER_ID"
+                ;;
+            1)
+                DEFAULT_USER="$FIRST_USER"
+                log "adopted existing user $DEFAULT_USER as default"
+                ;;
+            *)
+                log "DEFAULT_USER missing with multiple profiles"
+                return 1
+                ;;
+        esac
+
+        set_config_value DEFAULT_USER "$DEFAULT_USER" || return 1
+    fi
+
+    LOGIN_MODE="$(config_value USER_LOGIN_MODE)"
+
+    case "$LOGIN_MODE" in
+        AUTO|DEFAULT|SELECT)
+            ;;
+        *)
+            log "invalid USER_LOGIN_MODE: ${LOGIN_MODE:-<missing>}"
+            return 1
+            ;;
+    esac
+
+    scan_users || return 1
+
+    rm -f "$USER_RUNTIME_DIR/active"
+
+    #
+    # Product contract:
+    # - one profile always enters directly;
+    # - with multiple profiles DEFAULT enters the configured default;
+    # - AUTO/SELECT leave selection to nuubUI.
+    #
+    if [ "$USER_COUNT" -eq 1 ] ||
+       [ "$LOGIN_MODE" = "DEFAULT" ]; then
+
+        publish_active_user "$DEFAULT_USER" || return 1
+        log "active user $DEFAULT_USER"
+    else
+        mkdir -p /run/nuubos "$USER_RUNTIME_DIR" || return 1
+        chmod 755 /run/nuubos "$USER_RUNTIME_DIR"
+        log "user selection required"
+    fi
+
+    return 0
+}
+
+migrate_network()
+{
+    STATE_INTERFACES="$STATE_DIR/network/interfaces"
+    STATE_WPA="$STATE_DIR/network/wpa_supplicant.conf"
+
+    if [ ! -e "$STATE_INTERFACES" ] &&
+       [ -f /etc/network/interfaces ] &&
+       [ ! -L /etc/network/interfaces ]; then
+
+        cp /etc/network/interfaces "$STATE_INTERFACES" || return 1
+        log "migrated network interfaces to STATE"
+    fi
+
+    if [ ! -e "$STATE_WPA" ] &&
+       [ -f /etc/wpa_supplicant/wpa_supplicant.conf ] &&
+       [ ! -L /etc/wpa_supplicant/wpa_supplicant.conf ]; then
+
+        cp /etc/wpa_supplicant/wpa_supplicant.conf "$STATE_WPA" || return 1
+        chmod 600 "$STATE_WPA"
+
+        log "migrated Wi-Fi configuration to STATE"
+    fi
+
+    if [ -f "$STATE_INTERFACES" ]; then
+        rm -f /etc/network/interfaces
+        ln -s /state/network/interfaces /etc/network/interfaces
+    fi
+
+    if [ -f "$STATE_WPA" ]; then
+        mkdir -p /etc/wpa_supplicant
+
+        rm -f /etc/wpa_supplicant/wpa_supplicant.conf
+
+        ln -s \
+            /state/network/wpa_supplicant.conf \
+            /etc/wpa_supplicant/wpa_supplicant.conf
+
+        chmod 600 "$STATE_WPA"
+    fi
+}
+
+prepare_runtime_dns()
+{
+    STATE_DNS="$STATE_DIR/network/dns.conf"
+
+    if [ ! -f "$STATE_DNS" ]; then
+        return 0
+    fi
+
+    mkdir -p /run
+
+    cat "$STATE_DNS" > /run/resolv.conf || return 1
+    chmod 644 /run/resolv.conf
+
+    log "runtime DNS configured"
+}
+
+migrate_ssh_server()
+{
+    STATE_DROPBEAR="$STATE_DIR/ssh/dropbear"
+
+    #
+    # Preserve any host keys generated by an older rootfs.
+    #
+    if [ -d /etc/dropbear ] &&
+       [ ! -L /etc/dropbear ]; then
+
+        for KEY in /etc/dropbear/*host_key; do
+            [ -f "$KEY" ] || continue
+
+            NAME="$(basename "$KEY")"
+
+            if [ ! -e "$STATE_DROPBEAR/$NAME" ]; then
+                cp "$KEY" "$STATE_DROPBEAR/$NAME" || return 1
+                chmod 600 "$STATE_DROPBEAR/$NAME"
+
+                log "migrated SSH server key $NAME to STATE"
+            fi
+        done
+    fi
+
+    #
+    # Dropbear now reads and creates its host keys directly in STATE.
+    #
+    rm -rf /etc/dropbear
+
+    ln -s \
+        /state/ssh/dropbear \
+        /etc/dropbear
+}
+
+migrate_ssh_root()
+{
+    STATE_SSH_ROOT="$STATE_DIR/ssh/root"
+
+    #
+    # Preserve existing root SSH state from older rootfs images.
+    #
+    if [ -d /root/.ssh ] &&
+       [ ! -L /root/.ssh ]; then
+
+        for FILE in /root/.ssh/*; do
+            [ -f "$FILE" ] || continue
+
+            NAME="$(basename "$FILE")"
+
+            if [ ! -e "$STATE_SSH_ROOT/$NAME" ]; then
+                cp "$FILE" "$STATE_SSH_ROOT/$NAME" || return 1
+                log "migrated root SSH file $NAME to STATE"
+            fi
+        done
+    fi
+
+    #
+    # Generate a persistent Dropbear client identity once.
+    #
+    if [ ! -f "$STATE_SSH_ROOT/id_dropbear" ]; then
+        if ! dropbearkey \
+            -t ed25519 \
+            -f "$STATE_SSH_ROOT/id_dropbear" \
+            >/dev/null 2>&1; then
+
+            log "failed to generate SSH client identity"
+            return 1
+        fi
+
+        log "generated persistent SSH client identity"
+    fi
+
+    chmod 600 "$STATE_SSH_ROOT/id_dropbear"
+
+    dropbearkey -y \
+        -f "$STATE_SSH_ROOT/id_dropbear" \
+        2>/dev/null |
+        sed -n '/^ssh-/p' \
+        > "$STATE_SSH_ROOT/id_dropbear.pub"
+
+    chmod 644 "$STATE_SSH_ROOT/id_dropbear.pub"
+
+    [ ! -f "$STATE_SSH_ROOT/authorized_keys" ] ||
+        chmod 600 "$STATE_SSH_ROOT/authorized_keys"
+
+    [ ! -f "$STATE_SSH_ROOT/known_hosts" ] ||
+        chmod 600 "$STATE_SSH_ROOT/known_hosts"
+
+    [ ! -f "$STATE_SSH_ROOT/config" ] ||
+        chmod 600 "$STATE_SSH_ROOT/config"
+
+    #
+    # Root SSH state is now entirely persistent.
+    #
+    rm -rf /root/.ssh
+
+    ln -s \
+        /state/ssh/root \
+        /root/.ssh
+}
+
+migrate_bluetooth()
+{
+    STATE_BT="$STATE_DIR/bluetooth"
+    BLUEZ_DIR=/var/lib/bluetooth
+
+    #
+    # Preserve Bluetooth state created by an older rootfs. Only seed STATE
+    # when it is still empty so an OS update can never overwrite persistent
+    # pairing keys or device metadata with stale rootfs contents.
+    #
+    if [ -d "$BLUEZ_DIR" ] &&
+       [ ! -L "$BLUEZ_DIR" ] &&
+       [ -z "$(ls -A "$STATE_BT" 2>/dev/null)" ]; then
+
+        cp -a "$BLUEZ_DIR/." "$STATE_BT/" || return 1
+        log "migrated Bluetooth state to STATE"
+    fi
+
+    #
+    # BlueZ keeps using its standard storage path while all mutable adapter,
+    # pairing, trust and link-key state lives on the persistent STATE volume.
+    #
+    mkdir -p /var/lib
+    rm -rf "$BLUEZ_DIR"
+
+    ln -s         /state/bluetooth         "$BLUEZ_DIR" || return 1
+
+    chmod 700 "$STATE_BT"
+}
+
+prepare_ssh()
+{
+    migrate_ssh_server || return 1
+    migrate_ssh_root || return 1
+}
+
+start_state()
+{
+    mount_state || return 1
+    prepare_layout || return 1
+    init_config || return 1
+    init_users || return 1
+    migrate_network || return 1
+    prepare_runtime_dns || return 1
+    migrate_bluetooth || return 1
+    prepare_ssh || return 1
+
+    log "ready"
+}
+
+case "${1:-}" in
+    start)
+        start_state
+        ;;
+    stop)
+        ;;
+    restart)
+        start_state
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+
+exit $?

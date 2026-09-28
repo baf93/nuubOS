@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# Do not force an initial wlr-randr mode change. Labwc reuses the already
+# active boot mode; output policy is applied only to real DRM hotplug events.
+
+udevadm monitor --udev --subsystem-match=drm 2>/dev/null | while read -r LINE; do
+    case "$LINE" in
+        *" change "*|*" bind "*|*" unbind "*)
+            /usr/bin/nuubos-wl-output-apply
+            ;;
+    esac
+done

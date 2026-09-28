@@ -1,0 +1,332 @@
+#!/bin/sh
+
+. /usr/lib/nuubos/exfat-health.sh
+. /usr/lib/nuubos/userdata.sh
+
+MOUNT_DIR=/userdata
+USERDATA_LABEL=NUUBOS_DATA
+USERDATA_VERSION=2
+PENDING=/state/migrations/userdata-init.pending
+
+log()
+{
+    echo "nuubOS userdata: $*"
+}
+
+root_device()
+{
+    sed -n 's/.*root=\([^ ]*\).*/\1/p' /proc/cmdline
+}
+
+boot_disk()
+{
+    ROOT_DEV="$(root_device)"
+
+    case "$ROOT_DEV" in
+        /dev/mmcblk*p1)
+            printf '%s\n' "${ROOT_DEV%p1}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+partition_device()
+{
+    printf '%sp%s\n' "$1" "$2"
+}
+
+geometry()
+{
+    DISK="$(boot_disk)" || {
+        log "unable to derive boot disk"
+        return 1
+    }
+
+    P3="$(partition_device "$DISK" 3)"
+    P4="$(partition_device "$DISK" 4)"
+
+    [ -b "$DISK" ] || {
+        log "boot disk missing: $DISK"
+        return 1
+    }
+
+    [ -b "$P3" ] || {
+        log "STATE partition missing: $P3"
+        return 1
+    }
+
+    STATE_LABEL="$(blkid -s LABEL -o value "$P3" 2>/dev/null || true)"
+
+    [ "$STATE_LABEL" = "NUUBOS_STATE" ] || {
+        log "invalid STATE label: ${STATE_LABEL:-<none>}"
+        return 1
+    }
+
+    P3_NAME="${P3#/dev/}"
+
+    P3_START="$(cat "/sys/class/block/$P3_NAME/start")" || return 1
+    P3_SIZE="$(cat "/sys/class/block/$P3_NAME/size")" || return 1
+    DISK_SECTORS="$(blockdev --getsz "$DISK")" || return 1
+
+    EXPECTED_START=$((P3_START + P3_SIZE))
+    EXPECTED_SIZE=$((DISK_SECTORS - EXPECTED_START))
+
+    [ "$EXPECTED_SIZE" -gt 0 ] || {
+        log "no space available for USERDATA"
+        return 1
+    }
+
+    [ $((EXPECTED_START % 2048)) -eq 0 ] || {
+        log "USERDATA start is not 1 MiB aligned"
+        return 1
+    }
+
+    return 0
+}
+
+validate_p4_geometry()
+{
+    [ -b "$P4" ] || return 1
+
+    P4_NAME="${P4#/dev/}"
+
+    P4_START="$(cat "/sys/class/block/$P4_NAME/start")" || return 1
+    P4_SIZE="$(cat "/sys/class/block/$P4_NAME/size")" || return 1
+
+    if [ "$P4_START" -ne "$EXPECTED_START" ] ||
+       [ "$P4_SIZE" -ne "$EXPECTED_SIZE" ]; then
+
+        log "unexpected USERDATA geometry"
+        log "expected start=$EXPECTED_START size=$EXPECTED_SIZE"
+        log "actual   start=$P4_START size=$P4_SIZE"
+
+        return 1
+    fi
+
+    return 0
+}
+
+create_p4()
+{
+    mkdir -p /state/migrations
+
+    cat > "$PENDING" <<EOF2
+NUUBOS_USERDATA_INIT_VERSION=1
+EOF2
+
+    chmod 600 "$PENDING"
+    sync
+
+    log "creating USERDATA partition"
+
+    printf 'start=%s, size=%s, type=7\n' \
+        "$EXPECTED_START" \
+        "$EXPECTED_SIZE" |
+        sfdisk \
+            --append \
+            --no-reread \
+            --no-tell-kernel \
+            "$DISK" \
+            >/dev/null || return 1
+
+    sync
+
+    #
+    # The root filesystem and STATE are mounted, therefore a full
+    # partition-table reread is expected to fail. Add only partition 4.
+    #
+    if [ ! -b "$P4" ]; then
+        partx \
+            --add \
+            --nr 4 \
+            "$DISK" || return 1
+    fi
+
+    [ -b "$P4" ] || {
+        log "USERDATA partition did not appear"
+        return 1
+    }
+
+    validate_p4_geometry || return 1
+
+    return 0
+}
+
+format_if_pending()
+{
+    #
+    # PENDING is the initialization ownership token.
+    #
+    # If it exists, this USERDATA partition is being created by
+    # nuubOS and must be initialized from scratch even if stale
+    # filesystem signatures remain beyond the end of a previously
+    # flashed image.
+    #
+    if [ -f "$PENDING" ]; then
+        log "initializing USERDATA as exFAT"
+
+        mkfs.exfat -L "$USERDATA_LABEL" "$P4" || return 1
+        sync
+    fi
+
+    FS_TYPE="$(blkid -s TYPE -o value "$P4" 2>/dev/null || true)"
+    FS_LABEL="$(blkid -s LABEL -o value "$P4" 2>/dev/null || true)"
+
+    [ "$FS_TYPE" = "exfat" ] || {
+        log "unexpected USERDATA filesystem: ${FS_TYPE:-<none>}"
+        return 1
+    }
+
+    [ "$FS_LABEL" = "$USERDATA_LABEL" ] || {
+        log "unexpected USERDATA label: ${FS_LABEL:-<none>}"
+        return 1
+    }
+
+    return 0
+}
+
+mount_userdata()
+{
+    mkdir -p "$MOUNT_DIR"
+
+    if grep -qs " $MOUNT_DIR " /proc/mounts; then
+        return 0
+    fi
+
+    mount \
+        -t exfat \
+        -o rw,noatime,uid=0,gid=0,fmask=0022,dmask=0022 \
+        "$P4" \
+        "$MOUNT_DIR" || return 1
+
+    return 0
+}
+
+validate_or_initialize_marker()
+{
+    MARKER="$MOUNT_DIR/.nuubos-userdata"
+
+    if [ -f "$PENDING" ]; then
+        cat > "$MARKER" <<EOF2
+NUUBOS_USERDATA_VERSION=$USERDATA_VERSION
+EOF2
+
+        sync
+        return 0
+    fi
+
+    if [ ! -f "$MARKER" ]; then
+        log "USERDATA marker missing; refusing existing partition"
+        umount "$MOUNT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    if ! grep -qx \
+        "NUUBOS_USERDATA_VERSION=$USERDATA_VERSION" \
+        "$MARKER"; then
+
+        log "unsupported USERDATA marker"
+        umount "$MOUNT_DIR" 2>/dev/null || true
+        return 1
+    fi
+
+    return 0
+}
+
+prepare_layout()
+{
+    #
+    # Shared content exists once per active USERDATA filesystem.
+    #
+    mkdir -p \
+        "$MOUNT_DIR/roms" \
+        "$MOUNT_DIR/bios" \
+        "$MOUNT_DIR/themes" \
+        "$MOUNT_DIR/music" \
+        "$MOUNT_DIR/applications" \
+        "$MOUNT_DIR/ports" \
+        "$MOUNT_DIR/cheats" \
+        "$MOUNT_DIR/library" \
+        "$MOUNT_DIR/logs" \
+        "$MOUNT_DIR/cache" \
+        "$MOUNT_DIR/downloads" ||
+        return 1
+
+    #
+    # Persistent per-user content is keyed by the stable UUID owned by STATE.
+    #
+    nuubos_userdata_prepare_users "$MOUNT_DIR" || return 1
+
+    sync
+}
+
+start_userdata()
+{
+    geometry || return 1
+
+    if [ ! -b "$P4" ]; then
+        #
+        # p4 may already exist in the on-disk MBR after an interrupted
+        # first boot while still being absent from the kernel table.
+        #
+        if sfdisk -d "$DISK" 2>/dev/null |
+           grep -q "^${P4}[[:space:]]*:"; then
+
+            if [ ! -f "$PENDING" ]; then
+                log "pre-existing USERDATA partition not owned by initializer"
+                return 1
+            fi
+
+            log "resuming USERDATA partition registration"
+
+            partx \
+                --add \
+                --nr 4 \
+                "$DISK" || return 1
+        else
+            create_p4 || return 1
+        fi
+    fi
+
+    validate_p4_geometry || return 1
+    format_if_pending || return 1
+
+    if ! nuubos_exfat_prepare         "$P4"         /run/nuubos/storage/tf1.health
+    then
+        log "USERDATA filesystem health check failed; refusing rw mount"
+        return 1
+    fi
+
+    mount_userdata || return 1
+    validate_or_initialize_marker || return 1
+    prepare_layout || return 1
+
+    if [ -f "$PENDING" ]; then
+        rm -f "$PENDING"
+        sync
+    fi
+
+    log "ready"
+    return 0
+}
+
+case "${1:-}" in
+    start)
+        start_userdata
+        ;;
+    stop)
+        umount "$MOUNT_DIR" 2>/dev/null || true
+        ;;
+    restart)
+        umount "$MOUNT_DIR" 2>/dev/null || true
+        start_userdata
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+
+exit $?

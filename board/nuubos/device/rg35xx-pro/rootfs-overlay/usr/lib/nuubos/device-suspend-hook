@@ -1,0 +1,14 @@
+#!/bin/sh
+
+case "${1:-}" in
+	prepare|resume)
+		# RG35XX Pro power LED / PWM2 switching is handled by kernel PM.
+		exit 0
+		;;
+	*)
+		echo "Usage: $0 {prepare|resume}" >&2
+		exit 1
+		;;
+esac
+
+exit 0

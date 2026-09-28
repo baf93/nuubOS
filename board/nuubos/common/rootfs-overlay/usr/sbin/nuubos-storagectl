@@ -1,0 +1,1343 @@
+#!/bin/sh
+
+STATUS_DIR=/run/nuubos/storage
+STATUS_FILE="$STATUS_DIR/tf2.status"
+
+TF1_VIEW="$STATUS_DIR/tf1"
+TF2=/dev/mmcblk2
+TF2_P1=/dev/mmcblk2p1
+
+MIGRATE_MOUNT="$STATUS_DIR/tf2-migrate"
+
+STATE_MIGRATIONS=/state/migrations
+PENDING="$STATE_MIGRATIONS/tf1-to-tf2.pending"
+
+BACKUP_STATE_DIR=/state/storage
+BACKUP_STATE_FILE="$BACKUP_STATE_DIR/tf1-backup.state"
+SYNC_PENDING="$STATE_MIGRATIONS/tf2-to-tf1.pending"
+
+
+
+
+OWNED_LABEL=NUUBOS_DATA
+OWNED_VERSION=2
+OWNED_ROLE=SECONDARY
+
+info()
+{
+    echo "nuubOS storagectl: $*"
+}
+
+die()
+{
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+require_command()
+{
+    command -v "$1" >/dev/null 2>&1 ||
+        die "required command missing: $1"
+}
+
+status_value()
+{
+    KEY="$1"
+
+    sed -n "s/^${KEY}=//p" \
+        "$STATUS_FILE" 2>/dev/null |
+    tail -1
+}
+
+pending_value()
+{
+    KEY="$1"
+
+    sed -n "s/^${KEY}=//p" \
+        "$PENDING" 2>/dev/null |
+    tail -1
+}
+
+tf2_cid()
+{
+    for CARD in /sys/class/mmc_host/mmc2/mmc2:*; do
+        [ -r "$CARD/cid" ] || continue
+
+        cat "$CARD/cid"
+        return 0
+    done
+
+    return 1
+}
+
+root_disk()
+{
+    ROOT_DEV="$(
+        sed -n 's/.*root=\([^ ]*\).*/\1/p' \
+            /proc/cmdline 2>/dev/null
+    )"
+
+    case "$ROOT_DEV" in
+        /dev/mmcblk*p1)
+            printf '%s\n' "${ROOT_DEV%p1}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+mounted_tf2()
+{
+    awk '
+        $1 ~ /^\/dev\/mmcblk2(p[0-9]+)?$/ {
+            print
+        }
+    ' /proc/mounts
+}
+
+tf2_mounts_are_migration_only()
+{
+    awk -v migration="$MIGRATE_MOUNT" '
+        $1 ~ /^\/dev\/mmcblk2(p[0-9]+)?$/ {
+            found=1
+
+            if ($1 != "/dev/mmcblk2p1" ||
+                $2 != migration)
+                bad=1
+        }
+
+        END {
+            exit bad
+        }
+    ' /proc/mounts
+}
+
+partition_count()
+{
+    COUNT=0
+
+    for P in "${TF2}"p*; do
+        [ -b "$P" ] || continue
+        COUNT=$((COUNT + 1))
+    done
+
+    printf '%s\n' "$COUNT"
+}
+
+write_pending()
+{
+    PHASE="$1"
+    CID="$2"
+
+    mkdir -p "$STATE_MIGRATIONS"
+
+    TMP="$PENDING.tmp.$$"
+
+    cat > "$TMP" <<EOF2
+NUUBOS_MIGRATION_VERSION=1
+MIGRATION_TYPE=TF1_TO_TF2_ADOPT
+TF2_CID=$CID
+PHASE=$PHASE
+EOF2
+
+    mv "$TMP" "$PENDING"
+    sync
+}
+
+validate_pending()
+{
+    EXPECTED_CID="$1"
+
+    [ -f "$PENDING" ] || return 1
+
+    [ "$(pending_value NUUBOS_MIGRATION_VERSION)" = "1" ] ||
+        die "unsupported migration transaction"
+
+    [ "$(pending_value MIGRATION_TYPE)" = "TF1_TO_TF2_ADOPT" ] ||
+        die "different migration transaction already pending"
+
+    [ "$(pending_value TF2_CID)" = "$EXPECTED_CID" ] ||
+        die "pending transaction belongs to another TF2"
+
+    case "$(pending_value PHASE)" in
+        PREPARED|FORMATTED|COPYING|VERIFIED|OWNED)
+            ;;
+        *)
+            die "invalid migration transaction phase"
+            ;;
+    esac
+
+    return 0
+}
+
+validate_tools()
+{
+    for CMD in \
+        awk \
+        blkid \
+        blockdev \
+        date \
+        df \
+        du \
+        grep \
+        mkfs.exfat \
+        mount \
+        mv \
+        rsync \
+        sed \
+        sfdisk \
+        sync \
+        umount
+    do
+        require_command "$CMD"
+    done
+}
+
+validate_tf1()
+{
+    [ -d "$TF1_VIEW" ] ||
+        die "TF1 storage view missing: $TF1_VIEW"
+
+    TF1_DEVICE="$(status_value TF1_DEVICE)"
+
+    [ -b "$TF1_DEVICE" ] ||
+        die "TF1 USERDATA device unavailable"
+
+    SOURCE="$(
+        awk -v m="$TF1_VIEW" '
+            $2 == m {
+                source=$1
+            }
+
+            END {
+                print source
+            }
+        ' /proc/mounts
+    )"
+
+    [ "$SOURCE" = "$TF1_DEVICE" ] ||
+        die "TF1 storage view is not backed by $TF1_DEVICE"
+
+    grep -qx \
+        'NUUBOS_USERDATA_VERSION=2' \
+        "$TF1_VIEW/.nuubos-userdata" ||
+        die "TF1 USERDATA marker invalid"
+}
+
+preflight()
+{
+    EXPECTED_CID="$1"
+
+    validate_tools
+
+    [ -r "$STATUS_FILE" ] ||
+        die "storage selector state unavailable"
+
+    [ -b "$TF2" ] ||
+        die "TF2 is not present"
+
+    BOOT_DISK="$(root_disk)" ||
+        die "unable to derive boot disk"
+
+    [ "$BOOT_DISK" != "$TF2" ] ||
+        die "refusing to operate on boot disk"
+
+    CURRENT_CID="$(tf2_cid)" ||
+        die "unable to read TF2 CID"
+
+    [ -n "$EXPECTED_CID" ] ||
+        die "confirmation CID missing"
+
+    [ "$CURRENT_CID" = "$EXPECTED_CID" ] ||
+        die "TF2 CID changed since user confirmation"
+
+    validate_tf1
+
+    STATE="$(status_value TF2_STATE)"
+
+    if [ -f "$PENDING" ]; then
+        validate_pending "$CURRENT_CID"
+    else
+        [ "$STATE" = "FOREIGN" ] ||
+            die "TF2 is not a foreign card awaiting adoption"
+    fi
+
+    #
+    # A mounted TF2 is only acceptable when a nearly-completed transaction
+    # already produced a valid OWNED card and S05 activated it.
+    #
+    TF2_MOUNTS="$(mounted_tf2)"
+
+    if [ -n "$TF2_MOUNTS" ]; then
+        if [ -f "$PENDING" ] &&
+           tf2_mounts_are_migration_only
+        then
+            #
+            # Interrupted userspace migration: safe to resume.
+            #
+            :
+        elif [ -f "$PENDING" ] &&
+             [ "$STATE" = "OWNED" ]
+        then
+            #
+            # Marker was committed before interruption and S05 has already
+            # activated the verified TF2.
+            #
+            :
+        else
+            die "TF2 is mounted; refusing destructive operation"
+        fi
+    fi
+
+    SOURCE_KB="$(
+        du -sk "$TF1_VIEW" |
+        awk '{print $1}'
+    )"
+
+    RAW_BYTES="$(
+        blockdev --getsize64 "$TF2"
+    )"
+
+    [ -n "$SOURCE_KB" ] ||
+        die "unable to determine TF1 usage"
+
+    [ -n "$RAW_BYTES" ] ||
+        die "unable to determine TF2 capacity"
+
+    #
+    # Reserve 64 MiB beyond the measured source usage.
+    #
+    TARGET_KB=$(( (RAW_BYTES - 1048576) / 1024 ))
+    REQUIRED_KB=$(( SOURCE_KB + 65536 ))
+
+    [ "$TARGET_KB" -gt "$REQUIRED_KB" ] ||
+        die "TF2 does not have enough capacity for TF1 USERDATA"
+
+    echo "PREFLIGHT=PASS"
+    echo "TF1_DEVICE=$(status_value TF1_DEVICE)"
+    echo "TF1_USED_KB=$SOURCE_KB"
+    echo "TF2_DEVICE=$TF2"
+    echo "TF2_CID=$CURRENT_CID"
+    echo "TF2_RAW_BYTES=$RAW_BYTES"
+    echo "TF2_TARGET_KB=$TARGET_KB"
+    echo "TF2_CURRENT_STATE=$STATE"
+
+    if [ -f "$PENDING" ]; then
+        echo "TRANSACTION=RESUME"
+        echo "PHASE=$(pending_value PHASE)"
+    else
+        echo "TRANSACTION=NEW"
+    fi
+
+    echo "DESTRUCTIVE_READY=1"
+}
+
+format_tf2()
+{
+    info "creating nuubOS TF2 partition table"
+
+    {
+        echo "label: dos"
+        echo "unit: sectors"
+        echo
+        echo "$TF2_P1 : start=2048, type=7"
+    } |
+    sfdisk \
+        --wipe always \
+        --wipe-partitions always \
+        "$TF2" ||
+        die "failed to create TF2 partition table"
+
+    blockdev --rereadpt "$TF2" ||
+        die "failed to reread TF2 partition table"
+
+    [ -b "$TF2_P1" ] ||
+        die "TF2 p1 missing after repartition"
+
+    [ "$(partition_count)" = "1" ] ||
+        die "unexpected TF2 partition count after repartition"
+
+    START="$(
+        cat /sys/class/block/mmcblk2p1/start 2>/dev/null
+    )"
+
+    [ "$START" = "2048" ] ||
+        die "unexpected TF2 p1 start sector: ${START:-missing}"
+
+    info "formatting TF2 as exFAT"
+
+    mkfs.exfat \
+        -L "$OWNED_LABEL" \
+        "$TF2_P1" ||
+        die "TF2 exFAT format failed"
+
+    TYPE="$(
+        blkid -s TYPE -o value "$TF2_P1" 2>/dev/null
+    )"
+
+    LABEL="$(
+        blkid -s LABEL -o value "$TF2_P1" 2>/dev/null
+    )"
+
+    [ "$TYPE" = "exfat" ] ||
+        die "TF2 filesystem validation failed"
+
+    [ "$LABEL" = "$OWNED_LABEL" ] ||
+        die "TF2 label validation failed"
+}
+
+mount_migration_target()
+{
+    mkdir -p "$MIGRATE_MOUNT"
+
+    SOURCE="$(
+        awk -v m="$MIGRATE_MOUNT" '
+            $2 == m {
+                source=$1
+            }
+
+            END {
+                print source
+            }
+        ' /proc/mounts
+    )"
+
+    if [ "$SOURCE" = "$TF2_P1" ]; then
+        return 0
+    fi
+
+    [ -z "$SOURCE" ] ||
+        die "migration mountpoint already in use"
+
+    mount \
+        -t exfat \
+        -o rw,noatime,uid=0,gid=0,fmask=0022,dmask=0022 \
+        "$TF2_P1" \
+        "$MIGRATE_MOUNT" ||
+        die "unable to mount TF2 migration target"
+}
+
+unmount_migration_target()
+{
+    if awk -v m="$MIGRATE_MOUNT" \
+        '$2 == m {found=1} END {exit !found}' \
+        /proc/mounts
+    then
+        sync
+        umount "$MIGRATE_MOUNT" ||
+            die "unable to unmount TF2 migration target"
+    fi
+
+    rmdir "$MIGRATE_MOUNT" 2>/dev/null || true
+}
+
+cleanup_migration_mount()
+{
+    if awk -v m="$MIGRATE_MOUNT" '
+        $2 == m {
+            found=1
+        }
+
+        END {
+            exit !found
+        }
+    ' /proc/mounts
+    then
+        sync
+        umount "$MIGRATE_MOUNT" 2>/dev/null || true
+    fi
+
+    rmdir "$MIGRATE_MOUNT" 2>/dev/null || true
+}
+
+verify_capacity()
+{
+    SOURCE_KB="$(
+        du -sk "$TF1_VIEW" |
+        awk '{print $1}'
+    )"
+
+    AVAILABLE_KB="$(
+        df -Pk "$MIGRATE_MOUNT" |
+        awk 'NR == 2 {print $4}'
+    )"
+
+    [ -n "$SOURCE_KB" ] ||
+        die "unable to determine source usage"
+
+    [ -n "$AVAILABLE_KB" ] ||
+        die "unable to determine TF2 free space"
+
+    [ "$AVAILABLE_KB" -gt "$SOURCE_KB" ] ||
+        die "formatted TF2 does not have enough free space"
+}
+
+copy_userdata()
+{
+    info "migrating TF1 USERDATA to TF2"
+
+    rsync \
+        -rt \
+        --delete \
+        --modify-window=1 \
+        --omit-dir-times \
+        --exclude='/.nuubos-userdata' \
+        "$TF1_VIEW/" \
+        "$MIGRATE_MOUNT/" ||
+        die "TF1 to TF2 migration failed"
+
+    sync
+}
+
+verify_userdata()
+{
+    info "verifying TF1 and TF2 contents"
+
+    VERIFY_FILE="$STATUS_DIR/tf1-to-tf2.verify.$$"
+
+    rsync \
+        -rt \
+        --delete \
+        --modify-window=1 \
+        --omit-dir-times \
+        --exclude='/.nuubos-userdata' \
+        --dry-run \
+        --itemize-changes \
+        "$TF1_VIEW/" \
+        "$MIGRATE_MOUNT/" \
+        > "$VERIFY_FILE" ||
+        die "TF1 to TF2 verification failed"
+
+    if [ -s "$VERIFY_FILE" ]; then
+        cat "$VERIFY_FILE" >&2
+        rm -f "$VERIFY_FILE"
+        die "TF1 and TF2 contents differ after migration"
+    fi
+
+    rm -f "$VERIFY_FILE"
+}
+
+write_owned_marker()
+{
+    CID="$(tf2_cid)" ||
+        die "unable to read TF2 CID while creating ownership marker"
+
+    UUID="$(
+        blkid -s UUID -o value "$TF2_P1" 2>/dev/null
+    )"
+
+    [ -n "$UUID" ] ||
+        die "unable to read TF2 UUID while creating ownership marker"
+
+    TMP="$MIGRATE_MOUNT/.nuubos-userdata.tmp"
+
+    cat > "$TMP" <<EOF2
+NUUBOS_USERDATA_VERSION=$OWNED_VERSION
+NUUBOS_STORAGE_ROLE=$OWNED_ROLE
+NUUBOS_STORAGE_CID=$CID
+NUUBOS_STORAGE_UUID=$UUID
+EOF2
+
+    mv "$TMP" "$MIGRATE_MOUNT/.nuubos-userdata"
+    sync
+}
+
+finalize()
+{
+    /etc/init.d/S05nuubos-storage restart ||
+        die "storage selector restart failed"
+
+    STATE="$(status_value TF2_STATE)"
+    READY="$(status_value STORAGE_READY)"
+    ACTIVE="$(status_value ACTIVE_STORAGE)"
+    MODE="$(status_value STORAGE_MODE)"
+
+    [ "$STATE" = "OWNED" ] ||
+        die "TF2 not classified OWNED after migration"
+
+    [ "$READY" = "1" ] ||
+        die "storage not ready after TF2 adoption"
+
+    case "$MODE" in
+        AUTO|DUAL)
+            [ "$ACTIVE" = "TF2" ] ||
+                die "TF2 adoption completed but TF2 is not active"
+            ;;
+        SINGLE)
+            [ "$ACTIVE" = "TF1" ] ||
+                die "SINGLE mode unexpectedly changed active storage"
+            ;;
+        *)
+            die "unexpected storage mode after adoption"
+            ;;
+    esac
+
+    rm -f "$PENDING"
+    sync
+
+    echo
+    echo "ADOPTION=PASS"
+    echo "TF2_STATE=$STATE"
+    echo "ACTIVE_STORAGE=$ACTIVE"
+    echo "STORAGE_READY=$READY"
+    echo "TF2_UUID=$(status_value TF2_UUID)"
+}
+
+adopt()
+{
+    EXPECTED_CID="$1"
+
+    #
+    # Ordinary process errors/signals must not leave the temporary
+    # migration mount behind. Power loss is handled by STATE transaction
+    # recovery instead.
+    #
+    trap cleanup_migration_mount 0
+    trap 'exit 130' HUP INT TERM
+
+    preflight "$EXPECTED_CID" >/dev/null
+
+    CURRENT_CID="$(tf2_cid)" ||
+        die "unable to read TF2 CID"
+
+    if [ ! -f "$PENDING" ]; then
+        write_pending PREPARED "$CURRENT_CID"
+    else
+        validate_pending "$CURRENT_CID"
+    fi
+
+    PHASE="$(pending_value PHASE)"
+
+    case "$PHASE" in
+        PREPARED)
+            format_tf2
+            write_pending FORMATTED "$CURRENT_CID"
+            PHASE=FORMATTED
+            ;;
+
+        FORMATTED|COPYING|VERIFIED|OWNED)
+            ;;
+    esac
+
+    if [ "$PHASE" = "FORMATTED" ] ||
+       [ "$PHASE" = "COPYING" ]; then
+
+        mount_migration_target
+        verify_capacity
+
+        write_pending COPYING "$CURRENT_CID"
+
+        copy_userdata
+        verify_userdata
+
+        write_pending VERIFIED "$CURRENT_CID"
+        PHASE=VERIFIED
+    fi
+
+    if [ "$PHASE" = "VERIFIED" ]; then
+        #
+        # If power was lost after marker creation, S05 may already classify
+        # and activate TF2 as OWNED. Otherwise commit the ownership marker now.
+        #
+        if [ "$(status_value TF2_STATE)" != "OWNED" ]; then
+            mount_migration_target
+            verify_userdata
+            write_owned_marker
+            unmount_migration_target
+        fi
+
+        write_pending OWNED "$CURRENT_CID"
+        PHASE=OWNED
+    fi
+
+    if [ "$PHASE" = "OWNED" ]; then
+        unmount_migration_target
+        finalize
+    fi
+
+    trap - 0 HUP INT TERM
+}
+
+backup_policy()
+{
+    CONF=/state/config/nuubos.conf
+
+    COUNT="$(
+        grep -c '^TF1_BACKUP_POLICY=' "$CONF" 2>/dev/null ||
+        true
+    )"
+
+    case "$COUNT" in
+        0)
+            printf '%s\n' WEEKLY
+            return 0
+            ;;
+        1)
+            POLICY="$(
+                sed -n 's/^TF1_BACKUP_POLICY=//p' "$CONF"
+            )"
+            ;;
+        *)
+            #
+            # Ambiguous config must never trigger automatic backup.
+            #
+            printf '%s\n' OFF
+            return 0
+            ;;
+    esac
+
+    case "$POLICY" in
+        OFF|DAILY|WEEKLY|MONTHLY)
+            printf '%s\n' "$POLICY"
+            ;;
+        *)
+            printf '%s\n' OFF
+            ;;
+    esac
+}
+
+set_backup_policy()
+{
+    POLICY="$1"
+
+    case "$POLICY" in
+        OFF|DAILY|WEEKLY|MONTHLY)
+            ;;
+        *)
+            die "invalid backup policy: $POLICY"
+            ;;
+    esac
+
+    CONF=/state/config/nuubos.conf
+    TMP="$CONF.tmp.$$"
+
+    awk '
+        !/^TF1_BACKUP_POLICY=/
+    ' "$CONF" > "$TMP" ||
+        die "unable to prepare configuration update"
+
+    printf 'TF1_BACKUP_POLICY=%s\n' "$POLICY" >> "$TMP"
+
+    mv "$TMP" "$CONF" ||
+        die "unable to update backup policy"
+
+    sync
+
+    echo "TF1_BACKUP_POLICY=$POLICY"
+}
+
+backup_state_value()
+{
+    KEY="$1"
+
+    sed -n "s/^${KEY}=//p" \
+        "$BACKUP_STATE_FILE" 2>/dev/null |
+    tail -1
+}
+
+write_backup_state()
+{
+    NOW="$1"
+    UUID="$2"
+
+    #
+    # A successful manual sync is valid even when the wall clock is not.
+    # Never destroy a previously trustworthy timestamp merely because this
+    # boot started without RTC/NTP.
+    #
+    if [ "$NOW" = "0" ]; then
+        PREVIOUS="$(
+            backup_state_value LAST_SUCCESS_EPOCH
+        )"
+
+        case "$PREVIOUS" in
+            ''|*[!0-9]*)
+                PREVIOUS=0
+                ;;
+        esac
+
+        if [ "$PREVIOUS" -ge 1577836800 ]; then
+            NOW="$PREVIOUS"
+        fi
+    fi
+
+    mkdir -p "$BACKUP_STATE_DIR"
+
+    TMP="$BACKUP_STATE_FILE.tmp.$$"
+
+    cat > "$TMP" <<EOF2
+NUUBOS_BACKUP_VERSION=1
+LAST_SUCCESS_EPOCH=$NOW
+LAST_SOURCE_UUID=$UUID
+EOF2
+
+    mv "$TMP" "$BACKUP_STATE_FILE"
+    sync
+}
+
+write_sync_pending()
+{
+    PHASE="$1"
+    UUID="$2"
+
+    mkdir -p "$STATE_MIGRATIONS"
+
+    TMP="$SYNC_PENDING.tmp.$$"
+
+    cat > "$TMP" <<EOF2
+NUUBOS_MIGRATION_VERSION=1
+MIGRATION_TYPE=TF2_TO_TF1_SYNC
+TF2_UUID=$UUID
+PHASE=$PHASE
+EOF2
+
+    mv "$TMP" "$SYNC_PENDING"
+    sync
+}
+
+sync_pending_value()
+{
+    KEY="$1"
+
+    sed -n "s/^${KEY}=//p" \
+        "$SYNC_PENDING" 2>/dev/null |
+    tail -1
+}
+
+validate_sync_pending()
+{
+    UUID="$1"
+
+    [ -f "$SYNC_PENDING" ] || return 1
+
+    [ "$(sync_pending_value NUUBOS_MIGRATION_VERSION)" = "1" ] ||
+        die "unsupported TF2 to TF1 transaction"
+
+    [ "$(sync_pending_value MIGRATION_TYPE)" = "TF2_TO_TF1_SYNC" ] ||
+        die "different TF2 to TF1 transaction pending"
+
+    [ "$(sync_pending_value TF2_UUID)" = "$UUID" ] ||
+        die "sync transaction belongs to another TF2"
+
+    case "$(sync_pending_value PHASE)" in
+        PREPARED|COPYING|VERIFIED)
+            ;;
+        *)
+            die "invalid TF2 to TF1 transaction phase"
+            ;;
+    esac
+}
+
+validate_sync_source()
+{
+    [ -r "$STATUS_FILE" ] ||
+        die "storage status unavailable"
+
+    [ "$(status_value STORAGE_READY)" = "1" ] ||
+        die "storage is not ready"
+
+    [ "$(status_value TF2_STATE)" = "OWNED" ] ||
+        die "TF2 is not nuubOS-owned"
+
+    [ "$(status_value ACTIVE_STORAGE)" = "TF2" ] ||
+        die "TF2 is not active"
+
+    ACTIVE_SOURCE="$(
+        awk '
+            $2 == "/userdata" {
+                source=$1
+            }
+
+            END {
+                print source
+            }
+        ' /proc/mounts
+    )"
+
+    [ "$ACTIVE_SOURCE" = "$TF2_P1" ] ||
+        die "/userdata is not backed by active TF2"
+
+    [ -d "$TF1_VIEW" ] ||
+        die "TF1 sync view unavailable"
+
+    TF1_SOURCE="$(
+        awk -v m="$TF1_VIEW" '
+            $2 == m {
+                source=$1
+            }
+
+            END {
+                print source
+            }
+        ' /proc/mounts
+    )"
+
+    [ "$TF1_SOURCE" = "$(status_value TF1_DEVICE)" ] ||
+        die "TF1 sync view has unexpected backing device"
+
+    grep -qx \
+        'NUUBOS_USERDATA_VERSION=2' \
+        "$TF1_VIEW/.nuubos-userdata" ||
+        die "TF1 USERDATA marker invalid"
+
+    UUID="$(status_value TF2_UUID)"
+
+    [ -n "$UUID" ] ||
+        die "TF2 UUID unavailable"
+}
+
+validate_sync_capacity()
+{
+    SOURCE_KB="$(
+        du -sk /userdata |
+        awk '{print $1}'
+    )"
+
+    TARGET_TOTAL_KB="$(
+        df -Pk "$TF1_VIEW" |
+        awk 'NR == 2 {print $2}'
+    )"
+
+    [ -n "$SOURCE_KB" ] ||
+        die "unable to determine TF2 usage"
+
+    [ -n "$TARGET_TOTAL_KB" ] ||
+        die "unable to determine TF1 capacity"
+
+    #
+    # Keep 64 MiB headroom on TF1.
+    #
+    REQUIRED_KB=$((SOURCE_KB + 65536))
+
+    [ "$TARGET_TOTAL_KB" -gt "$REQUIRED_KB" ] ||
+        die "TF2 data no longer fits on TF1"
+}
+
+copy_tf2_to_tf1()
+{
+    info "synchronizing TF2 USERDATA back to TF1"
+
+    rsync \
+        -rt \
+        --delete-delay \
+        --modify-window=1 \
+        --omit-dir-times \
+        --exclude='/.nuubos-userdata' \
+        /userdata/ \
+        "$TF1_VIEW/" ||
+        die "TF2 to TF1 synchronization failed"
+
+    sync
+}
+
+verify_tf2_to_tf1()
+{
+    info "verifying TF2 to TF1 synchronization"
+
+    VERIFY="$STATUS_DIR/tf2-to-tf1.verify.$$"
+
+    rsync \
+        -rt \
+        --delete-delay \
+        --modify-window=1 \
+        --omit-dir-times \
+        --exclude='/.nuubos-userdata' \
+        --dry-run \
+        --itemize-changes \
+        /userdata/ \
+        "$TF1_VIEW/" \
+        > "$VERIFY" ||
+        die "TF2 to TF1 verification failed"
+
+    if [ -s "$VERIFY" ]; then
+        cat "$VERIFY" >&2
+        rm -f "$VERIFY"
+        die "TF1 differs from active TF2 after synchronization"
+    fi
+
+    rm -f "$VERIFY"
+}
+
+trusted_epoch()
+{
+    NOW="$(date +%s 2>/dev/null || echo 0)"
+
+    case "$NOW" in
+        ''|*[!0-9]*)
+            printf '%s\n' 0
+            return 0
+            ;;
+    esac
+
+    #
+    # Jan 1 2020. Anything older is considered an uninitialized clock.
+    #
+    if [ "$NOW" -lt 1577836800 ]; then
+        printf '%s\n' 0
+    else
+        printf '%s\n' "$NOW"
+    fi
+}
+
+sync_tf2_to_tf1()
+{
+    validate_tools
+    validate_sync_source
+    validate_sync_capacity
+
+    UUID="$(status_value TF2_UUID)"
+
+    if [ -f "$SYNC_PENDING" ]; then
+        validate_sync_pending "$UUID"
+    else
+        write_sync_pending PREPARED "$UUID"
+    fi
+
+    PHASE="$(sync_pending_value PHASE)"
+
+    case "$PHASE" in
+        PREPARED|COPYING)
+            write_sync_pending COPYING "$UUID"
+
+            copy_tf2_to_tf1
+            verify_tf2_to_tf1
+
+            write_sync_pending VERIFIED "$UUID"
+            ;;
+        VERIFIED)
+            verify_tf2_to_tf1
+            ;;
+    esac
+
+    NOW="$(trusted_epoch)"
+
+    write_backup_state "$NOW" "$UUID"
+
+    rm -f "$SYNC_PENDING"
+    sync
+
+    echo
+    echo "SYNC=PASS"
+    echo "SOURCE=TF2"
+    echo "TARGET=TF1"
+    echo "TF2_UUID=$UUID"
+    echo "LAST_SUCCESS_EPOCH=$NOW"
+}
+
+backup_status()
+{
+    POLICY="$(backup_policy)"
+    LAST="$(backup_state_value LAST_SUCCESS_EPOCH)"
+    UUID="$(backup_state_value LAST_SOURCE_UUID)"
+
+    [ -n "$LAST" ] || LAST=0
+
+    NOW="$(trusted_epoch)"
+
+    DUE=0
+    REASON=NOT_DUE
+
+    case "$POLICY" in
+        OFF)
+            DUE=0
+            REASON=POLICY_OFF
+            ;;
+        DAILY)
+            INTERVAL=86400
+            ;;
+        WEEKLY)
+            INTERVAL=604800
+            ;;
+        MONTHLY)
+            INTERVAL=2592000
+            ;;
+    esac
+
+    if [ "$POLICY" != "OFF" ]; then
+        if [ "$NOW" -lt 1577836800 ]; then
+            DUE=0
+            REASON=CLOCK_UNAVAILABLE
+        elif [ "$LAST" -eq 0 ]; then
+            DUE=1
+            REASON=NEVER_BACKED_UP
+        elif [ "$NOW" -lt "$LAST" ]; then
+            DUE=0
+            REASON=CLOCK_BEFORE_LAST_SUCCESS
+        elif [ $((NOW - LAST)) -ge "$INTERVAL" ]; then
+            DUE=1
+            REASON=INTERVAL_EXPIRED
+        fi
+    fi
+
+    echo "TF1_BACKUP_POLICY=$POLICY"
+    echo "TF1_BACKUP_LAST_SUCCESS=$LAST"
+    echo "TF1_BACKUP_LAST_SOURCE_UUID=$UUID"
+    echo "TF1_BACKUP_DUE=$DUE"
+    echo "TF1_BACKUP_REASON=$REASON"
+}
+
+auto_sync()
+{
+    POLICY="$(backup_policy)"
+
+    if [ "$POLICY" = "OFF" ]; then
+        echo "AUTO_SYNC=SKIP"
+        echo "REASON=POLICY_OFF"
+        return 0
+    fi
+
+    #
+    # Automatic backup is meaningful only when an owned TF2 is the
+    # currently active USERDATA source. In all other storage states the
+    # opportunistic scheduler must quietly do nothing.
+    #
+    if [ ! -r "$STATUS_FILE" ]; then
+        echo "AUTO_SYNC=SKIP"
+        echo "REASON=STORAGE_STATUS_UNAVAILABLE"
+        return 0
+    fi
+
+    if [ "$(status_value STORAGE_READY)" != "1" ]; then
+        echo "AUTO_SYNC=SKIP"
+        echo "REASON=STORAGE_NOT_READY"
+        return 0
+    fi
+
+    if [ "$(status_value TF2_STATE)" != "OWNED" ]; then
+        echo "AUTO_SYNC=SKIP"
+        echo "REASON=TF2_NOT_OWNED"
+        return 0
+    fi
+
+    if [ "$(status_value ACTIVE_STORAGE)" != "TF2" ]; then
+        echo "AUTO_SYNC=SKIP"
+        echo "REASON=TF2_NOT_ACTIVE"
+        return 0
+    fi
+
+    STATUS="$(backup_status)"
+
+    DUE="$(
+        printf '%s\n' "$STATUS" |
+        sed -n 's/^TF1_BACKUP_DUE=//p'
+    )"
+
+    REASON="$(
+        printf '%s\n' "$STATUS" |
+        sed -n 's/^TF1_BACKUP_REASON=//p'
+    )"
+
+    if [ "$DUE" != "1" ]; then
+        echo "AUTO_SYNC=SKIP"
+        echo "REASON=$REASON"
+        return 0
+    fi
+
+    #
+    # Caller invokes this only while the gaming stack is idle.
+    #
+    sync_tf2_to_tf1
+
+    echo "AUTO_SYNC=PASS"
+}
+
+set_storage_mode()
+{
+    MODE="$1"
+
+    case "$MODE" in
+        SINGLE|AUTO|DUAL)
+            ;;
+        *)
+            die "invalid storage mode: $MODE"
+            ;;
+    esac
+
+    CONF=/state/config/nuubos.conf
+    TMP="$CONF.tmp.$$"
+
+    awk '
+        !/^STORAGE_MODE=/
+    ' "$CONF" > "$TMP" ||
+        die "unable to prepare storage configuration"
+
+    printf 'STORAGE_MODE=%s\n' "$MODE" >> "$TMP"
+
+    mv "$TMP" "$CONF" ||
+        die "unable to update storage mode"
+
+    sync
+}
+
+change_storage_mode()
+{
+    MODE="$1"
+
+    set_storage_mode "$MODE"
+
+    /etc/init.d/S05nuubos-storage restart ||
+        die "unable to apply storage mode"
+
+    echo "STORAGE_MODE_SET=$MODE"
+    echo "ACTIVE_STORAGE=$(status_value ACTIVE_STORAGE)"
+    echo "STORAGE_READY=$(status_value STORAGE_READY)"
+    echo "TF2_STATE=$(status_value TF2_STATE)"
+}
+
+move_back_to_tf1()
+{
+    #
+    # sync_tf2_to_tf1 performs all source, capacity and content
+    # verification before the selector is changed.
+    #
+    sync_tf2_to_tf1
+
+    set_storage_mode SINGLE
+
+    /etc/init.d/S05nuubos-storage restart ||
+        die "unable to activate TF1 after synchronization"
+
+    [ "$(status_value STORAGE_MODE)" = "SINGLE" ] ||
+        die "storage selector did not enter SINGLE mode"
+
+    [ "$(status_value ACTIVE_STORAGE)" = "TF1" ] ||
+        die "TF1 did not become active"
+
+    [ "$(status_value STORAGE_READY)" = "1" ] ||
+        die "TF1 storage is not ready"
+
+    ACTIVE_SOURCE="$(
+        awk '
+            $2 == "/userdata" {
+                source=$1
+            }
+
+            END {
+                print source
+            }
+        ' /proc/mounts
+    )"
+
+    [ "$ACTIVE_SOURCE" = "$(status_value TF1_DEVICE)" ] ||
+        die "/userdata did not switch to TF1"
+
+    echo
+    echo "MOVE_BACK=PASS"
+    echo "ACTIVE_STORAGE=TF1"
+    echo "TF2_STATE=$(status_value TF2_STATE)"
+}
+
+usage()
+{
+    cat <<EOF2
+Usage:
+  nuubos-storagectl status
+  nuubos-storagectl storage-mode <SINGLE|AUTO|DUAL>
+
+  nuubos-storagectl preflight-adopt-tf2 <TF2-CID>
+  nuubos-storagectl adopt-tf2 --confirm-erase-cid <TF2-CID>
+
+  nuubos-storagectl sync-to-tf1
+  nuubos-storagectl move-back-to-tf1
+
+  nuubos-storagectl backup-status
+  nuubos-storagectl backup-policy <OFF|DAILY|WEEKLY|MONTHLY>
+  nuubos-storagectl auto-sync
+
+'adopt-tf2' permanently erases all data on TF2.
+
+'move-back-to-tf1' preserves TF2 and switches active USERDATA
+to the synchronized TF1 copy.
+
+'auto-sync' never schedules itself. It must be invoked only while
+the gaming stack is idle.
+EOF2
+}
+
+case "${1:-}" in
+    status)
+        [ -r "$STATUS_FILE" ] ||
+            die "storage status unavailable"
+
+        cat "$STATUS_FILE"
+        ;;
+
+    storage-mode)
+        [ "$#" -eq 2 ] || {
+            usage
+            exit 2
+        }
+
+        change_storage_mode "$2"
+        ;;
+
+    preflight-adopt-tf2)
+        [ "$#" -eq 2 ] || {
+            usage
+            exit 2
+        }
+
+        preflight "$2"
+        ;;
+
+    adopt-tf2)
+        [ "$#" -eq 3 ] ||
+            die "explicit erase confirmation required"
+
+        [ "$2" = "--confirm-erase-cid" ] ||
+            die "explicit erase confirmation required"
+
+        adopt "$3"
+        ;;
+
+    sync-to-tf1)
+        [ "$#" -eq 1 ] || {
+            usage
+            exit 2
+        }
+
+        sync_tf2_to_tf1
+        ;;
+
+    move-back-to-tf1)
+        [ "$#" -eq 1 ] || {
+            usage
+            exit 2
+        }
+
+        move_back_to_tf1
+        ;;
+
+    backup-status)
+        [ "$#" -eq 1 ] || {
+            usage
+            exit 2
+        }
+
+        backup_status
+        ;;
+
+    backup-policy)
+        [ "$#" -eq 2 ] || {
+            usage
+            exit 2
+        }
+
+        set_backup_policy "$2"
+        ;;
+
+    auto-sync)
+        [ "$#" -eq 1 ] || {
+            usage
+            exit 2
+        }
+
+        auto_sync
+        ;;
+
+    *)
+        usage
+        exit 2
+        ;;
+esac

@@ -1,0 +1,120 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] allwinner: h616: support v1/v2 CPU idle states
+
+Add the consolidated H616 CPU-idle power-state handling used by the qualified nuubOS PSCI implementation.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+--- a/plat/allwinner/sun50i_h616/sunxi_power.c
++++ b/plat/allwinner/sun50i_h616/sunxi_power.c
+@@ -8,6 +8,8 @@
+ #include <errno.h>
+ #include <string.h>
+ 
++#include <platform_def.h>
++
+ #include <arch_helpers.h>
+ #include <common/debug.h>
+ #include <common/fdt_wrappers.h>
+@@ -269,15 +271,65 @@
+ 	}
+ }
+ 
+-void sunxi_cpu_power_off_self(void)
++#define SUNXI_CPUIDLE_VERSION_MASK	0x7U
++#define SUNXI_CPUIDLE_V1_CTRL_REG	(SUNXI_R_CPUCFG_BASE + 0x010c)
++
++static bool sunxi_cpuidle_is_v1(void)
+ {
+-	u_register_t mpidr = read_mpidr();
+-	unsigned int core  = MPIDR_AFFLVL0_VAL(mpidr);
++	/*
++	 * Allwinner's native firmware distinguishes the two CPUIDLE
++	 * controller generations using bits [2:0] of the SRAM version
++	 * register. plat_get_soc_revision() already reads that register.
++	 */
++	return (plat_get_soc_revision() & SUNXI_CPUIDLE_VERSION_MASK) == 0U;
++}
++
++void sunxi_cpuidle_init(void)
++{
++	unsigned int core;
++
++	/*
++	 * Generation-specific front-end setup observed in the vendor
++	 * sun50iw9 firmware.
++	 */
++	if (sunxi_cpuidle_is_v1()) {
++		mmio_setbits_32(SUNXI_CPUCFG_CLS_CTRL_REG0(0), BIT(24));
++	} else {
++		mmio_setbits_32(SUNXI_CPU_CTRL_REG(0), BIT(0));
++	}
+ 
+-	/* Enable the CPUIDLE hardware (only really needs to be done once). */
++	/* Common timing and CPUIDLE enable sequence. */
++	mmio_write_32(SUNXI_CONFIG_DELAY_REG, 0x18);
++	mmio_write_32(SUNXI_PWR_SW_DELAY_REG, 0x18);
+ 	mmio_write_32(SUNXI_CPUIDLE_EN_REG, 0x16aa0000);
+ 	mmio_write_32(SUNXI_CPUIDLE_EN_REG, 0xaa160001);
+ 
+-	/* Trigger power off for this core. */
+-	mmio_write_32(SUNXI_CORE_CLOSE_REG, BIT_32(core));
++	if (sunxi_cpuidle_is_v1()) {
++		/* V1 uses one shared per-core enable register. */
++		mmio_write_32(SUNXI_CPUIDLE_V1_CTRL_REG, 0xf);
++	} else {
++		/*
++		 * V2 uses one R-CPUCFG register per core.
++		 * Bit 4 enables the CPUIDLE path for that core.
++		 */
++		for (core = 0; core < PLATFORM_CORE_COUNT; ++core)
++			mmio_setbits_32(SUNXI_CPU_UNK_REG(core), BIT(4));
++	}
++}
++
++void sunxi_cpu_power_off_self(void)
++{
++	u_register_t mpidr = read_mpidr();
++	unsigned int core  = MPIDR_AFFLVL0_VAL(mpidr);
++
++	if (sunxi_cpuidle_is_v1()) {
++		/* V1 uses a shared core-close register. */
++		mmio_write_32(SUNXI_CORE_CLOSE_REG, BIT_32(core));
++	} else {
++		/*
++		 * V2 requests power-down through bit 8 of the
++		 * per-core R-CPUCFG register.
++		 */
++		mmio_setbits_32(SUNXI_CPU_UNK_REG(core), BIT(8));
++	}
+ }
+--- a/plat/allwinner/common/sunxi_pm.c
++++ b/plat/allwinner/common/sunxi_pm.c
+@@ -60,6 +60,15 @@
+ 		}
+ 	}
+ 
++#ifdef PLAT_sun50i_h616
++	/*
++	 * The H616/H700 CPUIDLE controller setup is global.  Initialise
++	 * it once before exposing the native PSCI operations; per-CPU
++	 * idle entry only needs to arm the local close request.
++	 */
++	sunxi_cpuidle_init();
++#endif
++
+ 	if (sunxi_set_scpi_psci_ops(psci_ops) == 0) {
+ 		INFO("PSCI: Suspend is available via SCPI\n");
+ 		psci_is_scpi = true;
+--- a/plat/allwinner/common/include/sunxi_private.h
++++ b/plat/allwinner/common/include/sunxi_private.h
+@@ -17,6 +17,9 @@
+ 
+ void sunxi_cpu_on(u_register_t mpidr);
+ void sunxi_cpu_power_off_others(void);
++#ifdef PLAT_sun50i_h616
++void sunxi_cpuidle_init(void);
++#endif
+ void sunxi_cpu_power_off_self(void);
+ void sunxi_power_down(void);
+ 

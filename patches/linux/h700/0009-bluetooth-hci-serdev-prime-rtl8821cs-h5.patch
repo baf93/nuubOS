@@ -1,0 +1,81 @@
+From: baf <oibaf.vallo@gmail.com>
+Subject: [PATCH] Bluetooth: hci_serdev: prime RTL8821CS H5 cold boot
+
+RTL8821CS can fail to reply to the initial H5 SYNC on cold boot even
+though the serdev UART is open and transmitting.
+
+For the RTL8821CS DT compatible only, configure the initial H5 UART
+settings, transmit and drain exactly one valid H5 SYNC frame, then
+close and reopen the serdev UART before normal H5 initialization.
+
+No delay, retry loop, delayed work, or additional GPIO sequencing is
+introduced.
+
+Signed-off-by: baf <oibaf.vallo@gmail.com>
+---
+diff --git a/drivers/bluetooth/hci_serdev.c b/drivers/bluetooth/hci_serdev.c
+--- a/drivers/bluetooth/hci_serdev.c
++++ b/drivers/bluetooth/hci_serdev.c
+@@ -13,6 +13,7 @@
+  */
+ 
+ #include <linux/kernel.h>
++#include <linux/of.h>
+ #include <linux/types.h>
+ #include <linux/serdev.h>
+ #include <linux/skbuff.h>
+@@ -318,6 +319,54 @@ int hci_uart_register_device_priv(struct hci_uart *hu,
+ 	if (err)
+ 		goto err_rwsem;
+ 
++	/*
++	 * RTL8821CS cold-boot quirk: send and drain one valid H5 SYNC frame
++	 * before h5_open() can initialize or transmit anything.
++	 */
++	if (of_device_is_compatible(hu->serdev->dev.of_node,
++				    "realtek,rtl8821cs-bt")) {
++		/*
++		 * h5_prepare_pkt(HCI_3WIRE_LINK_PKT, { 0x01, 0x7e }, 2)
++		 * with initial ack/seq state and CRC disabled produces checksum
++		 * 0xd0, used below.
++		 */
++		static const u8 h5_sync_wire[] = {
++			0xc0, 0x00, 0x2f, 0x00, 0xd0, 0x01, 0x7e, 0xc0,
++		};
++		ssize_t written;
++
++		serdev_device_set_flow_control(hu->serdev, false);
++		serdev_device_set_parity(hu->serdev, SERDEV_PARITY_EVEN);
++		serdev_device_set_baudrate(hu->serdev, 115200);
++
++		dev_info(&hu->serdev->dev,
++			 "RTL8821CS H5 priming SYNC (%zu bytes): %*ph\n",
++			 sizeof(h5_sync_wire), (int)sizeof(h5_sync_wire),
++			 h5_sync_wire);
++
++		written = serdev_device_write_buf(hu->serdev, h5_sync_wire,
++						  sizeof(h5_sync_wire));
++		if (written != sizeof(h5_sync_wire)) {
++			err = written < 0 ? written : -EIO;
++			dev_err(&hu->serdev->dev,
++				"RTL8821CS H5 priming SYNC write returned %zd\n",
++				written);
++			goto err_open;
++		}
++
++		serdev_device_wait_until_sent(hu->serdev, 0);
++		dev_info(&hu->serdev->dev,
++			 "RTL8821CS H5 priming SYNC TX completed (%zu bytes)\n",
++			 sizeof(h5_sync_wire));
++
++		serdev_device_close(hu->serdev);
++		err = serdev_device_open(hu->serdev);
++		if (err)
++			goto err_rwsem;
++		dev_info(&hu->serdev->dev,
++			 "RTL8821CS H5 cold-boot priming complete\n");
++	}
++
+ 	err = p->open(hu);
+ 	if (err)
+ 		goto err_open;

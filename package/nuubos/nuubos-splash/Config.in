@@ -1,0 +1,6 @@
+config BR2_PACKAGE_NUUBOS_SPLASH
+	bool "nuubOS early splash"
+	depends on BR2_PACKAGE_LIBDRM
+	help
+	  Lightweight DRM/KMS splash renderer used during boot,
+	  restart and poweroff for the early graphics bring-up.

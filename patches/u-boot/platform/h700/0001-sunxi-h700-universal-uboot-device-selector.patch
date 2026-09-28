@@ -1,0 +1,31 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] sunxi: h700: add universal U-Boot device selector
+
+Use the RG35XX Plus DTS as the single internal U-Boot control DT while
+keeping product/Linux DT selection runtime-driven after DRAM init.
+
+Read DEVICE from nuubos.cfg on NUUBOS_BOOT during PREBOOT and map each
+supported H700 product identifier to its Linux fdtfile. Missing or
+unsupported DEVICE values retain an intentionally invalid fdtfile so
+boot fails closed instead of selecting an arbitrary board DT.
+
+Keep DRAM selection independent and vendor/strap-driven in SPL.
+Disable the interactive boot delay for the production boot path.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+
+---
+diff --git a/configs/anbernic_rg35xx_h700_defconfig b/configs/anbernic_rg35xx_h700_defconfig
+index 6a28558..992d783 100644
+--- a/configs/anbernic_rg35xx_h700_defconfig
++++ b/configs/anbernic_rg35xx_h700_defconfig
+@@ -1,6 +1,8 @@
+ CONFIG_ARM=y
+ CONFIG_ARCH_SUNXI=y
+-CONFIG_DEFAULT_DEVICE_TREE="allwinner/sun50i-h700-anbernic-rg35xx-2024"
++CONFIG_DEFAULT_DEVICE_TREE="allwinner/sun50i-h700-anbernic-rg35xx-plus"
++CONFIG_PREBOOT="setenv DEVICE; setenv fdtfile __nuubos_invalid_device__.dtb; if fatload mmc 0:2 ${kernel_addr_r} nuubos.cfg; then env import -t ${kernel_addr_r} ${filesize}; fi; if test x${DEVICE} = xrg-sp; then setenv fdtfile sun50i-h700-anbernic-rg-sp.dtb; elif test x${DEVICE} = xrg28xx; then setenv fdtfile sun50i-h700-anbernic-rg28xx.dtb; elif test x${DEVICE} = xrg34xx; then setenv fdtfile sun50i-h700-anbernic-rg34xx.dtb; elif test x${DEVICE} = xrg34xx-sp; then setenv fdtfile sun50i-h700-anbernic-rg34xx-sp.dtb; elif test x${DEVICE} = xrg34xx-sp-v2; then setenv fdtfile sun50i-h700-anbernic-rg34xx-sp-v2-panel.dtb; elif test x${DEVICE} = xrg35xx-2024; then setenv fdtfile sun50i-h700-anbernic-rg35xx-2024.dtb; elif test x${DEVICE} = xrg35xx-2024-v6; then setenv fdtfile sun50i-h700-anbernic-rg35xx-2024-rev6-panel.dtb; elif test x${DEVICE} = xrg35xx-h; then setenv fdtfile sun50i-h700-anbernic-rg35xx-h.dtb; elif test x${DEVICE} = xrg35xx-h-v6; then setenv fdtfile sun50i-h700-anbernic-rg35xx-h-rev6-panel.dtb; elif test x${DEVICE} = xrg35xx-plus; then setenv fdtfile sun50i-h700-anbernic-rg35xx-plus.dtb; elif test x${DEVICE} = xrg35xx-plus-v6; then setenv fdtfile sun50i-h700-anbernic-rg35xx-plus-rev6-panel.dtb; elif test x${DEVICE} = xrg35xx-pro; then setenv fdtfile sun50i-h700-anbernic-rg35xx-pro.dtb; elif test x${DEVICE} = xrg35xx-sp; then setenv fdtfile sun50i-h700-anbernic-rg35xx-sp.dtb; elif test x${DEVICE} = xrg35xx-sp-v2; then setenv fdtfile sun50i-h700-anbernic-rg35xx-sp-v2-panel.dtb; elif test x${DEVICE} = xrg40xx-h; then setenv fdtfile sun50i-h700-anbernic-rg40xx-h.dtb; elif test x${DEVICE} = xrg40xx-h-v2; then setenv fdtfile sun50i-h700-anbernic-rg40xx-h-v2-panel.dtb; elif test x${DEVICE} = xrg40xx-v; then setenv fdtfile sun50i-h700-anbernic-rg40xx-v.dtb; elif test x${DEVICE} = xrg40xx-v-v2; then setenv fdtfile sun50i-h700-anbernic-rg40xx-v-v2-panel.dtb; elif test x${DEVICE} = xrgcubexx; then setenv fdtfile sun50i-h700-anbernic-rgcubexx.dtb; else echo nuubOS: DEVICE missing or unsupported; echo nuubOS: edit nuubos.cfg on NUUBOS_BOOT; fi; echo nuubOS: DEVICE=${DEVICE}; echo nuubOS: FDT=${fdtfile}"
++CONFIG_BOOTDELAY=0
+ CONFIG_DRAM_CLK=672
+ CONFIG_SPL=y
+ CONFIG_DRAM_SUNXI_DX_ODT=0x08080808

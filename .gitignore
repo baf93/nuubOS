@@ -1,0 +1,50 @@
+# Build outputs
+output/
+build/
+dl/
+cache/
+tmp/
+
+# External source trees / generated sources
+external/linux/
+external/buildroot/
+external/u-boot/
+
+# Tool caches
+.ccache/
+.vscode/.ropeproject/
+__pycache__/
+*.pyc
+
+# Editor / OS
+.vscode/settings.local.json
+.DS_Store
+*~
+*.swp
+
+# nuubOS Buildroot output
+/output/
+
+# External upstream/reference repositories
+/external/
+
+# Local/private development configuration
+/local/
+
+# Build logs
+*.log
+
+# Secrets / keys
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Root filesystem images
+*.ext2
+*.ext4
+*.img
+
+# Docker development state
+.docker-home/
+.cache/nuubos/

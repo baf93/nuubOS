@@ -1,0 +1,431 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] input: add RG35XX Pro haptics and power LED coordinator
+
+Add a dedicated coordinator for the RG35XX Pro, where PWM2 is shared
+between the internal vibration motor and the power LED.
+
+At runtime PWM2 drives the vibration motor on PH2 while the power LED
+on PI12 is GPIO-controlled. During suspend, pin ownership is switched
+so PWM2 drives the suspend LED on PI12 and PH2 is released as GPIO
+input.
+
+The board wiring and pinctrl states are described directly by the final
+RG35XX Pro device tree; keep this patch limited to the driver itself.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+--- a/drivers/input/misc/Kconfig
++++ b/drivers/input/misc/Kconfig
+@@ -647,6 +647,14 @@
+ 	  To compile this driver as a module, choose M here: the module will be
+ 	  called pwm-beeper.
+ 
++config INPUT_RG35XX_PRO_HAPTICS
++	bool "Anbernic RG35XX Pro haptics and power LED"
++	depends on ARCH_SUNXI && OF && PWM && GPIOLIB && LEDS_CLASS
++	select INPUT_FF_MEMLESS
++	help
++	  Coordinate the RG35XX Pro vibration motor and power LED.
++	  Both functions share PWM2 through different physical pins.
++
+ config INPUT_PWM_VIBRA
+ 	tristate "PWM vibrator support"
+ 	depends on PWM
+--- a/drivers/input/misc/Makefile
++++ b/drivers/input/misc/Makefile
+@@ -69,6 +69,7 @@
+ obj-$(CONFIG_INPUT_POWERMATE)		+= powermate.o
+ obj-$(CONFIG_INPUT_PWM_BEEPER)		+= pwm-beeper.o
+ obj-$(CONFIG_INPUT_PWM_VIBRA)		+= pwm-vibra.o
++obj-$(CONFIG_INPUT_RG35XX_PRO_HAPTICS)	+= rg35xx-pro-haptics.o
+ obj-$(CONFIG_INPUT_QNAP_MCU)		+= qnap-mcu-input.o
+ obj-$(CONFIG_INPUT_RAVE_SP_PWRBUTTON)	+= rave-sp-pwrbutton.o
+ obj-$(CONFIG_INPUT_RB532_BUTTON)	+= rb532_button.o
+--- /dev/null
++++ b/drivers/input/misc/rg35xx-pro-haptics.c
+@@ -0,0 +1,385 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Anbernic RG35XX Pro internal haptics / power LED coordinator.
++ *
++ * PWM2 is shared by two physical outputs:
++ *
++ * runtime:
++ *   PH2  -> PWM2 -> vibration motor
++ *   PI12 -> GPIO -> power LED
++ *
++ * suspend:
++ *   PH2  -> GPIO input
++ *   PI12 -> PWM2 -> suspend LED
++ */
++
++#include <linux/gpio/consumer.h>
++#include <linux/input.h>
++#include <linux/leds.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/pinctrl/consumer.h>
++#include <linux/platform_device.h>
++#include <linux/pwm.h>
++#include <linux/workqueue.h>
++
++#define RG35XX_PRO_RUMBLE_PERIOD_NS	1000000ULL
++#define RG35XX_PRO_SLEEP_PERIOD_NS	2500000000ULL
++#define RG35XX_PRO_SLEEP_DUTY_NS		1250000000ULL
++
++struct rg35xx_pro_haptics {
++	struct device *dev;
++	struct pwm_device *pwm;
++	struct gpio_desc *power_led;
++
++	struct input_dev *input;
++	struct led_classdev led;
++
++	struct work_struct play_work;
++	struct mutex lock;
++
++	u16 level;
++	bool led_on;
++	bool suspended;
++};
++
++static int rg35xx_pro_pwm_off(struct rg35xx_pro_haptics *h)
++{
++	struct pwm_state state;
++
++	pwm_get_state(h->pwm, &state);
++	state.enabled = false;
++
++	return pwm_apply_might_sleep(h->pwm, &state);
++}
++
++static int rg35xx_pro_rumble_apply(struct rg35xx_pro_haptics *h)
++{
++	struct pwm_state state;
++
++	pwm_get_state(h->pwm, &state);
++	state.period = RG35XX_PRO_RUMBLE_PERIOD_NS;
++
++	if (!h->level) {
++		state.duty_cycle = 0;
++		state.enabled = false;
++	} else {
++		pwm_set_relative_duty_cycle(&state, h->level, 0xffff);
++		state.enabled = true;
++	}
++
++	return pwm_apply_might_sleep(h->pwm, &state);
++}
++
++static int rg35xx_pro_suspend_led_start(struct rg35xx_pro_haptics *h)
++{
++	struct pwm_state state;
++
++	pwm_get_state(h->pwm, &state);
++	state.period = RG35XX_PRO_SLEEP_PERIOD_NS;
++	state.duty_cycle = RG35XX_PRO_SLEEP_DUTY_NS;
++	state.enabled = true;
++
++	return pwm_apply_might_sleep(h->pwm, &state);
++}
++
++static int rg35xx_pro_led_gpio_get(struct rg35xx_pro_haptics *h)
++{
++	struct gpio_desc *gpio;
++
++	gpio = gpiod_get(h->dev, "power-led",
++			 h->led_on ? GPIOD_OUT_HIGH : GPIOD_OUT_LOW);
++	if (IS_ERR(gpio))
++		return PTR_ERR(gpio);
++
++	h->power_led = gpio;
++	return 0;
++}
++
++static void rg35xx_pro_led_gpio_put(struct rg35xx_pro_haptics *h)
++{
++	if (!h->power_led)
++		return;
++
++	gpiod_put(h->power_led);
++	h->power_led = NULL;
++}
++
++static void rg35xx_pro_play_work(struct work_struct *work)
++{
++	struct rg35xx_pro_haptics *h =
++		container_of(work, struct rg35xx_pro_haptics, play_work);
++	int ret;
++
++	mutex_lock(&h->lock);
++
++	if (!h->suspended) {
++		ret = rg35xx_pro_rumble_apply(h);
++		if (ret)
++			dev_err(h->dev, "failed to apply rumble PWM: %d\n", ret);
++	}
++
++	mutex_unlock(&h->lock);
++}
++
++static int rg35xx_pro_play_effect(struct input_dev *input, void *data,
++				  struct ff_effect *effect)
++{
++	struct rg35xx_pro_haptics *h = input_get_drvdata(input);
++
++	mutex_lock(&h->lock);
++
++	h->level = effect->u.rumble.strong_magnitude;
++	if (!h->level)
++		h->level = effect->u.rumble.weak_magnitude;
++
++	mutex_unlock(&h->lock);
++
++	schedule_work(&h->play_work);
++
++	return 0;
++}
++
++static void rg35xx_pro_input_close(struct input_dev *input)
++{
++	struct rg35xx_pro_haptics *h = input_get_drvdata(input);
++
++	cancel_work_sync(&h->play_work);
++
++	mutex_lock(&h->lock);
++
++	h->level = 0;
++	if (!h->suspended)
++		rg35xx_pro_pwm_off(h);
++
++	mutex_unlock(&h->lock);
++}
++
++static int rg35xx_pro_led_set(struct led_classdev *led,
++			      enum led_brightness brightness)
++{
++	struct rg35xx_pro_haptics *h =
++		container_of(led, struct rg35xx_pro_haptics, led);
++
++	mutex_lock(&h->lock);
++
++	h->led_on = brightness != LED_OFF;
++
++	if (!h->suspended && h->power_led)
++		gpiod_set_value_cansleep(h->power_led, h->led_on);
++
++	mutex_unlock(&h->lock);
++
++	return 0;
++}
++
++static int rg35xx_pro_restore_runtime(struct rg35xx_pro_haptics *h)
++{
++	int ret;
++
++	ret = rg35xx_pro_pwm_off(h);
++	if (ret)
++		return ret;
++
++	ret = pinctrl_pm_select_default_state(h->dev);
++	if (ret)
++		return ret;
++
++	ret = rg35xx_pro_led_gpio_get(h);
++	if (ret)
++		return ret;
++
++	h->suspended = false;
++
++	return 0;
++}
++
++static int rg35xx_pro_suspend(struct device *dev)
++{
++	struct rg35xx_pro_haptics *h = dev_get_drvdata(dev);
++	int ret;
++
++	cancel_work_sync(&h->play_work);
++
++	mutex_lock(&h->lock);
++
++	h->suspended = true;
++	h->level = 0;
++
++	ret = rg35xx_pro_pwm_off(h);
++	if (ret)
++		goto out_active;
++
++	/*
++	 * The sunxi pinctrl driver uses strict ownership. Release PI12
++	 * as GPIO before selecting the state that routes PWM2 to PI12.
++	 */
++	rg35xx_pro_led_gpio_put(h);
++
++	ret = pinctrl_pm_select_sleep_state(dev);
++	if (ret)
++		goto restore;
++
++	ret = rg35xx_pro_suspend_led_start(h);
++	if (ret)
++		goto restore;
++
++	mutex_unlock(&h->lock);
++	return 0;
++
++restore:
++	if (rg35xx_pro_restore_runtime(h))
++		dev_err(dev, "failed to restore runtime state\n");
++
++	mutex_unlock(&h->lock);
++	return ret;
++
++out_active:
++	h->suspended = false;
++	mutex_unlock(&h->lock);
++	return ret;
++}
++
++static int rg35xx_pro_resume(struct device *dev)
++{
++	struct rg35xx_pro_haptics *h = dev_get_drvdata(dev);
++	int ret;
++
++	mutex_lock(&h->lock);
++
++	ret = rg35xx_pro_restore_runtime(h);
++	if (ret)
++		dev_err(dev, "failed to restore runtime state: %d\n", ret);
++
++	mutex_unlock(&h->lock);
++
++	return ret;
++}
++
++static DEFINE_SIMPLE_DEV_PM_OPS(rg35xx_pro_pm_ops,
++				rg35xx_pro_suspend,
++				rg35xx_pro_resume);
++
++static void rg35xx_pro_cleanup(void *data)
++{
++	struct rg35xx_pro_haptics *h = data;
++
++	cancel_work_sync(&h->play_work);
++	rg35xx_pro_led_gpio_put(h);
++}
++
++static int rg35xx_pro_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct rg35xx_pro_haptics *h;
++	struct pwm_state state;
++	int ret;
++
++	h = devm_kzalloc(dev, sizeof(*h), GFP_KERNEL);
++	if (!h)
++		return -ENOMEM;
++
++	h->dev = dev;
++	h->led_on = true;
++
++	mutex_init(&h->lock);
++	INIT_WORK(&h->play_work, rg35xx_pro_play_work);
++
++	h->pwm = devm_pwm_get(dev, "enable");
++	if (IS_ERR(h->pwm))
++		return dev_err_probe(dev, PTR_ERR(h->pwm),
++				     "failed to request PWM2\n");
++
++	pwm_init_state(h->pwm, &state);
++	state.enabled = false;
++
++	ret = pwm_apply_might_sleep(h->pwm, &state);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "failed to initialize PWM2\n");
++
++	ret = rg35xx_pro_led_gpio_get(h);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "failed to request PI12 power LED\n");
++
++	ret = devm_add_action_or_reset(dev, rg35xx_pro_cleanup, h);
++	if (ret)
++		return ret;
++
++	h->led.name = "green:power";
++	h->led.max_brightness = 1;
++	h->led.brightness = 1;
++	h->led.brightness_set_blocking = rg35xx_pro_led_set;
++
++	ret = devm_led_classdev_register(dev, &h->led);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "failed to register power LED\n");
++
++	h->input = devm_input_allocate_device(dev);
++	if (!h->input)
++		return -ENOMEM;
++
++	h->input->name = "pwm-vibrator";
++	h->input->id.bustype = BUS_HOST;
++	h->input->dev.parent = dev;
++	h->input->close = rg35xx_pro_input_close;
++
++	input_set_drvdata(h->input, h);
++	input_set_capability(h->input, EV_FF, FF_RUMBLE);
++
++	ret = input_ff_create_memless(h->input, NULL,
++				      rg35xx_pro_play_effect);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "failed to create FF device\n");
++
++	ret = input_register_device(h->input);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "failed to register FF device\n");
++
++	platform_set_drvdata(pdev, h);
++
++	dev_info(dev, "rumble/power-LED coordinator ready\n");
++
++	return 0;
++}
++
++static void rg35xx_pro_shutdown(struct platform_device *pdev)
++{
++	struct rg35xx_pro_haptics *h = platform_get_drvdata(pdev);
++
++	cancel_work_sync(&h->play_work);
++
++	mutex_lock(&h->lock);
++
++	rg35xx_pro_pwm_off(h);
++
++	if (h->power_led)
++		gpiod_set_value_cansleep(h->power_led, 0);
++
++	mutex_unlock(&h->lock);
++}
++
++static const struct of_device_id rg35xx_pro_of_match[] = {
++	{ .compatible = "anbernic,rg35xx-pro-haptics" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, rg35xx_pro_of_match);
++
++static struct platform_driver rg35xx_pro_driver = {
++	.probe = rg35xx_pro_probe,
++	.shutdown = rg35xx_pro_shutdown,
++	.driver = {
++		.name = "rg35xx-pro-haptics",
++		.pm = pm_sleep_ptr(&rg35xx_pro_pm_ops),
++		.of_match_table = rg35xx_pro_of_match,
++	},
++};
++module_platform_driver(rg35xx_pro_driver);
++
++MODULE_DESCRIPTION("Anbernic RG35XX Pro rumble and power LED coordinator");
++MODULE_LICENSE("GPL");

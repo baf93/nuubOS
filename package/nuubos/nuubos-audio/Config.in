@@ -1,0 +1,11 @@
+config BR2_PACKAGE_NUUBOS_AUDIO
+	bool "nuubOS audio routing service"
+	select BR2_PACKAGE_ALSA_LIB
+	select BR2_PACKAGE_DBUS
+	select BR2_PACKAGE_BLUEZ_ALSA
+	help
+	  nuubOS platform audio policy service.
+
+	  Provides automatic and manual audio output selection,
+	  per-output volume state, runtime status and the frontend
+	  nuubos-audioctl interface.

@@ -1,0 +1,23 @@
+#!/bin/sh
+
+LOGFILE=/run/nuubos/splash.log
+
+case "${1:-}" in
+    start|restart)
+        mkdir -p /run/nuubos
+        rm -f /run/nuubos/splash.pid
+
+        if [ ! -c /dev/fb0 ]; then
+            echo "nuubOS: /dev/fb0 unavailable for early splash" >"$LOGFILE"
+            exit 1
+        fi
+
+        /usr/bin/nuubos-splash boot >"$LOGFILE" 2>&1
+        ;;
+    stop)
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}" >&2
+        exit 1
+        ;;
+esac

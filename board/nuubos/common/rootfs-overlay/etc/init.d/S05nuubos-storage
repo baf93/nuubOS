@@ -1,0 +1,831 @@
+#!/bin/sh
+
+. /usr/lib/nuubos/exfat-health.sh
+. /usr/lib/nuubos/userdata.sh
+
+STATUS_DIR=/run/nuubos/storage
+STATUS_FILE="$STATUS_DIR/tf2.status"
+READY_FILE="$STATUS_DIR/ready"
+
+TF1_VIEW="$STATUS_DIR/tf1"
+TF2_VIEW="$STATUS_DIR/tf2"
+INSPECT="$STATUS_DIR/tf2-inspect"
+
+USERDATA_USER_VIEW=/run/nuubos/userdata
+ACTIVE_USER_FILE=/run/nuubos/user/active
+
+TF2=/dev/mmcblk2
+TF2_P1=/dev/mmcblk2p1
+
+OWNED_LABEL=NUUBOS_DATA
+OWNED_VERSION=2
+OWNED_ROLE=SECONDARY
+
+log()
+{
+    echo "nuubOS storage: $*" >&2
+}
+
+storage_mode()
+{
+    CONF=/state/config/nuubos.conf
+
+    COUNT="$(
+        awk -F= '
+            $1 == "STORAGE_MODE" {
+                count++
+            }
+
+            END {
+                print count + 0
+            }
+        ' "$CONF" 2>/dev/null
+    )"
+
+    if [ "$COUNT" != "1" ]; then
+        log "invalid STORAGE_MODE cardinality: ${COUNT:-0}, using SINGLE"
+        printf '%s\n' SINGLE
+        return 0
+    fi
+
+    MODE="$(
+        sed -n 's/^STORAGE_MODE=//p' "$CONF"
+    )"
+
+    case "$MODE" in
+        AUTO|SINGLE|DUAL)
+            printf '%s\n' "$MODE"
+            ;;
+        *)
+            log "invalid STORAGE_MODE '${MODE:-missing}', using SINGLE"
+            printf '%s\n' SINGLE
+            ;;
+    esac
+}
+
+tf1_device()
+{
+    ROOT_DEV="$(
+        sed -n 's/.*root=\([^ ]*\).*/\1/p' \
+            /proc/cmdline 2>/dev/null
+    )"
+
+    case "$ROOT_DEV" in
+        /dev/mmcblk*p1)
+            printf '%sp4\n' "${ROOT_DEV%p1}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+tf2_cid()
+{
+    for card in /sys/class/mmc_host/mmc2/mmc2:*; do
+        [ -r "$card/cid" ] || continue
+        cat "$card/cid"
+        return 0
+    done
+
+    return 1
+}
+
+partition_count()
+{
+    COUNT=0
+
+    for p in "${TF2}"p*; do
+        [ -b "$p" ] || continue
+        COUNT=$((COUNT + 1))
+    done
+
+    printf '%s\n' "$COUNT"
+}
+
+partition_table_type()
+{
+    blkid -s PTTYPE -o value "$TF2" 2>/dev/null || true
+}
+
+mounted_source()
+{
+    TARGET="$1"
+
+    awk -v m="$TARGET" '
+        $2 == m {
+            source=$1
+        }
+
+        END {
+            if (source != "")
+                print source
+        }
+    ' /proc/mounts
+}
+
+userdata_source()
+{
+    mounted_source /userdata
+}
+
+ensure_tf1_view()
+{
+    TF1="$1"
+
+    CURRENT="$(mounted_source "$TF1_VIEW")"
+
+    if [ "$CURRENT" = "$TF1" ]; then
+        return 0
+    fi
+
+    if [ -n "$CURRENT" ]; then
+        umount "$TF1_VIEW" || return 1
+    fi
+
+    mkdir -p "$TF1_VIEW"
+
+    mount --bind /userdata "$TF1_VIEW" || return 1
+
+    [ "$(mounted_source "$TF1_VIEW")" = "$TF1" ]
+}
+
+restore_tf1()
+{
+    TF1="$1"
+    CURRENT="$(userdata_source)"
+
+    if [ "$CURRENT" = "$TF1" ]; then
+        return 0
+    fi
+
+    if [ "$CURRENT" = "$TF2_P1" ]; then
+        umount /userdata || return 1
+        CURRENT="$(userdata_source)"
+    fi
+
+    #
+    # DUAL can intentionally leave /userdata unmounted while TF1 remains
+    # available through the stable TF1 view. Rebind that verified view when
+    # returning to SINGLE/AUTO or when restarting the selector.
+    #
+    if [ -z "$CURRENT" ]; then
+        SOURCE="$(mounted_source "$TF1_VIEW")"
+
+        [ "$SOURCE" = "$TF1" ] || return 1
+
+        mkdir -p /userdata
+        mount --bind "$TF1_VIEW" /userdata || return 1
+
+        CURRENT="$(userdata_source)"
+    fi
+
+    [ "$CURRENT" = "$TF1" ]
+}
+
+deactivate_userdata()
+{
+    TF1="$1"
+    CURRENT="$(userdata_source)"
+
+    [ -n "$CURRENT" ] || return 0
+
+    case "$CURRENT" in
+        "$TF1"|"$TF2_P1")
+            umount /userdata || return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    [ -z "$(userdata_source)" ]
+}
+
+unmount_tf2_view()
+{
+    CURRENT="$(mounted_source "$TF2_VIEW")"
+
+    if [ -n "$CURRENT" ]; then
+        umount "$TF2_VIEW" || return 1
+    fi
+
+    return 0
+}
+
+unmount_tf1_view()
+{
+    CURRENT="$(mounted_source "$TF1_VIEW")"
+
+    if [ -n "$CURRENT" ]; then
+        umount "$TF1_VIEW" || return 1
+    fi
+
+    return 0
+}
+
+
+unpublish_user_view()
+{
+    if awk -v m="$USERDATA_USER_VIEW" '
+        $2 == m {
+            found=1
+        }
+
+        END {
+            exit !found
+        }
+    ' /proc/mounts
+    then
+        umount "$USERDATA_USER_VIEW" || return 1
+    fi
+
+    rmdir "$USERDATA_USER_VIEW" 2>/dev/null || true
+    return 0
+}
+
+publish_user_view()
+{
+    READY="$(
+        sed -n 's/^STORAGE_READY=//p' \
+            "$STATUS_FILE" 2>/dev/null |
+        tail -1
+    )"
+
+    ACTIVE_STORAGE="$(
+        sed -n 's/^ACTIVE_STORAGE=//p' \
+            "$STATUS_FILE" 2>/dev/null |
+        tail -1
+    )"
+
+    #
+    # No usable USERDATA means there must be no stale user view.
+    #
+    if [ "$READY" != "1" ] ||
+       [ "$ACTIVE_STORAGE" = "NONE" ]; then
+
+        return 0
+    fi
+
+    #
+    # AUTO/SELECT with multiple profiles intentionally has no active user
+    # until nuubUI selects one.
+    #
+    [ -r "$ACTIVE_USER_FILE" ] || return 0
+
+    ACTIVE_USER_ID="$(cat "$ACTIVE_USER_FILE")"
+
+    [ -n "$ACTIVE_USER_ID" ] || return 1
+    [ -d "/state/users/$ACTIVE_USER_ID" ] || return 1
+
+    grep -qx \
+        "USER_ID=$ACTIVE_USER_ID" \
+        "/state/users/$ACTIVE_USER_ID/profile.conf" ||
+        return 1
+
+    #
+    # A newly-created profile may not exist yet on the selected USERDATA
+    # medium. Ensure all STATE profiles have their namespace here.
+    #
+    nuubos_userdata_prepare_users /userdata || return 1
+
+    USER_ROOT="/userdata/users/$ACTIVE_USER_ID"
+
+    [ -d "$USER_ROOT" ] || return 1
+
+    mkdir -p /run/nuubos "$USERDATA_USER_VIEW" || return 1
+
+    mount --bind \
+        "$USER_ROOT" \
+        "$USERDATA_USER_VIEW" ||
+        return 1
+
+    awk -v m="$USERDATA_USER_VIEW" '
+        $2 == m {
+            found=1
+        }
+
+        END {
+            exit !found
+        }
+    ' /proc/mounts
+}
+
+inspect_owned()
+{
+    #
+    # nuubOS-owned TF2 contract:
+    #
+    #   - exactly one partition
+    #   - partition is p1
+    #   - exFAT
+    #   - label NUUBOS_DATA
+    #   - valid nuubOS marker
+    #   - role SECONDARY
+    #   - marker CID matches physical SD CID
+    #   - marker UUID matches filesystem UUID
+    #
+    [ -b "$TF2_P1" ] || return 1
+    [ "$(partition_count)" = "1" ] || return 1
+
+    TYPE="$(
+        blkid -s TYPE -o value "$TF2_P1" 2>/dev/null || true
+    )"
+
+    LABEL="$(
+        blkid -s LABEL -o value "$TF2_P1" 2>/dev/null || true
+    )"
+
+    UUID="$(
+        blkid -s UUID -o value "$TF2_P1" 2>/dev/null || true
+    )"
+
+    CID="$(
+        tf2_cid 2>/dev/null || true
+    )"
+
+    [ "$TYPE" = "exfat" ] || return 1
+    [ "$LABEL" = "$OWNED_LABEL" ] || return 1
+    [ -n "$UUID" ] || return 1
+    [ -n "$CID" ] || return 1
+
+    mkdir -p "$INSPECT"
+
+    if ! mount \
+        -t exfat \
+        -o ro,nosuid,nodev,noexec \
+        "$TF2_P1" \
+        "$INSPECT"
+    then
+        rmdir "$INSPECT" 2>/dev/null || true
+        return 1
+    fi
+
+    OWNED=0
+
+    if [ -f "$INSPECT/.nuubos-userdata" ] &&
+       grep -qx \
+           "NUUBOS_USERDATA_VERSION=$OWNED_VERSION" \
+           "$INSPECT/.nuubos-userdata" &&
+       grep -qx \
+           "NUUBOS_STORAGE_ROLE=$OWNED_ROLE" \
+           "$INSPECT/.nuubos-userdata" &&
+       grep -qx \
+           "NUUBOS_STORAGE_CID=$CID" \
+           "$INSPECT/.nuubos-userdata" &&
+       grep -qx \
+           "NUUBOS_STORAGE_UUID=$UUID" \
+           "$INSPECT/.nuubos-userdata"
+    then
+        OWNED=1
+    fi
+
+    umount "$INSPECT" 2>/dev/null || true
+    rmdir "$INSPECT" 2>/dev/null || true
+
+    [ "$OWNED" -eq 1 ]
+}
+
+activate_tf2()
+{
+    mkdir -p "$TF2_VIEW"
+
+    unmount_tf2_view || return 1
+
+    mount \
+        -t exfat \
+        -o rw,noatime,uid=0,gid=0,fmask=0022,dmask=0022 \
+        "$TF2_P1" \
+        "$TF2_VIEW" ||
+        return 1
+
+    if ! mount --bind "$TF2_VIEW" /userdata; then
+        umount "$TF2_VIEW" 2>/dev/null || true
+        return 1
+    fi
+
+    [ "$(userdata_source)" = "$TF2_P1" ]
+}
+
+write_status()
+{
+    MODE="$1"
+    STATE="$2"
+    ACTION="$3"
+    PROMPT="$4"
+    ACTIVE="$5"
+    READY="$6"
+
+    CID="$(tf2_cid 2>/dev/null || true)"
+    PTTYPE="$(partition_table_type)"
+    PARTITIONS="$(partition_count)"
+
+    UUID=""
+    LABEL=""
+    TYPE=""
+    PARTITION=""
+
+    if [ "$STATE" = "OWNED" ]; then
+        PARTITION="$TF2_P1"
+
+        UUID="$(
+            blkid -s UUID -o value "$TF2_P1" 2>/dev/null || true
+        )"
+
+        LABEL="$(
+            blkid -s LABEL -o value "$TF2_P1" 2>/dev/null || true
+        )"
+
+        TYPE="$(
+            blkid -s TYPE -o value "$TF2_P1" 2>/dev/null || true
+        )"
+    fi
+
+    TF1_HEALTH="$(
+        nuubos_exfat_health_value             "$STATUS_DIR/tf1.health"             RESULT
+    )"
+
+    TF2_HEALTH="$(
+        nuubos_exfat_health_value             "$STATUS_DIR/tf2.health"             RESULT
+    )"
+
+    [ -n "$TF1_HEALTH" ] || TF1_HEALTH=UNKNOWN
+    [ -n "$TF2_HEALTH" ] || TF2_HEALTH=UNKNOWN
+
+    if [ "$READY" != "1" ]; then
+        STORAGE_HEALTH=FAILED
+    elif [ "$TF1_HEALTH" = "ERROR" ] ||
+         [ "$TF2_HEALTH" = "ERROR" ] ||
+         [ "$ACTION" != "NONE" ]; then
+        STORAGE_HEALTH=DEGRADED
+    else
+        STORAGE_HEALTH=OK
+    fi
+
+    TMP="$STATUS_FILE.tmp"
+
+    cat > "$TMP" <<EOF2
+STORAGE_MODE=$MODE
+ACTIVE_STORAGE=$ACTIVE
+STORAGE_READY=$READY
+STORAGE_HEALTH=$STORAGE_HEALTH
+TF1_HEALTH=$TF1_HEALTH
+TF2_HEALTH=$TF2_HEALTH
+TF1_DEVICE=$TF1
+TF2_STATE=$STATE
+TF2_DEVICE=$TF2
+TF2_PARTITION=$PARTITION
+TF2_CID=$CID
+TF2_PARTITION_COUNT=$PARTITIONS
+TF2_PTTYPE=$PTTYPE
+TF2_FS_TYPE=$TYPE
+TF2_LABEL=$LABEL
+TF2_UUID=$UUID
+ACTION_REQUIRED=$ACTION
+PROMPT_USER=$PROMPT
+EOF2
+
+    mv "$TMP" "$STATUS_FILE"
+
+    if [ "$READY" = "1" ]; then
+        : > "$READY_FILE"
+    else
+        rm -f "$READY_FILE"
+    fi
+}
+
+detect_and_select()
+{
+    mkdir -p "$STATUS_DIR"
+
+    rm -f "$STATUS_DIR/tf2.health"
+
+    TF1="$(tf1_device)" || {
+        log "unable to derive TF1 USERDATA device"
+        return 1
+    }
+
+    MODE="$(storage_mode)"
+
+    #
+    # A previous selector run may have TF2 active. Detach it before health
+    # qualification so TF2 can be checked while completely unmounted.
+    #
+    if [ "$(userdata_source)" = "$TF2_P1" ]; then
+        umount /userdata || {
+            log "unable to deactivate previous TF2 USERDATA"
+            return 1
+        }
+    fi
+
+    unmount_tf2_view || {
+        log "unable to clear previous TF2 mount"
+        return 1
+    }
+
+    TF1_HEALTH_STATE="$(
+        nuubos_exfat_health_value             "$STATUS_DIR/tf1.health"             RESULT
+    )"
+
+    [ -n "$TF1_HEALTH_STATE" ] || TF1_HEALTH_STATE=UNKNOWN
+
+    TF1_OK=0
+
+    case "$TF1_HEALTH_STATE" in
+        HEALTHY|REPAIRED)
+            if restore_tf1 "$TF1" &&
+               ensure_tf1_view "$TF1"; then
+                TF1_OK=1
+            else
+                log "TF1 health is good but USERDATA activation failed"
+
+                deactivate_userdata "$TF1" 2>/dev/null || true
+                unmount_tf1_view 2>/dev/null || true
+            fi
+            ;;
+
+        ERROR|UNKNOWN)
+            #
+            # Never leave a failed or unqualified TF1 mounted rw.
+            #
+            if ! deactivate_userdata "$TF1"; then
+                log "unable to deactivate unhealthy TF1 USERDATA"
+                return 1
+            fi
+
+            if ! unmount_tf1_view; then
+                log "unable to unmount unhealthy TF1 recovery view"
+                return 1
+            fi
+
+            log "TF1 USERDATA unavailable: health=$TF1_HEALTH_STATE"
+            ;;
+    esac
+
+    #
+    # SINGLE requires a healthy TF1.
+    #
+    if [ "$MODE" = "SINGLE" ] &&
+       [ "$TF1_OK" != "1" ]; then
+
+        if [ ! -b "$TF2" ]; then
+            STATE=ABSENT
+        elif inspect_owned; then
+            STATE=OWNED
+        else
+            STATE=FOREIGN
+        fi
+
+        write_status             "$MODE"             "$STATE"             REPAIR_TF1             1             NONE             0
+
+        log "SINGLE: TF1 unavailable"
+        return 0
+    fi
+
+    #
+    # SINGLE: always TF1.
+    #
+    if [ "$MODE" = "SINGLE" ]; then
+        if [ ! -b "$TF2" ]; then
+            write_status "$MODE" ABSENT NONE 0 TF1 1
+            log "SINGLE: TF1 active, TF2 absent"
+            return 0
+        fi
+
+        if inspect_owned; then
+            write_status "$MODE" OWNED NONE 0 TF1 1
+            log "SINGLE: TF1 active, owned TF2 ignored"
+        else
+            write_status "$MODE" FOREIGN NONE 0 TF1 1
+            log "SINGLE: TF1 active, foreign TF2 ignored"
+        fi
+
+        return 0
+    fi
+
+    #
+    # AUTO / DUAL: TF2 missing.
+    #
+    if [ ! -b "$TF2" ]; then
+        if [ "$TF1_OK" != "1" ]; then
+            write_status                 "$MODE"                 ABSENT                 REPAIR_TF1                 1                 NONE                 0
+
+            log "$MODE: TF1 unavailable and TF2 absent"
+            return 0
+        fi
+
+        if [ "$MODE" = "DUAL" ]; then
+            deactivate_userdata "$TF1" || {
+                log "DUAL: unable to deactivate TF1 USERDATA"
+                return 1
+            }
+
+            write_status "$MODE" ABSENT INSERT 1 NONE 0
+            log "DUAL: TF2 required but absent"
+        else
+            write_status "$MODE" ABSENT NONE 0 TF1 1
+            log "AUTO: TF2 absent, TF1 active"
+        fi
+
+        return 0
+    fi
+
+    #
+    # AUTO / DUAL: foreign TF2.
+    #
+    if ! inspect_owned; then
+        if [ "$TF1_OK" != "1" ]; then
+            write_status                 "$MODE"                 FOREIGN                 REPAIR_TF1                 1                 NONE                 0
+
+            log "$MODE: TF1 unavailable and TF2 foreign"
+            return 0
+        fi
+
+        if [ "$MODE" = "DUAL" ]; then
+            deactivate_userdata "$TF1" || {
+                log "DUAL: unable to deactivate TF1 USERDATA"
+                return 1
+            }
+
+            write_status "$MODE" FOREIGN FORMAT 1 NONE 0
+            log "DUAL: foreign TF2 requires format"
+        else
+            write_status "$MODE" FOREIGN FORMAT 1 TF1 1
+            log "AUTO: foreign TF2, TF1 active"
+        fi
+
+        return 0
+    fi
+
+    #
+    # AUTO / DUAL: owned TF2.
+    #
+    TF2_OK=1
+
+    if ! nuubos_exfat_prepare         "$TF2_P1"         "$STATUS_DIR/tf2.health"
+    then
+        TF2_OK=0
+    fi
+
+    #
+    # TF1 unavailable.
+    #
+    if [ "$TF1_OK" != "1" ]; then
+        deactivate_userdata "$TF1" 2>/dev/null || true
+        unmount_tf1_view 2>/dev/null || true
+        unmount_tf2_view 2>/dev/null || true
+
+        #
+        # Both storage devices require recovery.
+        #
+        if [ "$TF2_OK" != "1" ]; then
+            write_status                 "$MODE"                 OWNED                 STORAGE_RECOVERY                 1                 NONE                 0
+
+            log "$MODE: TF1 and TF2 unavailable"
+            return 0
+        fi
+
+        #
+        # DUAL explicitly requires the complete configured storage set.
+        #
+        if [ "$MODE" = "DUAL" ]; then
+            write_status                 "$MODE"                 OWNED                 REPAIR_TF1                 1                 NONE                 0
+
+            log "DUAL: TF1 unavailable, healthy TF2 not activated"
+            return 0
+        fi
+
+        #
+        # AUTO may safely continue from an owned and healthy TF2.
+        #
+        if activate_tf2; then
+            write_status                 "$MODE"                 OWNED                 REPAIR_TF1                 1                 TF2                 1
+
+            log "AUTO: TF1 unavailable, healthy TF2 active"
+        else
+            unmount_tf2_view 2>/dev/null || true
+
+            write_status                 "$MODE"                 OWNED                 STORAGE_RECOVERY                 1                 NONE                 0
+
+            log "AUTO: TF1 unavailable and TF2 activation failed"
+        fi
+
+        return 0
+    fi
+
+    #
+    # TF1 healthy, TF2 repair failed.
+    #
+    if [ "$TF2_OK" != "1" ]; then
+        restore_tf1 "$TF1" 2>/dev/null || true
+        unmount_tf2_view 2>/dev/null || true
+
+        if [ "$MODE" = "DUAL" ]; then
+            deactivate_userdata "$TF1" || {
+                log "DUAL: unable to deactivate TF1 USERDATA"
+                return 1
+            }
+
+            write_status                 "$MODE"                 OWNED                 REPAIR_TF2                 1                 NONE                 0
+
+            log "DUAL: owned TF2 filesystem repair failed"
+        else
+            write_status                 "$MODE"                 OWNED                 REPAIR_TF2                 1                 TF1                 1
+
+            log "AUTO: owned TF2 filesystem repair failed, TF1 active"
+        fi
+
+        return 0
+    fi
+
+    #
+    # Both filesystems healthy: activate TF2.
+    #
+    if activate_tf2; then
+        write_status "$MODE" OWNED NONE 0 TF2 1
+        log "$MODE: owned TF2 active"
+        return 0
+    fi
+
+    #
+    # Healthy TF2 but activation itself failed.
+    #
+    restore_tf1 "$TF1" 2>/dev/null || true
+    unmount_tf2_view 2>/dev/null || true
+
+    if [ "$MODE" = "DUAL" ]; then
+        deactivate_userdata "$TF1" || {
+            log "DUAL: unable to deactivate TF1 USERDATA"
+            return 1
+        }
+
+        write_status "$MODE" OWNED CHECK 1 NONE 0
+        log "DUAL: owned TF2 activation failed"
+    else
+        write_status "$MODE" OWNED CHECK 1 TF1 1
+        log "AUTO: owned TF2 activation failed, TF1 active"
+    fi
+
+    return 0
+
+}
+
+stop_storage()
+{
+    TF1="$(tf1_device 2>/dev/null || true)"
+
+    if [ -n "$TF1" ]; then
+        restore_tf1 "$TF1" 2>/dev/null || true
+    fi
+
+    unmount_tf2_view 2>/dev/null || true
+
+    CURRENT="$(mounted_source "$TF1_VIEW")"
+
+    if [ -n "$CURRENT" ]; then
+        umount "$TF1_VIEW" 2>/dev/null || true
+    fi
+
+    rm -f "$STATUS_FILE" "$READY_FILE"
+
+    rmdir "$TF2_VIEW" 2>/dev/null || true
+    rmdir "$TF1_VIEW" 2>/dev/null || true
+}
+
+
+start_storage()
+{
+    #
+    # A user bind referring to the previous active storage must never
+    # survive a TF1/TF2 selection or recovery transition.
+    #
+    unpublish_user_view || return 1
+
+    detect_and_select || return 1
+
+    publish_user_view || {
+        log "unable to publish active-user USERDATA view"
+        return 1
+    }
+
+    return 0
+}
+
+case "${1:-}" in
+    start)
+        start_storage
+        ;;
+    restart)
+        start_storage
+        ;;
+    stop)
+        unpublish_user_view || exit 1
+        stop_storage
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+
+exit $?

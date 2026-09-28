@@ -1,0 +1,19 @@
+#!/bin/sh
+
+case "${1:-}" in
+    stop)
+        if [ -r /run/nuubos/shutdown-mode ]; then
+            # Keep the compositor alive for as long as init allows. The
+            # visually identical fbdev fallback has already been prepared.
+            exit 0
+        fi
+
+        /usr/bin/nuubos-ui-stop
+        ;;
+    start|restart)
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}" >&2
+        exit 1
+        ;;
+esac

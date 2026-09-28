@@ -1,0 +1,41 @@
+#!/bin/sh
+
+DAEMON=/usr/sbin/nuubos-rgbd
+PIDFILE=/run/nuubos-rgbd.pid
+
+case "$1" in
+	start)
+		if ! "$DAEMON" --supported; then
+			exit 0
+		fi
+
+		mkdir -p /run/nuubos
+
+		start-stop-daemon \
+			-S -q -b -m \
+			-p "$PIDFILE" \
+			-x "$DAEMON"
+		;;
+
+	stop)
+		start-stop-daemon \
+			-K -q \
+			-p "$PIDFILE" \
+			-x "$DAEMON" \
+			2>/dev/null || true
+
+		rm -f "$PIDFILE" /run/nuubos/rgbd.sock
+		;;
+
+	restart)
+		"$0" stop
+		"$0" start
+		;;
+
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit 0

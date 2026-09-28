@@ -1,0 +1,8 @@
+#!/bin/sh
+
+mkdir -p /run/nuubos
+rm -f /run/nuubos/ui-ready /run/nuubos/ui-control
+mkfifo /run/nuubos/ui-control
+chmod 0600 /run/nuubos/ui-control
+
+exec /usr/bin/nuubui-home

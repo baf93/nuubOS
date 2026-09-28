@@ -1,0 +1,268 @@
+export component HomeWindow inherits Window {
+    /*
+     * Two-stage lifecycle transition.
+     *
+     * line-progress:
+     *   0 = branded separator line at its normal splash width
+     *   1 = line spans the complete screen width
+     *
+     * curtain-progress:
+     *   0 = lifecycle raster closed/full-screen
+     *   1 = top/bottom raster halves fully open off-screen
+     *
+     * Boot:
+     *   line 0 -> 1
+     *   curtain 0 -> 1
+     *
+     * Reboot / Poweroff:
+     *   curtain 1 -> 0
+     *   line 1 -> 0
+     */
+    in-out property <float> line-progress: 0.0;
+    in-out property <float> curtain-progress: 0.0;
+    in-out property <string> transition-mode: "boot";
+
+    title: "nuubOS";
+    background: #10141b;
+
+    animate line-progress {
+        duration: 220ms;
+        easing: ease-in-out;
+    }
+
+    animate curtain-progress {
+        duration: 460ms;
+        easing: ease-in-out;
+    }
+
+    /* HOME stays completely still behind the lifecycle curtain. */
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: #10141b;
+
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: 48px;
+            background: #18202a;
+
+            Text {
+                x: 18px;
+                y: 10px;
+                text: "nuubOS";
+                color: #f2f6fb;
+                font-size: 22px;
+                font-weight: 700;
+            }
+
+            Text {
+                x: 18px;
+                y: 31px;
+                text: "Small System. Big Adventures.";
+                color: #7f93a8;
+                font-size: 10px;
+            }
+
+            Text {
+                x: parent.width - self.width - 18px;
+                y: 16px;
+                text: "HOME";
+                color: #9fb3c8;
+                font-size: 14px;
+                font-weight: 600;
+            }
+        }
+
+        Rectangle {
+            x: 0;
+            y: 48px;
+            width: parent.width;
+            height: parent.height - 92px;
+            background: #10141b;
+
+            Rectangle {
+                x: 20px;
+                y: 20px;
+                width: parent.width - 40px;
+                height: parent.height - 40px;
+                background: #121924;
+                border-width: 1px;
+                border-color: #2e3d4d;
+
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: 4px;
+                    height: parent.height;
+                    background: #3a86ff;
+                }
+
+                Text {
+                    x: 24px;
+                    y: 24px;
+                    text: "Recently Played";
+                    color: #f2f6fb;
+                    font-size: 24px;
+                    font-weight: 700;
+                }
+
+                Text {
+                    x: 24px;
+                    y: 68px;
+                    text: "nuubUI graphics foundation";
+                    color: #9fb3c8;
+                    font-size: 16px;
+                }
+
+                Text {
+                    x: 24px;
+                    y: 100px;
+                    text: "Native layout • 640×480 • Wayland";
+                    color: #7f93a8;
+                    font-size: 13px;
+                }
+            }
+        }
+
+        Rectangle {
+            x: 0;
+            y: parent.height - 44px;
+            width: parent.width;
+            height: 44px;
+            background: #18202a;
+
+            Text {
+                x: 18px;
+                y: 13px;
+                text: "InputService controller integration pending";
+                color: #9fb3c8;
+                font-size: 12px;
+            }
+        }
+    }
+
+    /*
+     * TOP HALF OF THE LIFECYCLE RASTER.
+     *
+     * The split is aligned to the existing branded blue separator line:
+     * ~48.5% of the 640x480 native viewport.
+     */
+    Rectangle {
+        x: 0;
+        y: -(parent.height * 0.485) * root.curtain-progress;
+        width: parent.width;
+        height: parent.height * 0.485;
+        clip: true;
+        visible: root.curtain-progress < 0.999;
+
+        Image {
+            x: 0;
+            y: 0;
+            width: root.width;
+            height: root.height;
+            source: root.transition-mode == "reboot"
+                ? @image-url("assets/reboot-splash.png")
+                : root.transition-mode == "poweroff"
+                    ? @image-url("assets/poweroff-splash.png")
+                    : @image-url("assets/boot-splash.png");
+            image-fit: fill;
+            image-rendering: pixelated;
+        }
+    }
+
+    /*
+     * BOTTOM HALF OF THE SAME RASTER.
+     *
+     * Closed: its image aligns exactly with the top half.
+     * Open: the whole half exits below the viewport.
+     */
+    Rectangle {
+        x: 0;
+        y: parent.height * 0.485
+            + (parent.height * 0.515) * root.curtain-progress;
+        width: parent.width;
+        height: parent.height * 0.515;
+        clip: true;
+        visible: root.curtain-progress < 0.999;
+
+        Image {
+            x: 0;
+            y: -(root.height * 0.485);
+            width: root.width;
+            height: root.height;
+            source: root.transition-mode == "reboot"
+                ? @image-url("assets/reboot-splash.png")
+                : root.transition-mode == "poweroff"
+                    ? @image-url("assets/poweroff-splash.png")
+                    : @image-url("assets/boot-splash.png");
+            image-fit: fill;
+            image-rendering: pixelated;
+        }
+    }
+
+    /*
+     * The existing splash separator becomes the animation itself.
+     *
+     * Stage 1 Boot:
+     *   normal line (~48.3% width) -> full viewport width.
+     *
+     * Stage 2 Boot:
+     *   the full-width line splits into two edges and opens vertically.
+     *
+     * Shutdown is the exact semantic reverse:
+     *   two full-width lines converge from top/bottom -> one line at centre
+     *   -> the line contracts back to its branded width.
+     */
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height * 0.485
+            - (parent.height * 0.485) * root.curtain-progress;
+        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        height: 3px;
+        background: #5b86d6;
+        visible: root.curtain-progress < 0.999;
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height * 0.485
+            + (parent.height * 0.515) * root.curtain-progress
+            - self.height;
+        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        height: 3px;
+        background: #5b86d6;
+        visible: root.curtain-progress < 0.999;
+    }
+
+    /*
+     * Very restrained matte glow around the two line edges. It is deliberately
+     * faint; the solid blue lines remain the actual visual element.
+     */
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height * 0.485
+            - (parent.height * 0.485) * root.curtain-progress
+            - 2px;
+        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        height: 7px;
+        background: #5b86d6;
+        opacity: 0.06;
+        visible: root.curtain-progress < 0.999;
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height * 0.485
+            + (parent.height * 0.515) * root.curtain-progress
+            - 5px;
+        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        height: 7px;
+        background: #5b86d6;
+        opacity: 0.06;
+        visible: root.curtain-progress < 0.999;
+    }
+}

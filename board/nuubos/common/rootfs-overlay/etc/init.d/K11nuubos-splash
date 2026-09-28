@@ -1,0 +1,17 @@
+#!/bin/sh
+
+case "${1:-}" in
+    stop)
+        if [ -r /run/nuubos/shutdown-mode ] && [ -c /dev/fb0 ]; then
+            MODE="$(cat /run/nuubos/shutdown-mode 2>/dev/null)"
+            /usr/bin/nuubos-splash --prepare "$MODE" \
+                >/run/nuubos/lifecycle-final.log 2>&1 || true
+        fi
+        ;;
+    start|restart)
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}" >&2
+        exit 1
+        ;;
+esac

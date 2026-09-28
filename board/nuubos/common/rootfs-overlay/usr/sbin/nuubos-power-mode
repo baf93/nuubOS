@@ -1,0 +1,83 @@
+#!/bin/sh
+
+. /usr/lib/nuubos/power.sh
+
+usage()
+{
+	echo "Usage: nuubos-power-mode {auto|battery-saver|apply|status}" >&2
+}
+
+show_status()
+{
+	SAVED="$(read_power_mode)"
+	TZ="$(find_cpu_thermal_zone)" || return 1
+
+	case "$SAVED" in
+		AUTO)
+			PROFILE_CPU_MAX="$AUTO_CPU_MAX"
+			PROFILE_GPU_MAX="$AUTO_GPU_MAX"
+			;;
+		BATTERY_SAVER)
+			PROFILE_CPU_MAX="$BATTERY_SAVER_CPU_MAX"
+			PROFILE_GPU_MAX="$BATTERY_SAVER_GPU_MAX"
+			;;
+	esac
+
+	echo "saved=$SAVED"
+	echo "thermal_policy=$(cat "$TZ/policy")"
+
+	echo "cpu_governor=$(cat "$CPU_POLICY/scaling_governor")"
+	echo "profile_cpu_max=$PROFILE_CPU_MAX"
+	echo "effective_cpu_max=$(cat "$CPU_POLICY/scaling_max_freq")"
+
+	echo "gpu_governor=$(cat "$GPU_DEVFREQ/governor")"
+	echo "profile_gpu_max=$PROFILE_GPU_MAX"
+	echo "effective_gpu_max=$(cat "$GPU_DEVFREQ/max_freq")"
+
+	CPU_CDEV=""
+	GPU_CDEV=""
+
+	for C in "$TZ"/cdev[0-9]*; do
+		[ -L "$C" ] || continue
+
+		DEV="$(readlink -f "$C")"
+		TYPE="$(cat "$DEV/type")"
+
+		case "$TYPE" in
+			cpufreq-*)
+				CPU_CDEV="$DEV"
+				;;
+			devfreq-1800000.gpu)
+				GPU_CDEV="$DEV"
+				;;
+		esac
+	done
+
+	[ -z "$CPU_CDEV" ] ||
+		echo "cpu_cooling_state=$(cat "$CPU_CDEV/cur_state")"
+
+	[ -z "$GPU_CDEV" ] ||
+		echo "gpu_cooling_state=$(cat "$GPU_CDEV/cur_state")"
+}
+
+case "${1:-}" in
+	auto)
+		apply_power_mode AUTO || exit 1
+		save_power_mode AUTO || exit 1
+		;;
+	battery-saver)
+		apply_power_mode BATTERY_SAVER || exit 1
+		save_power_mode BATTERY_SAVER || exit 1
+		;;
+	apply)
+		MODE="$(read_power_mode)"
+		apply_power_mode "$MODE"
+		;;
+	status)
+		show_status
+		;;
+	*)
+		usage
+		exit 2
+		;;
+esac

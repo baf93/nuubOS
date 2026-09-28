@@ -1,0 +1,33 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] clk: sunxi-ng: fix H616 PLL audio SDM rates
+
+The H616 PLL audio clock has a fixed post-divider of two. The NM clock
+implementation multiplies the requested observable clock rate by this
+divider before looking it up in the sigma-delta modulation table, and
+divides the table rate by two again when recalculating the observable
+rate.
+
+Store the corresponding VCO rates in the SDM table so requests for the
+90.3168 MHz and 98.304 MHz output rates select their exact SDM settings.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+ drivers/clk/sunxi-ng/ccu-sun50i-h616.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/clk/sunxi-ng/ccu-sun50i-h616.c b/drivers/clk/sunxi-ng/ccu-sun50i-h616.c
+--- a/drivers/clk/sunxi-ng/ccu-sun50i-h616.c
++++ b/drivers/clk/sunxi-ng/ccu-sun50i-h616.c
+@@ -223,8 +223,8 @@ static const struct clk_parent_data pll_periph0_2x_parents[] = {
+  * frequencies with less error.
+  */
+ static struct ccu_sdm_setting pll_audio_sdm_table[] = {
+-	{ .rate = 90316800, .pattern = 0xc001288d, .m = 3, .n = 22 },
+-	{ .rate = 98304000, .pattern = 0xc001eb85, .m = 5, .n = 40 },
++	{ .rate = 180633600, .pattern = 0xc001288d, .m = 3, .n = 22 },
++	{ .rate = 196608000, .pattern = 0xc001eb85, .m = 5, .n = 40 },
+ };
+ 
+ #define SUN50I_H616_PLL_AUDIO_REG	0x078
+-- 
+2.47.3

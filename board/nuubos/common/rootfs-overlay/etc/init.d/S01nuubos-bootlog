@@ -1,0 +1,35 @@
+#!/bin/sh
+
+LOGDIR=/boot/nuubos-debug
+
+mkdir -p "$LOGDIR"
+
+echo "userspace reached" > "$LOGDIR/01-userspace-reached.txt"
+date >> "$LOGDIR/01-userspace-reached.txt" 2>&1
+
+cat /proc/cmdline > "$LOGDIR/02-cmdline.txt" 2>&1
+cat /proc/device-tree/model > "$LOGDIR/03-model.txt" 2>&1
+uname -a > "$LOGDIR/04-uname.txt" 2>&1
+
+mount > "$LOGDIR/05-mounts.txt" 2>&1
+cat /proc/partitions > "$LOGDIR/06-partitions.txt" 2>&1
+
+dmesg > "$LOGDIR/07-dmesg-early.txt" 2>&1
+
+ip link > "$LOGDIR/08-ip-link.txt" 2>&1
+ip addr > "$LOGDIR/09-ip-addr.txt" 2>&1
+
+lsmod > "$LOGDIR/10-lsmod.txt" 2>&1
+
+find /sys/class/drm -maxdepth 2 -type f -print \
+    > "$LOGDIR/11-drm-files.txt" 2>&1
+
+for f in /sys/class/drm/*/status; do
+    [ -f "$f" ] || continue
+    echo "=== $f ==="
+    cat "$f"
+done > "$LOGDIR/12-drm-status.txt" 2>&1
+
+sync
+
+exit 0

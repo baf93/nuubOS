@@ -1,0 +1,283 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nuubOS <nuubos@localhost>
+Date: Sun, 28 Sep 2026 18:10:00 +0200
+Subject: [PATCH] output: render boot raster from dedicated root scene tree
+
+The v0.7.5 experiment placed plain scene rectangles inside Labwc's
+background layer-shell tree. Labwc intentionally treats children of that
+tree as layer_surface nodes and asserts that node->data is populated.
+
+Keep Labwc's mandatory first modeset commit, but render the matching nuubOS
+raster in a dedicated direct child of the scene root. The tree is lowered
+below Labwc's normal layer/view trees and therefore acts only as a
+compositor-owned boot fallback.
+
+---
+--- a/src/output.c
++++ b/src/output.c
+@@ -11,6 +11,7 @@
+ #include <assert.h>
+ #include <drm_fourcc.h>
+ #include <glib.h>
++#include <string.h>
+ #include <strings.h>
+ #include <wlr/backend/wayland.h>
+ #include <wlr/config.h>
+@@ -520,6 +521,242 @@
+ 	return wlr_output_test_state(wlr_output, state);
+ }
+ 
++
++static const char *
++nuubos_glyph_rows(char c)
++{
++	switch (c) {
++	case 'A': return " ### " "#   #" "#   #" "#####" "#   #" "#   #" "#   #";
++	case 'B': return "#### " "#   #" "#   #" "#### " "#   #" "#   #" "#### ";
++	case 'O': return " ### " "#   #" "#   #" "#   #" "#   #" "#   #" " ### ";
++	case 'P': return "#### " "#   #" "#   #" "#### " "#    " "#    " "#    ";
++	case 'R': return "#### " "#   #" "#   #" "#### " "#  # " "#   #" "#   #";
++	case 'S': return " ####" "#    " "#    " " ### " "    #" "    #" "#### ";
++	case 'a': return "     " "     " " ### " "    #" " ####" "#   #" " ####";
++	case 'b': return "#    " "#    " "#### " "#   #" "#   #" "#   #" "#### ";
++	case 'd': return "    #" "    #" " ####" "#   #" "#   #" "#   #" " ####";
++	case 'e': return "     " "     " " ### " "#   #" "#####" "#    " " ####";
++	case 'f': return "  ## " " #   " " ### " " #   " " #   " " #   " " #   ";
++	case 'g': return "     " " ####" "#   #" "#   #" " ####" "    #" " ### ";
++	case 'i': return "  #  " "     " " ##  " "  #  " "  #  " "  #  " " ### ";
++	case 'l': return " ##  " "  #  " "  #  " "  #  " "  #  " "  #  " " ### ";
++	case 'm': return "     " "     " "## ##" "# # #" "# # #" "#   #" "#   #";
++	case 'n': return "     " "     " "#### " "#   #" "#   #" "#   #" "#   #";
++	case 'o': return "     " "     " " ### " "#   #" "#   #" "#   #" " ### ";
++	case 'p': return "     " "     " "#### " "#   #" "#   #" "#### " "#    ";
++	case 'r': return "     " "     " "# ## " "##  #" "#    " "#    " "#    ";
++	case 's': return "     " "     " " ####" "#    " " ### " "    #" "#### ";
++	case 't': return " #   " " #   " "###  " " #   " " #   " " #  #" "  ## ";
++	case 'u': return "     " "     " "#   #" "#   #" "#   #" "#   #" " ####";
++	case 'v': return "     " "     " "#   #" "#   #" "#   #" " # # " "  #  ";
++	case 'w': return "     " "     " "#   #" "#   #" "# # #" "# # #" " # # ";
++	case 'y': return "     " "     " "#   #" "#   #" " ####" "    #" " ### ";
++	case '.': return "     " "     " "     " "     " "     " " ##  " " ##  ";
++	case ' ': return "     " "     " "     " "     " "     " "     " "     ";
++	default:  return "     " "     " "     " "     " "     " "     " "     ";
++	}
++}
++
++static void
++nuubos_scene_rect(struct wlr_scene_tree *parent, int x, int y,
++		int width, int height, const float color[static 4])
++{
++	if (width <= 0 || height <= 0) {
++		return;
++	}
++
++	struct wlr_scene_rect *rect =
++		wlr_scene_rect_create(parent, width, height, color);
++	wlr_scene_node_set_position(&rect->node, x, y);
++}
++
++static int
++nuubos_text_width(const char *text, int scale, int tracking)
++{
++	int n = (int)strlen(text);
++
++	if (n <= 0) {
++		return 0;
++	}
++
++	return n * 6 * scale - scale + (n - 1) * tracking;
++}
++
++static void
++nuubos_draw_glyph(struct wlr_scene_tree *parent, int x, int y,
++		char c, int scale, const float color[static 4])
++{
++	const char *rows = nuubos_glyph_rows(c);
++
++	for (int row = 0; row < 7; row++) {
++		int col = 0;
++
++		while (col < 5) {
++			while (col < 5 && rows[row * 5 + col] == ' ') {
++				col++;
++			}
++
++			if (col >= 5) {
++				break;
++			}
++
++			int run_start = col;
++
++			while (col < 5 && rows[row * 5 + col] != ' ') {
++				col++;
++			}
++
++			nuubos_scene_rect(parent,
++				x + run_start * scale,
++				y + row * scale,
++				(col - run_start) * scale,
++				scale,
++				color);
++		}
++	}
++}
++
++static void
++nuubos_draw_text(struct wlr_scene_tree *parent, int x, int y,
++		const char *text, int scale, int tracking,
++		const float color[static 4])
++{
++	int cursor = x;
++
++	while (*text) {
++		nuubos_draw_glyph(parent, cursor, y, *text, scale, color);
++		cursor += 6 * scale + tracking;
++		text++;
++	}
++}
++
++static void
++nuubos_create_atomic_boot_splash(struct output *output)
++{
++	static struct wlr_scene_tree *boot_tree;
++
++	if (boot_tree || !wlr_output_is_drm(output->wlr_output)) {
++		return;
++	}
++
++	struct wlr_output *wlr_output = output->wlr_output;
++	struct wlr_output_mode *mode = wlr_output->current_mode;
++
++	if (!mode) {
++		mode = wlr_output_preferred_mode(wlr_output);
++	}
++
++	if (!mode || mode->width <= 0 || mode->height <= 0) {
++		wlr_log(WLR_ERROR,
++			"nuubOS: cannot determine boot-splash output geometry");
++		return;
++	}
++
++	int width = mode->width;
++	int height = mode->height;
++
++	int title_scale = height / 68;
++	if (title_scale < 7) {
++		title_scale = 7;
++	}
++	if (title_scale > 14) {
++		title_scale = 14;
++	}
++
++	int subtitle_scale = title_scale / 2;
++	if (subtitle_scale < 3) {
++		subtitle_scale = 3;
++	}
++	if (subtitle_scale > 6) {
++		subtitle_scale = 6;
++	}
++
++	int brand_tracking = title_scale / 2;
++	if (brand_tracking < 2) {
++		brand_tracking = 2;
++	}
++
++	static const float background[4] = {
++		19.0f / 255.0f, 21.0f / 255.0f, 20.0f / 255.0f, 1.0f
++	};
++	static const float foreground[4] = {
++		231.0f / 255.0f, 226.0f / 255.0f, 216.0f / 255.0f, 1.0f
++	};
++	static const float subtitle_color[4] = {
++		158.0f / 255.0f, 166.0f / 255.0f, 159.0f / 255.0f, 1.0f
++	};
++	static const float accent[4] = {
++		91.0f / 255.0f, 134.0f / 255.0f, 214.0f / 255.0f, 1.0f
++	};
++
++	const char *brand_left = "nuub";
++	const char *brand_right = "OS";
++	const char *subtitle = "Small System. Big Adventures.";
++
++	int left_w = nuubos_text_width(brand_left, title_scale, brand_tracking);
++	int right_w = nuubos_text_width(brand_right, title_scale, brand_tracking);
++	int title_w = left_w + brand_tracking + right_w;
++
++	int cx = width / 2;
++	int cy = height / 2;
++	int brand_y = cy - title_scale * 12;
++
++	/*
++	 * IMPORTANT:
++	 * This is deliberately a direct child of the scene ROOT, not of
++	 * output->layer_tree[0]. Labwc walks layer_tree children as layer-shell
++	 * nodes and asserts that node->data is a layer_surface. Plain rects in
++	 * that tree caused the v0.7.5 startup assertion.
++	 */
++	boot_tree = wlr_scene_tree_create(&server.scene->tree);
++	wlr_scene_node_lower_to_bottom(&boot_tree->node);
++
++	if (output->scene_output) {
++		wlr_scene_node_set_position(&boot_tree->node,
++			output->scene_output->x, output->scene_output->y);
++	}
++
++	nuubos_scene_rect(boot_tree, 0, 0, width, height, background);
++
++	int x = cx - title_w / 2;
++
++	nuubos_draw_text(boot_tree, x, brand_y, brand_left,
++		title_scale, brand_tracking, foreground);
++
++	x += left_w + brand_tracking;
++
++	nuubos_draw_text(boot_tree, x, brand_y, brand_right,
++		title_scale, brand_tracking, accent);
++
++	int line_w = title_w + title_scale * 8;
++	int max_line_w = width - title_scale * 10;
++
++	if (line_w > max_line_w) {
++		line_w = max_line_w;
++	}
++
++	int line_h = title_scale / 2;
++	if (line_h < 3) {
++		line_h = 3;
++	}
++
++	int line_y = brand_y + title_scale * 11;
++
++	nuubos_scene_rect(boot_tree,
++		cx - line_w / 2, line_y, line_w, line_h, accent);
++
++	int sub_y = line_y + title_scale * 5;
++	int sub_w = nuubos_text_width(subtitle, subtitle_scale, 0);
++
++	nuubos_draw_text(boot_tree,
++		cx - sub_w / 2, sub_y, subtitle,
++		subtitle_scale, 0, subtitle_color);
++
++	wlr_log(WLR_INFO,
++		"nuubOS: installed root atomic first-frame boot splash %dx%d",
++		width, height);
++}
++
+ static void
+ configure_new_output(struct output *output)
+ {
+@@ -550,6 +787,12 @@
+ 	server.pending_output_layout_change++;
+ 	add_output_to_layout(output);
+ 	server.pending_output_layout_change--;
++
++	/*
++	 * Populate the first compositor frame before Labwc performs its mandatory
++	 * initial modeset commit. Keep these nodes outside the layer-shell trees.
++	 */
++	nuubos_create_atomic_boot_splash(output);
+ 
+ 	/*
+ 	 * Force the initial modeset commit to actually happen.
+-- 
+2.51.0

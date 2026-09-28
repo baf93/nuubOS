@@ -1,0 +1,16 @@
+#!/bin/sh
+
+PM_ASYNC=/sys/power/pm_async
+
+#
+# H700: serialize device suspend/resume for deterministic s2idle.
+#
+# Asynchronous device PM exposed intermittent resume hangs during
+# validation. Serial PM completed repeated controlled suspend/resume
+# cycles reliably without affecting steady-state power behaviour.
+#
+if [ -w "$PM_ASYNC" ]; then
+	echo 0 > "$PM_ASYNC" || exit 1
+fi
+
+exit 0

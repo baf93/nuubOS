@@ -1,0 +1,72 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] arm64: dts: allwinner: enable shared HDMI audio on
+ qualified H700 handhelds
+
+Add one shared HDMI audio topology using the H616/H700 AHUB HDMI
+endpoint and the DW-HDMI audio DAI.
+
+Enable the shared topology on the hardware-qualified Anbernic
+RG35XX Pro, RG40XX-V and RG CubeXX without placing HDMI audio in the
+common RG35XX Plus base used by other family devices.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+--- /dev/null
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-hdmi-audio.dtsi
+@@ -0,0 +1,26 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++/*
++ * Shared HDMI audio topology for nuubOS H700 devices.
++ */
++
++&ahub_hdmi {
++	status = "okay";
++};
++
++/ {
++	sound_hdmi {
++		compatible = "simple-audio-card";
++		simple-audio-card,name = "HDMI";
++		simple-audio-card,format = "i2s";
++		simple-audio-card,bitclock-master = <&hdmi_cpu>;
++		simple-audio-card,frame-master = <&hdmi_cpu>;
++
++		hdmi_cpu: simple-audio-card,cpu {
++			sound-dai = <&ahub_hdmi>;
++		};
++
++		simple-audio-card,codec {
++			sound-dai = <&hdmi>;
++		};
++	};
++};
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-pro.dts
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-pro.dts
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "sun50i-h700-anbernic-rg35xx-plus.dts"
++#include "sun50i-h700-anbernic-hdmi-audio.dtsi"
+ #include "sun50i-h700-anbernic-tf2.dtsi"
+ #include "sun50i-h700-anbernic-dual-analog.dtsi"
+ 
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-v.dts
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-v.dts
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include "sun50i-h700-anbernic-rg35xx-plus.dts"
++#include "sun50i-h700-anbernic-hdmi-audio.dtsi"
+ #include "sun50i-h700-anbernic-uart5-ph.dtsi"
+ #include "sun50i-h700-anbernic-tf2.dtsi"
+ #include "sun50i-h700-anbernic-pwm0-backlight.dtsi"
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rgcubexx.dts
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rgcubexx.dts
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "sun50i-h700-anbernic-rg35xx-plus.dts"
++#include "sun50i-h700-anbernic-hdmi-audio.dtsi"
+ #include "sun50i-h700-anbernic-uart5-ph.dtsi"
+ #include "sun50i-h700-anbernic-tf2.dtsi"
+ #include "sun50i-h700-anbernic-pwm0-backlight.dtsi"

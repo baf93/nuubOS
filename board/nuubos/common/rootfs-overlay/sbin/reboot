@@ -1,0 +1,4 @@
+#!/bin/sh
+
+/usr/sbin/nuubos-lifecycle-finalize reboot || exit 1
+exec /bin/busybox reboot "$@"

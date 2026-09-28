@@ -1,0 +1,18 @@
+[package]
+name = "nuubui-home"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+license = "MIT"
+
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "compat-1-18"] }
+
+[build-dependencies]
+slint-build = "=1.18.1"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+strip = true

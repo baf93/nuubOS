@@ -1,0 +1,25 @@
+From: Chen-Yu Tsai <wens@kernel.org>
+Subject: [PATCH] media: cedrus: add H616 video-engine compatible
+
+Backport of the upstream H616 Cedrus support.
+The H616 video engine reuses the existing H6 Cedrus variant data.
+
+Upstream: [PATCH v3 4/7] staging: media: sunxi: cedrus: add H616 variant
+Link: https://patchew.org/linux/20260712030011.3778169-1-wens%40kernel.org/20260712030011.3778169-5-wens%40kernel.org/
+
+Reviewed-by: Jernej Skrabec <jernej.skrabec@gmail.com>
+Signed-off-by: Chen-Yu Tsai <wens@kernel.org>
+
+--- a/drivers/staging/media/sunxi/cedrus/cedrus.c
++++ b/drivers/staging/media/sunxi/cedrus/cedrus.c
+@@ -696,6 +696,10 @@
+ 		.compatible = "allwinner,sun50i-h6-video-engine",
+ 		.data = &sun50i_h6_cedrus_variant,
+ 	},
++	{
++		.compatible = "allwinner,sun50i-h616-video-engine",
++		.data = &sun50i_h6_cedrus_variant,
++	},
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, cedrus_dt_match);

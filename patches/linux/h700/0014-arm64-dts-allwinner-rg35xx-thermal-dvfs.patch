@@ -1,0 +1,97 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] arm64: dts: allwinner: add RG35XX thermal and GPU DVFS policy
+
+Add the qualified thermal and GPU DVFS configuration used by the
+H700 Anbernic platform.
+
+Define GPU operating points from 432 MHz through 600 MHz at 940 mV,
+register the GPU as a cooling device, and couple it to the CPU thermal
+zone.
+
+Add the qualified dynamic power coefficients used by the thermal
+power allocator:
+
+  CPU: 100
+  GPU: 750
+
+Set both CPU and GPU cooling-map contributions to 1024.
+
+This represents the final qualified thermal/DVFS state directly,
+rather than layering the individual bring-up changes incrementally.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-2024.dts
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-2024.dts
+@@ -33,6 +33,35 @@
+ 		voltage-max-design-microvolt = <4200000>;
+ 	};
+ 
++	gpu_opp_table: opp-table-gpu {
++		compatible = "operating-points-v2";
++
++		opp-432000000 {
++			opp-hz = /bits/ 64 <432000000>;
++			opp-microvolt = <940000>;
++		};
++
++		opp-456000000 {
++			opp-hz = /bits/ 64 <456000000>;
++			opp-microvolt = <940000>;
++		};
++
++		opp-504000000 {
++			opp-hz = /bits/ 64 <504000000>;
++			opp-microvolt = <940000>;
++		};
++
++		opp-552000000 {
++			opp-hz = /bits/ 64 <552000000>;
++			opp-microvolt = <940000>;
++		};
++
++		opp-600000000 {
++			opp-hz = /bits/ 64 <600000000>;
++			opp-microvolt = <940000>;
++		};
++	};
++
+ 	chosen {
+ 		stdout-path = "serial0:115200n8";
+ 	};
+@@ -254,6 +283,7 @@
+ 
+ &cpu0 {
+ 	cpu-supply = <&reg_dcdc1>;
++	dynamic-power-coefficient = <100>;
+ };
+ 
+ &de {
+@@ -265,10 +295,27 @@
+ };
+ 
+ &gpu {
++	#cooling-cells = <2>;
++	dynamic-power-coefficient = <750>;
+ 	mali-supply = <&reg_dcdc2>;
++	operating-points-v2 = <&gpu_opp_table>;
+ 	status = "okay";
+ };
+ 
++&{/thermal-zones/cpu-thermal} {
++	cooling-maps {
++		map0 {
++			contribution = <1024>;
++		};
++
++		map1 {
++			trip = <&cpu_target>;
++			contribution = <1024>;
++			cooling-device = <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++	};
++};
++
+ &hdmi {
+ 	hvcc-supply = <&reg_aldo1>;
+ 	status = "okay";

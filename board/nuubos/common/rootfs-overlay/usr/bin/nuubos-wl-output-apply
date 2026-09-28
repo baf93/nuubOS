@@ -1,0 +1,28 @@
+#!/bin/sh
+
+OUTPUTS="$(/usr/bin/wlr-randr 2>/dev/null | awk '/^[A-Za-z0-9-]+ / {print $1}')"
+[ -n "$OUTPUTS" ] || exit 0
+
+HDMI="$(printf '%s
+' "$OUTPUTS" | grep '^HDMI-A-' | head -n 1)"
+if [ -n "$HDMI" ]; then
+    /usr/bin/wlr-randr --output "$HDMI" --on --preferred >/dev/null 2>&1 || true
+    printf '%s
+' "$OUTPUTS" | while read -r OUTPUT; do
+        [ -n "$OUTPUT" ] || continue
+        [ "$OUTPUT" = "$HDMI" ] && continue
+        /usr/bin/wlr-randr --output "$OUTPUT" --off >/dev/null 2>&1 || true
+    done
+    exit 0
+fi
+
+PRIMARY="$(printf '%s
+' "$OUTPUTS" | head -n 1)"
+[ -n "$PRIMARY" ] || exit 0
+/usr/bin/wlr-randr --output "$PRIMARY" --on --preferred >/dev/null 2>&1 || true
+printf '%s
+' "$OUTPUTS" | while read -r OUTPUT; do
+    [ -n "$OUTPUT" ] || continue
+    [ "$OUTPUT" = "$PRIMARY" ] && continue
+    /usr/bin/wlr-randr --output "$OUTPUT" --off >/dev/null 2>&1 || true
+done

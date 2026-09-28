@@ -1,0 +1,4 @@
+#!/bin/sh
+# Placeholder UI stack owns display/output policy during the first graphics
+# micro-step. Keep displayctl available but do not run the KMS displayd daemon.
+exit 0
