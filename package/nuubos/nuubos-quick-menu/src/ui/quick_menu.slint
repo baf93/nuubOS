@@ -130,6 +130,42 @@ component HorizontalAdjustHint inherits Rectangle {
     }
 }
 
+component MaterialSlider inherits Rectangle {
+    in property <float> fraction: 0.0;
+
+    height: 22px;
+    background: #00000000;
+
+    Rectangle {
+        x: 0;
+        y: (parent.height - 4px) / 2;
+        width: parent.width;
+        height: 4px;
+        border-radius: 2px;
+        background: #2a2e34;
+
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width * root.fraction;
+            height: parent.height;
+            border-radius: 2px;
+            background: #3a86ff;
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) * root.fraction;
+        y: 0;
+        width: 10px;
+        height: parent.height;
+        border-radius: 5px;
+        background: #3a86ff;
+        border-width: 1px;
+        border-color: #73a8ff;
+    }
+}
+
 export component QuickMenuWindow inherits Window {
     in-out property <int> selected-index: 0;
     in-out property <bool> brightness-visible: false;
@@ -192,8 +228,10 @@ export component QuickMenuWindow inherits Window {
 
         Text {
             x: 20px;
-            y: 17px;
+            y: 11px;
             width: 180px;
+            height: 32px;
+            vertical-alignment: center;
             text: "Quick Menu";
             color: #f5f6f8;
             font-size: 25px;
@@ -257,6 +295,7 @@ export component QuickMenuWindow inherits Window {
                 background: #121418;
                 border-width: 1px;
                 border-color: #24272c;
+                border-radius: 6px;
 
                 Text {
                     x: 13px;
@@ -287,6 +326,7 @@ export component QuickMenuWindow inherits Window {
             background: root.selected-index == 3 ? #1a1d22 : #111214;
             border-width: 1px;
             border-color: root.selected-index == 3 ? #3a86ff : #1c1e22;
+            border-radius: 6px;
             visible: root.brightness-visible;
 
             Text {
@@ -309,22 +349,11 @@ export component QuickMenuWindow inherits Window {
                 font-weight: 600;
             }
 
-            Rectangle {
+            MaterialSlider {
                 x: 14px;
-                y: 38px;
+                y: 31px;
                 width: parent.width - 28px;
-                height: 4px;
-                border-radius: 2px;
-                background: #2a2e34;
-
-                Rectangle {
-                    x: 0;
-                    y: 0;
-                    width: parent.width * root.brightness-fraction;
-                    height: parent.height;
-                    border-radius: 2px;
-                    background: #3a86ff;
-                }
+                fraction: root.brightness-fraction;
             }
         }
 
@@ -346,6 +375,7 @@ export component QuickMenuWindow inherits Window {
             background: root.selected-index == 0 ? #1a1d22 : #111214;
             border-width: 1px;
             border-color: root.selected-index == 0 ? #3a86ff : #1c1e22;
+            border-radius: 6px;
 
             Text {
                 x: 14px;
@@ -365,6 +395,7 @@ export component QuickMenuWindow inherits Window {
             background: root.selected-index == 1 ? #1a1d22 : #111214;
             border-width: 1px;
             border-color: root.selected-index == 1 ? #3a86ff : #1c1e22;
+            border-radius: 6px;
 
             Text {
                 x: 14px;
@@ -384,6 +415,7 @@ export component QuickMenuWindow inherits Window {
             background: root.selected-index == 2 ? #1a1d22 : #111214;
             border-width: 1px;
             border-color: root.selected-index == 2 ? #3a86ff : #1c1e22;
+            border-radius: 6px;
 
             Text {
                 x: 14px;

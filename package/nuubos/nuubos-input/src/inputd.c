@@ -48,6 +48,7 @@ struct binding {
 
 static struct binding bindings[] = {
 	{ "quick_menu", 316 },
+	{ "settings", 315 },
 	{ "menu_up", 544 },
 	{ "menu_down", 545 },
 	{ "menu_left", 546 },
@@ -86,9 +87,16 @@ struct input_dev {
 	struct nav_axis hat_y;
 };
 
+enum client_role {
+	CLIENT_ROLE_GENERIC = 0,
+	CLIENT_ROLE_HOME,
+	CLIENT_ROLE_QUICK_MENU,
+};
+
 struct client {
 	int fd;
 	bool subscribed;
+	enum client_role role;
 	char buf[MAX_LINE];
 	size_t used;
 };
@@ -97,6 +105,7 @@ static struct input_dev inputs[MAX_INPUTS];
 static size_t input_count;
 static struct client clients[MAX_CLIENTS];
 static bool menu_open;
+static bool settings_open;
 static volatile sig_atomic_t stop_requested;
 static volatile sig_atomic_t reload_requested;
 static int service_lock_fd = -1;
@@ -283,12 +292,13 @@ static void log_bindings(void)
 static void load_bindings(void)
 {
 	bindings[0].code = 316;
-	bindings[1].code = 544;
-	bindings[2].code = 545;
-	bindings[3].code = 546;
-	bindings[4].code = 547;
-	bindings[5].code = 305;
-	bindings[6].code = 304;
+	bindings[1].code = 315;
+	bindings[2].code = 544;
+	bindings[3].code = 545;
+	bindings[4].code = 546;
+	bindings[5].code = 547;
+	bindings[6].code = 305;
+	bindings[7].code = 304;
 
 	load_config_file(DEFAULT_CONFIG);
 	load_config_file(STATE_CONFIG);
@@ -563,18 +573,45 @@ static size_t subscriber_count(void)
 	return count;
 }
 
-static void set_menu_grab(bool enabled)
+static size_t role_subscriber_count(enum client_role role)
 {
 	size_t i;
+	size_t count = 0;
 
-	menu_open = enabled;
-	log_message("menu-capture requested=%d inputs=%zu",
-		    enabled ? 1 : 0, input_count);
+	for (i = 0; i < MAX_CLIENTS; i++) {
+		if (clients[i].fd >= 0 &&
+		    clients[i].subscribed &&
+		    clients[i].role == role)
+			count++;
+	}
+
+	return count;
+}
+
+static bool capture_active(void)
+{
+	return menu_open || settings_open;
+}
+
+static void sync_input_grab(void)
+{
+	size_t i;
+	bool enabled = capture_active();
+
+	log_message(
+		"capture-sync quick-menu=%d settings=%d enabled=%d inputs=%zu",
+		menu_open ? 1 : 0,
+		settings_open ? 1 : 0,
+		enabled ? 1 : 0,
+		input_count);
 
 	for (i = 0; i < input_count; i++) {
 		int rc;
 
 		if (!input_has_menu_capability(&inputs[i]))
+			continue;
+
+		if (inputs[i].grabbed == enabled)
 			continue;
 
 		rc = ioctl(inputs[i].fd, EVIOCGRAB, enabled ? 1 : 0);
@@ -593,10 +630,19 @@ static void set_menu_grab(bool enabled)
 	if (!enabled) {
 		repeat_action[0] = '\0';
 		repeat_next_ms = 0;
-
-		for (i = 0; i < input_count; i++)
-			inputs[i].grabbed = false;
 	}
+}
+
+static void set_menu_grab(bool enabled)
+{
+	menu_open = enabled;
+	sync_input_grab();
+}
+
+static void set_settings_grab(bool enabled)
+{
+	settings_open = enabled;
+	sync_input_grab();
 }
 
 static void close_inputs(void)
@@ -617,7 +663,7 @@ static void rescan_inputs(void)
 {
 	DIR *dir;
 	struct dirent *entry;
-	bool restore_grab = menu_open;
+	bool restore_grab = capture_active();
 
 	close_inputs();
 
@@ -691,7 +737,7 @@ static void rescan_inputs(void)
 	reconcile_start_wake_guard();
 
 	if (restore_grab)
-		set_menu_grab(true);
+		sync_input_grab();
 }
 
 static int write_all(int fd, const char *text)
@@ -715,6 +761,55 @@ static int write_all(int fd, const char *text)
 	return 0;
 }
 
+static bool action_is_navigation(const char *action)
+{
+	return strcmp(action, "menu_up") == 0 ||
+	       strcmp(action, "menu_down") == 0 ||
+	       strcmp(action, "menu_left") == 0 ||
+	       strcmp(action, "menu_right") == 0 ||
+	       strcmp(action, "menu_confirm") == 0 ||
+	       strcmp(action, "menu_back") == 0;
+}
+
+static bool client_wants_action(const struct client *client,
+				const char *action)
+{
+	if (action_is_navigation(action)) {
+		if (menu_open)
+			return client->role == CLIENT_ROLE_QUICK_MENU ||
+			       client->role == CLIENT_ROLE_GENERIC;
+
+		if (settings_open)
+			return client->role == CLIENT_ROLE_HOME ||
+			       client->role == CLIENT_ROLE_GENERIC;
+	}
+
+	if (strcmp(action, "quick_menu") == 0)
+		return client->role == CLIENT_ROLE_QUICK_MENU ||
+		       client->role == CLIENT_ROLE_GENERIC;
+
+	if (strcmp(action, "settings") == 0) {
+		if (menu_open)
+			return false;
+
+		return client->role == CLIENT_ROLE_HOME ||
+		       client->role == CLIENT_ROLE_GENERIC;
+	}
+
+	return true;
+}
+
+static void reconcile_capture_owners(void)
+{
+	if (menu_open &&
+	    role_subscriber_count(CLIENT_ROLE_QUICK_MENU) == 0)
+		set_menu_grab(false);
+
+	if (settings_open &&
+	    role_subscriber_count(CLIENT_ROLE_HOME) == 0)
+		set_settings_grab(false);
+}
+
 static void broadcast_action_state(const char *action, const char *state)
 {
 	char message[128];
@@ -723,23 +818,31 @@ static void broadcast_action_state(const char *action, const char *state)
 	snprintf(message, sizeof(message),
 		 "EVENT 1 %s %s\n", action, state);
 
-	log_message("emit action=%s state=%s subscribers=%zu",
-		    action, state, subscriber_count());
+	log_message(
+		"emit action=%s state=%s subscribers=%zu quick-menu=%d settings=%d",
+		action,
+		state,
+		subscriber_count(),
+		menu_open ? 1 : 0,
+		settings_open ? 1 : 0);
 
 	for (i = 0; i < MAX_CLIENTS; i++) {
 		if (clients[i].fd < 0 || !clients[i].subscribed)
+			continue;
+
+		if (!client_wants_action(&clients[i], action))
 			continue;
 
 		if (write_all(clients[i].fd, message) != 0) {
 			close(clients[i].fd);
 			clients[i].fd = -1;
 			clients[i].subscribed = false;
+			clients[i].role = CLIENT_ROLE_GENERIC;
 			clients[i].used = 0;
 		}
 	}
 
-	if (subscriber_count() == 0 && menu_open)
-		set_menu_grab(false);
+	reconcile_capture_owners();
 }
 
 static long long monotonic_ms(void)
@@ -779,7 +882,7 @@ static int horizontal_repeat_timeout_ms(void)
 {
 	long long remaining;
 
-	if (!menu_open || repeat_action[0] == '\0')
+	if (!capture_active() || repeat_action[0] == '\0')
 		return -1;
 
 	remaining = repeat_next_ms - monotonic_ms();
@@ -795,7 +898,7 @@ static void horizontal_repeat_tick(void)
 {
 	long long now;
 
-	if (!menu_open || repeat_action[0] == '\0')
+	if (!capture_active() || repeat_action[0] == '\0')
 		return;
 
 	now = monotonic_ms();
@@ -818,6 +921,7 @@ static void status_reply(int fd)
 	snprintf(reply, sizeof(reply),
 		 "protocol=1\n"
 		 "menu_open=%d\n"
+		 "settings_open=%d\n"
 		 "inputs=%zu\n"
 		 "subscribers=%zu\n"
 		 "analog_navigation_devices=%zu\n"
@@ -828,6 +932,7 @@ static void status_reply(int fd)
 		 "last_action=%s\n"
 		 "last_device=%s\n"
 		 "quick_menu=%d\n"
+		 "settings=%d\n"
 		 "menu_up=%d\n"
 		 "menu_down=%d\n"
 		 "menu_left=%d\n"
@@ -835,6 +940,7 @@ static void status_reply(int fd)
 		 "menu_confirm=%d\n"
 		 "menu_back=%d\n",
 		 menu_open ? 1 : 0,
+		 settings_open ? 1 : 0,
 		 input_count,
 		 subscriber_count(),
 		 analog_navigation_device_count(),
@@ -845,6 +951,7 @@ static void status_reply(int fd)
 		 last_action,
 		 last_device,
 		 binding_by_name("quick_menu")->code,
+		 binding_by_name("settings")->code,
 		 binding_by_name("menu_up")->code,
 		 binding_by_name("menu_down")->code,
 		 binding_by_name("menu_left")->code,
@@ -861,9 +968,25 @@ static void handle_command(struct client *client, const char *line)
 	int code;
 	struct binding *binding;
 
-	if (strcmp(line, "SUBSCRIBE") == 0) {
+	if (strcmp(line, "SUBSCRIBE") == 0 ||
+	    strcmp(line, "SUBSCRIBE GENERIC") == 0) {
 		client->subscribed = true;
+		client->role = CLIENT_ROLE_GENERIC;
 		(void)write_all(client->fd, "OK protocol=1\n");
+		return;
+	}
+
+	if (strcmp(line, "SUBSCRIBE HOME") == 0) {
+		client->subscribed = true;
+		client->role = CLIENT_ROLE_HOME;
+		(void)write_all(client->fd, "OK protocol=1 role=home\n");
+		return;
+	}
+
+	if (strcmp(line, "SUBSCRIBE QUICK_MENU") == 0) {
+		client->subscribed = true;
+		client->role = CLIENT_ROLE_QUICK_MENU;
+		(void)write_all(client->fd, "OK protocol=1 role=quick-menu\n");
 		return;
 	}
 
@@ -880,6 +1003,18 @@ static void handle_command(struct client *client, const char *line)
 
 	if (strcmp(line, "MENU CLOSE") == 0) {
 		set_menu_grab(false);
+		(void)write_all(client->fd, "OK\n");
+		return;
+	}
+
+	if (strcmp(line, "SETTINGS OPEN") == 0) {
+		set_settings_grab(true);
+		(void)write_all(client->fd, "OK\n");
+		return;
+	}
+
+	if (strcmp(line, "SETTINGS CLOSE") == 0) {
+		set_settings_grab(false);
 		(void)write_all(client->fd, "OK\n");
 		return;
 	}
@@ -942,13 +1077,23 @@ static void process_client(struct client *client)
 	n = read(client->fd, temp, sizeof(temp));
 
 	if (n <= 0) {
+		enum client_role role = client->role;
+
 		close(client->fd);
 		client->fd = -1;
 		client->subscribed = false;
+		client->role = CLIENT_ROLE_GENERIC;
 		client->used = 0;
 
-		if (subscriber_count() == 0 && menu_open)
+		if (role == CLIENT_ROLE_QUICK_MENU &&
+		    role_subscriber_count(CLIENT_ROLE_QUICK_MENU) == 0 &&
+		    menu_open)
 			set_menu_grab(false);
+
+		if (role == CLIENT_ROLE_HOME &&
+		    role_subscriber_count(CLIENT_ROLE_HOME) == 0 &&
+		    settings_open)
+			set_settings_grab(false);
 
 		return;
 	}
@@ -1016,6 +1161,7 @@ static void accept_client(int server_fd)
 		if (clients[i].fd < 0) {
 			clients[i].fd = fd;
 			clients[i].subscribed = false;
+			clients[i].role = CLIENT_ROLE_GENERIC;
 			clients[i].used = 0;
 			return;
 		}
@@ -1073,21 +1219,21 @@ static void process_nav_axis(struct input_dev *input,
 	axis->direction = next;
 
 	log_message(
-		"nav-axis-event device=%s axis=%s value=%d previous=%d next=%d menu-open=%d",
+		"nav-axis-event device=%s axis=%s value=%d previous=%d next=%d quick-menu=%d settings=%d",
 		input->name,
 		axis_name(axis->code),
 		value,
 		previous,
 		next,
-		menu_open ? 1 : 0);
+		menu_open ? 1 : 0,
+		settings_open ? 1 : 0);
 
 	/*
-	 * Analog/hat navigation belongs to the Quick Menu capture domain,
-	 * not to global system actions. Translate it only while the menu
-	 * owns controller input. A held axis is represented as one logical
-	 * press followed by one logical release; Quick Menu owns repeat timing.
+	 * Analog/hat navigation belongs to the active controller UI capture
+	 * domain. Quick Menu has routing priority over Settings. A held axis
+	 * is represented as one logical press followed by one logical release.
 	 */
-	if (!menu_open)
+	if (!capture_active())
 		return;
 
 	if (previous != 0) {
@@ -1199,12 +1345,13 @@ static void process_input(struct input_dev *input)
 			continue;
 
 		log_message(
-			"key-action device=%s code=%d value=%d action=%s menu-open=%d",
+			"key-action device=%s code=%d value=%d action=%s quick-menu=%d settings=%d",
 			input->name,
 			events[i].code,
 			events[i].value,
 			action,
-			menu_open ? 1 : 0);
+			menu_open ? 1 : 0,
+			settings_open ? 1 : 0);
 
 		if (events[i].value == 1) {
 			mapped_press_count++;
@@ -1221,7 +1368,9 @@ static void cleanup_runtime(int server_fd,
 {
 	size_t i;
 
-	set_menu_grab(false);
+	menu_open = false;
+	settings_open = false;
+	sync_input_grab();
 	close_inputs();
 
 	for (i = 0; i < MAX_CLIENTS; i++) {
@@ -1297,8 +1446,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	for (i = 0; i < MAX_CLIENTS; i++)
+	for (i = 0; i < MAX_CLIENTS; i++) {
 		clients[i].fd = -1;
+		clients[i].role = CLIENT_ROLE_GENERIC;
+	}
 
 	signal(SIGTERM, handle_signal);
 	signal(SIGINT, handle_signal);

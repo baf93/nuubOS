@@ -181,6 +181,147 @@ component MenuActionHint inherits Rectangle {
     }
 }
 
+
+component SettingsCategory inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> selected: false;
+
+    height: 40px;
+    border-radius: 6px;
+    background: root.selected ? #1b2940 : #00000000;
+    border-width: 1px;
+    border-color: root.selected ? #3a86ff : #00000000;
+
+    Text {
+        x: 12px;
+        y: 0;
+        width: parent.width - 20px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.label;
+        color: root.selected ? #f5f6f8 : #a8adb5;
+        font-size: 18px;
+        font-weight: root.selected ? 700 : 600;
+    }
+}
+
+component SettingsTopic inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> visible-topic: true;
+
+    height: 38px;
+    visible: root.visible-topic;
+    border-radius: 6px;
+    background: #15171b;
+    border-width: 1px;
+    border-color: #24272d;
+
+    Text {
+        x: 12px;
+        y: 0;
+        width: parent.width - 24px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.label;
+        color: #c8ccd2;
+        font-size: 17px;
+        font-weight: 600;
+    }
+}
+
+component StartActionHint inherits Rectangle {
+    width: 50px;
+    height: 26px;
+    border-radius: 5px;
+    background: #d8dbe0;
+    border-width: 1px;
+    border-color: #f5f6f8;
+
+    Text {
+        x: 2px;
+        y: 0;
+        width: parent.width - 4px;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "START";
+        color: #0d0e10;
+        font-size: 11px;
+        font-weight: 800;
+    }
+}
+
+component NavigationHint inherits Rectangle {
+    width: 28px;
+    height: 26px;
+    border-radius: 5px;
+    background: #d8dbe0;
+    border-width: 1px;
+    border-color: #f5f6f8;
+
+    Text {
+        x: 2px;
+        y: 0;
+        width: parent.width - 4px;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "↕";
+        color: #0d0e10;
+        font-size: 18px;
+        font-weight: 800;
+    }
+}
+
+component FaceButtonHint inherits Rectangle {
+    in property <int> active-position: -1;
+
+    width: 28px;
+    height: 28px;
+    background: #00000000;
+
+    Rectangle {
+        x: 10px;
+        y: 1px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: root.active-position == 0 ? #3a86ff : #24272d;
+        border-width: 1px;
+        border-color: root.active-position == 0 ? #73a8ff : #555b64;
+    }
+    Rectangle {
+        x: 19px;
+        y: 10px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: root.active-position == 1 ? #3a86ff : #24272d;
+        border-width: 1px;
+        border-color: root.active-position == 1 ? #73a8ff : #555b64;
+    }
+    Rectangle {
+        x: 10px;
+        y: 19px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: root.active-position == 2 ? #3a86ff : #24272d;
+        border-width: 1px;
+        border-color: root.active-position == 2 ? #73a8ff : #555b64;
+    }
+    Rectangle {
+        x: 1px;
+        y: 10px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: root.active-position == 3 ? #3a86ff : #24272d;
+        border-width: 1px;
+        border-color: root.active-position == 3 ? #73a8ff : #555b64;
+    }
+}
+
 export component HomeWindow inherits Window {
     /*
      * Two-stage lifecycle transition.
@@ -208,6 +349,10 @@ export component HomeWindow inherits Window {
     in-out property <int> controller-two-battery: -1;
     in-out property <int> controller-three-battery: -1;
     in-out property <int> controller-four-battery: -1;
+
+    in-out property <bool> settings-open: false;
+    in-out property <int> settings-selected-index: 0;
+    in-out property <int> back-face-position: -1;
 
     property <length> controllers-start-x:
         root.controller-count >= 4 ? root.width - 253px
@@ -257,20 +402,20 @@ export component HomeWindow inherits Window {
             /* Left: nuubOS wordmark + current user. */
             Text {
                 x: 18px;
-                y: 15px;
-                width: 44px;
+                y: 13px;
+                width: 45px;
                 text: "nuub";
                 color: #f5f6f8;
-                font-size: 19px;
+                font-size: 21px;
                 font-weight: 700;
             }
             Text {
-                x: 64px;
-                y: 15px;
-                width: 26px;
+                x: 61px;
+                y: 13px;
+                width: 28px;
                 text: "OS";
                 color: #3a86ff;
-                font-size: 19px;
+                font-size: 21px;
                 font-weight: 700;
             }
             Rectangle {
@@ -361,12 +506,14 @@ export component HomeWindow inherits Window {
             }
         }
 
+        /* Home content. */
         Rectangle {
             x: 0;
             y: 50px;
             width: parent.width;
             height: parent.height - 102px;
             background: #0d0e10;
+            visible: !root.settings-open;
 
             Rectangle {
                 x: 20px;
@@ -412,7 +559,185 @@ export component HomeWindow inherits Window {
             }
         }
 
-        /* Universal bottom action bar: render actions, never controller letters. */
+        /* Settings shell: thematic categories only, no fake functionality. */
+        Rectangle {
+            x: 0;
+            y: 50px;
+            width: parent.width;
+            height: parent.height - 102px;
+            background: #0d0e10;
+            visible: root.settings-open;
+
+            Text {
+                x: 18px;
+                y: 14px;
+                text: "Settings";
+                color: #f5f6f8;
+                font-size: 29px;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                x: 18px;
+                y: 54px;
+                width: 198px;
+                height: parent.height - 70px;
+                background: #101114;
+                border-width: 1px;
+                border-color: #202329;
+                border-radius: 8px;
+
+                SettingsCategory {
+                    x: 8px;
+                    y: 8px;
+                    width: parent.width - 16px;
+                    label: "General";
+                    selected: root.settings-selected-index == 0;
+                }
+                SettingsCategory {
+                    x: 8px;
+                    y: 52px;
+                    width: parent.width - 16px;
+                    label: "Connectivity";
+                    selected: root.settings-selected-index == 1;
+                }
+                SettingsCategory {
+                    x: 8px;
+                    y: 96px;
+                    width: parent.width - 16px;
+                    label: "Controllers & Input";
+                    selected: root.settings-selected-index == 2;
+                }
+                SettingsCategory {
+                    x: 8px;
+                    y: 140px;
+                    width: parent.width - 16px;
+                    label: "Display & Audio";
+                    selected: root.settings-selected-index == 3;
+                }
+                SettingsCategory {
+                    x: 8px;
+                    y: 184px;
+                    width: parent.width - 16px;
+                    label: "Gaming";
+                    selected: root.settings-selected-index == 4;
+                }
+                SettingsCategory {
+                    x: 8px;
+                    y: 228px;
+                    width: parent.width - 16px;
+                    label: "System";
+                    selected: root.settings-selected-index == 5;
+                }
+            }
+
+            Rectangle {
+                x: 230px;
+                y: 0px;
+                width: parent.width - 230px;
+                height: parent.height;
+                background: #111214;
+                border-width: 1px;
+                border-color: #202329;
+                border-radius: 0px;
+
+                Text {
+                    x: 22px;
+                    y: 16px;
+                    width: parent.width - 44px;
+                    text: root.settings-selected-index == 0 ? "General"
+                        : root.settings-selected-index == 1 ? "Connectivity"
+                        : root.settings-selected-index == 2 ? "Controllers & Input"
+                        : root.settings-selected-index == 3 ? "Display & Audio"
+                        : root.settings-selected-index == 4 ? "Gaming"
+                        : "System";
+                    color: #f5f6f8;
+                    font-size: 26px;
+                    font-weight: 700;
+                            }
+
+                Text {
+                    x: 22px;
+                    y: 52px;
+                    width: parent.width - 44px;
+                    text: root.settings-selected-index == 0
+                        ? "Profiles, language and time"
+                        : root.settings-selected-index == 1
+                            ? "Wireless connections and paired devices"
+                            : root.settings-selected-index == 2
+                                ? "Controllers, mapping and input tools"
+                                : root.settings-selected-index == 3
+                                    ? "Screen, HDMI, brightness and audio"
+                                    : root.settings-selected-index == 4
+                                        ? "Gaming behaviour and performance"
+                                        : "Power, storage and system maintenance";
+                    color: #7f858e;
+                    font-size: 16px;
+                    font-weight: 500;
+                            }
+
+                Text {
+                    x: 22px;
+                    y: 88px;
+                    text: "Sections";
+                    color: #8e949d;
+                    font-size: 15px;
+                    font-weight: 700;
+                }
+
+                SettingsTopic {
+                    x: 22px;
+                    y: 116px;
+                    width: parent.width - 44px;
+                    label: root.settings-selected-index == 0 ? "User & Profile"
+                        : root.settings-selected-index == 1 ? "Wi-Fi"
+                        : root.settings-selected-index == 2 ? "Controllers"
+                        : root.settings-selected-index == 3 ? "Display & HDMI"
+                        : root.settings-selected-index == 4 ? "Performance Profiles"
+                        : "Battery & Power";
+                }
+
+                SettingsTopic {
+                    x: 22px;
+                    y: 166px;
+                    width: parent.width - 44px;
+                    label: root.settings-selected-index == 0 ? "Language & Region"
+                        : root.settings-selected-index == 1 ? "Bluetooth"
+                        : root.settings-selected-index == 2 ? "Controller Mapping"
+                        : root.settings-selected-index == 3 ? "Brightness"
+                        : root.settings-selected-index == 4 ? "Global Gaming Options"
+                        : "Storage";
+                }
+
+                SettingsTopic {
+                    x: 22px;
+                    y: 216px;
+                    width: parent.width - 44px;
+                    label: root.settings-selected-index == 0 ? "Date & Time"
+                        : root.settings-selected-index == 2 ? "Input Tester"
+                        : root.settings-selected-index == 3 ? "Audio"
+                        : root.settings-selected-index == 5 ? "System Information"
+                        : "";
+                    visible-topic: root.settings-selected-index == 0
+                        || root.settings-selected-index == 2
+                        || root.settings-selected-index == 3
+                        || root.settings-selected-index == 5;
+                }
+
+                SettingsTopic {
+                    x: 22px;
+                    y: 266px;
+                    width: parent.width - 44px;
+                    label: root.settings-selected-index == 2 ? "Rumble & RGB"
+                        : root.settings-selected-index == 5 ? "Updates & Recovery"
+                        : "";
+                    visible-topic: root.settings-selected-index == 2
+                        || root.settings-selected-index == 5;
+                }
+            }
+        }
+
+        /* Context-sensitive bottom action bar. */
         Rectangle {
             x: 0;
             y: parent.height - 52px;
@@ -435,19 +760,69 @@ export component HomeWindow inherits Window {
                 color: #7f858e;
                 font-size: 17px;
                 font-weight: 500;
+                visible: !root.settings-open;
+            }
+
+            StartActionHint {
+                x: parent.width - 282px;
+                y: 13px;
+                visible: !root.settings-open;
+            }
+
+            Text {
+                x: parent.width - 224px;
+                y: 17px;
+                width: 72px;
+                text: "Settings";
+                color: #a8adb5;
+                font-size: 16px;
+                font-weight: 600;
+                visible: !root.settings-open;
+            }
+
+            NavigationHint {
+                x: 18px;
+                y: 13px;
+                visible: root.settings-open;
+            }
+
+            Text {
+                x: 54px;
+                y: 17px;
+                text: "Navigate";
+                color: #a8adb5;
+                font-size: 17px;
+                font-weight: 600;
+                visible: root.settings-open;
+            }
+
+            FaceButtonHint {
+                x: 150px;
+                y: 12px;
+                active-position: root.back-face-position;
+                visible: root.settings-open;
+            }
+
+            Text {
+                x: 186px;
+                y: 17px;
+                text: "Back";
+                color: #a8adb5;
+                font-size: 17px;
+                font-weight: 600;
+                visible: root.settings-open;
             }
 
             MenuActionHint {
-                x: parent.width - 150px;
+                x: parent.width - 102px;
                 y: 13px;
             }
 
             Text {
-                x: parent.width - 116px;
+                x: parent.width - 68px;
                 y: 17px;
-                width: 98px;
-                horizontal-alignment: right;
-                text: "Quick Menu";
+                width: 50px;
+                text: "Menu";
                 color: #a8adb5;
                 font-size: 16px;
                 font-weight: 600;

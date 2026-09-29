@@ -47,7 +47,7 @@ const STATUS_SOCKET: &str = "/run/nuubos/statusd.sock";
 const LINE_STAGE_MS: u64 = 220;
 const CURTAIN_STAGE_MS: u64 = 460;
 const STAGE_GAP_MS: u64 = 18;
-const FRAME_MS: u64 = 16;
+const FRAME_INTERVAL_NS: u64 = 16_666_667;
 
 struct QuickPlatform {
     window: Rc<MinimalSoftwareWindow>,
@@ -860,7 +860,7 @@ fn start_input_subscription(tx: Sender<AppEvent>) {
             Ok(mut stream) => {
                 eprintln!("quick-menu: input service connected");
 
-                if let Err(error) = stream.write_all(b"SUBSCRIBE\n") {
+                if let Err(error) = stream.write_all(b"SUBSCRIBE QUICK_MENU\n") {
                     eprintln!(
                         "quick-menu: subscribe write failed={}",
                         error
@@ -1027,6 +1027,21 @@ fn ease_in_out(progress: f32) -> f32 {
     p * p * (3.0 - 2.0 * p)
 }
 
+fn pace_animation_frame(next_deadline: &mut Instant) {
+    *next_deadline += Duration::from_nanos(FRAME_INTERVAL_NS);
+
+    if let Some(remaining) = next_deadline.checked_duration_since(Instant::now()) {
+        thread::sleep(remaining);
+    } else {
+        /*
+         * Rendering/Wayland commit consumed the frame budget. Do not add a
+         * second fixed sleep: time-based progress will naturally catch up on
+         * the next frame without stretching the lifecycle animation.
+         */
+        *next_deadline = Instant::now();
+    }
+}
+
 fn animate_shutdown(
     mode: &str,
     ui: &QuickMenuWindow,
@@ -1042,6 +1057,7 @@ fn animate_shutdown(
     redraw_overlay(ui, queue, state, qh, conn)?;
 
     let curtain_start = Instant::now();
+    let mut curtain_deadline = curtain_start;
 
     loop {
         let elapsed = curtain_start.elapsed().as_millis() as u64;
@@ -1053,12 +1069,13 @@ fn animate_shutdown(
             break;
         }
 
-        thread::sleep(Duration::from_millis(FRAME_MS));
+        pace_animation_frame(&mut curtain_deadline);
     }
 
     thread::sleep(Duration::from_millis(STAGE_GAP_MS));
 
     let line_start = Instant::now();
+    let mut line_deadline = line_start;
 
     loop {
         let elapsed = line_start.elapsed().as_millis() as u64;
@@ -1070,7 +1087,7 @@ fn animate_shutdown(
             break;
         }
 
-        thread::sleep(Duration::from_millis(FRAME_MS));
+        pace_animation_frame(&mut line_deadline);
     }
 
     /*
