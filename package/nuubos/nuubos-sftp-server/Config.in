@@ -1,0 +1,7 @@
+config BR2_PACKAGE_NUUBOS_SFTP_SERVER
+	bool "nuubOS SFTP server helper"
+	depends on BR2_USE_MMU
+	select BR2_PACKAGE_OPENSSH
+	help
+	  Install the OpenSSH sftp-server subsystem helper used by the
+	  existing Dropbear SSH daemon. nuubOS does not run OpenSSH sshd.

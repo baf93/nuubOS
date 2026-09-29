@@ -1,0 +1,8 @@
+nuubOS SFTP integration package
+
+This local package contains no third-party source code. It depends on the
+Buildroot OpenSSH package and installs only the built sftp-server subsystem
+helper at /usr/libexec/sftp-server for use by Dropbear.
+
+The OpenSSH binary retains its upstream licensing/provenance through the
+Buildroot OpenSSH package metadata. Dropbear remains the sole SSH daemon.
