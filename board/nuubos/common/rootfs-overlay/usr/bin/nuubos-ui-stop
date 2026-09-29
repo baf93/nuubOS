@@ -1,16 +1,32 @@
 #!/bin/sh
 
-for NAME in nuubos-wl-output-watch nuubui-home labwc; do
+# The Quick Menu is a Wayland client owned by the current compositor session.
+# Stop it together with Labwc; otherwise its old process can survive with a
+# dead Wayland connection and block the autostart session wrapper from
+# launching a fresh instance on the next compositor session.
+for NAME in nuubos-quick-menu nuubos-wl-output-watch nuubui-home labwc; do
     killall "$NAME" 2>/dev/null || true
 done
 
 I=0
-while pidof labwc >/dev/null 2>&1 && [ "$I" -lt 40 ]; do
+while [ "$I" -lt 40 ]; do
+    LABWC_UP=0
+    QUICK_UP=0
+    pidof labwc >/dev/null 2>&1 && LABWC_UP=1
+    pidof nuubos-quick-menu >/dev/null 2>&1 && QUICK_UP=1
+
+    if [ "$LABWC_UP" -eq 0 ] && [ "$QUICK_UP" -eq 0 ]; then
+        break
+    fi
+
     sleep 0.05
     I=$((I + 1))
 done
 
-# Escalate only if a stale compositor survived the normal stop window.
+# Escalate only if a stale process survived the normal stop window.
+if pidof nuubos-quick-menu >/dev/null 2>&1; then
+    killall -9 nuubos-quick-menu 2>/dev/null || true
+fi
 if pidof labwc >/dev/null 2>&1; then
     killall -9 labwc 2>/dev/null || true
 fi
@@ -20,3 +36,9 @@ rm -rf \
     /run/nuubos/labwc.pid \
     /run/nuubos/ui-ready \
     /run/nuubos/ui-bootstrap.pid
+
+rm -f \
+    /run/nuubos/quick-menu.pid \
+    /run/nuubos/quick-menu-mapped \
+    /run/nuubos/quick-menu-surface \
+    /run/nuubos/quick-menu-state

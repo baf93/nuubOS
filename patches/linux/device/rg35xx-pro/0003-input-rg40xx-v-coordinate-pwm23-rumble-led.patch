@@ -1,0 +1,232 @@
+diff --git a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-v.dts b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-v.dts
+index 877e44e..e7ce822 100644
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-v.dts
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-v.dts
+@@ -35,16 +35,25 @@
+ };
+ 
+ / {
++	/*
++	 * Replace the generic PWM3 vibrator so one coordinator owns the
++	 * whole PWM2/PWM3 pair. This is required because both channels
++	 * share the pair clock on H616/H700.
++	 */
++	/delete-node/ pwm-vibrator;
++
+ 	suspend_power_led {
+ 		compatible = "anbernic,rg40xx-v-power-led";
+ 
+-		pinctrl-names = "sleep";
+-		pinctrl-0 = <&pwm2_pi12_power_led_pin>;
++		pinctrl-names = "default", "sleep";
++		pinctrl-0 = <&pwm3_pi13_pin>;
++		pinctrl-1 = <&pwm2_pi12_power_led_pin>;
+ 
+ 		power-led-gpios = <&pio 8 12 GPIO_ACTIVE_HIGH>;
+ 
+-		pwms = <&pwm 2 3000000000 0>;
+-		pwm-names = "enable";
++		pwms = <&pwm 2 3000000000 0>,
++		       <&pwm 3 1000000 0>;
++		pwm-names = "sleep-led", "rumble";
+ 	};
+ };
+ 
+diff --git a/drivers/input/misc/Kconfig b/drivers/input/misc/Kconfig
+index be61d2e..65303c0 100644
+--- a/drivers/input/misc/Kconfig
++++ b/drivers/input/misc/Kconfig
+@@ -652,9 +652,10 @@ config INPUT_RG35XX_PRO_HAPTICS
+ 	depends on ARCH_SUNXI && OF && PWM && GPIOLIB && LEDS_CLASS
+ 	select INPUT_FF_MEMLESS
+ 	help
+-	  Coordinate H700 handheld power LEDs across system suspend.
+-	  On RG35XX Pro this also coordinates the vibration motor because
+-	  both functions share PWM2 through different physical pins.
++	  Coordinate H700 handheld power LEDs and vibration PWM ownership.
++	  RG35XX Pro multiplexes both functions on PWM2; RG40XX-V uses
++	  PWM2 for the suspend LED and PWM3 for rumble, with both channels
++	  sharing one hardware pair clock that must be coordinated.
+ 
+ config INPUT_PWM_VIBRA
+ 	tristate "PWM vibrator support"
+diff --git a/drivers/input/misc/rg35xx-pro-haptics.c b/drivers/input/misc/rg35xx-pro-haptics.c
+index 520fc81..a690e16 100644
+--- a/drivers/input/misc/rg35xx-pro-haptics.c
++++ b/drivers/input/misc/rg35xx-pro-haptics.c
+@@ -33,6 +33,7 @@
+ struct rg35xx_pro_haptics {
+ 	struct device *dev;
+ 	struct pwm_device *pwm;
++	struct pwm_device *rumble_pwm;
+ 	struct gpio_desc *power_led;
+ 
+ 	struct input_dev *input;
+@@ -50,21 +51,35 @@ struct rg35xx_pro_haptics {
+ 	bool has_default_pinctrl;
+ };
+ 
+-static int rg35xx_pro_pwm_off(struct rg35xx_pro_haptics *h)
++static int rg35xx_pro_pwm_device_off(struct pwm_device *pwm)
+ {
+ 	struct pwm_state state;
+ 
+-	pwm_get_state(h->pwm, &state);
++	if (!pwm)
++		return 0;
++
++	pwm_get_state(pwm, &state);
+ 	state.enabled = false;
+ 
+-	return pwm_apply_might_sleep(h->pwm, &state);
++	return pwm_apply_might_sleep(pwm, &state);
++}
++
++static int rg35xx_pro_pwm_off(struct rg35xx_pro_haptics *h)
++{
++	return rg35xx_pro_pwm_device_off(h->pwm);
++}
++
++static int rg35xx_pro_rumble_pwm_off(struct rg35xx_pro_haptics *h)
++{
++	return rg35xx_pro_pwm_device_off(h->rumble_pwm ?: h->pwm);
+ }
+ 
+ static int rg35xx_pro_rumble_apply(struct rg35xx_pro_haptics *h)
+ {
++	struct pwm_device *pwm = h->rumble_pwm ?: h->pwm;
+ 	struct pwm_state state;
+ 
+-	pwm_get_state(h->pwm, &state);
++	pwm_get_state(pwm, &state);
+ 	state.period = RG35XX_PRO_RUMBLE_PERIOD_NS;
+ 
+ 	if (!h->level) {
+@@ -75,7 +90,7 @@ static int rg35xx_pro_rumble_apply(struct rg35xx_pro_haptics *h)
+ 		state.enabled = true;
+ 	}
+ 
+-	return pwm_apply_might_sleep(h->pwm, &state);
++	return pwm_apply_might_sleep(pwm, &state);
+ }
+ 
+ static int rg35xx_pro_suspend_led_start(struct rg35xx_pro_haptics *h)
+@@ -157,7 +172,7 @@ static void rg35xx_pro_input_close(struct input_dev *input)
+ 
+ 	h->level = 0;
+ 	if (!h->suspended)
+-		rg35xx_pro_pwm_off(h);
++		rg35xx_pro_rumble_pwm_off(h);
+ 
+ 	mutex_unlock(&h->lock);
+ }
+@@ -215,10 +230,21 @@ static int rg35xx_pro_suspend(struct device *dev)
+ 	h->suspended = true;
+ 	h->level = 0;
+ 
+-	ret = rg35xx_pro_pwm_off(h);
++	/*
++	 * RG40XX-V uses PWM3 for rumble and PWM2 for the suspend LED.
++	 * They share one hardware pair clock, so PWM3 must be disabled
++	 * before PWM2 can retune that pair for the multi-second LED cycle.
++	 */
++	ret = rg35xx_pro_rumble_pwm_off(h);
+ 	if (ret)
+ 		goto out_active;
+ 
++	if (h->rumble_pwm) {
++		ret = rg35xx_pro_pwm_off(h);
++		if (ret)
++			goto out_active;
++	}
++
+ 	/*
+ 	 * The sunxi pinctrl driver uses strict ownership. Release PI12
+ 	 * as GPIO before selecting the state that routes PWM2 to PI12.
+@@ -295,8 +321,8 @@ static int rg35xx_pro_probe(struct platform_device *pdev)
+ 				    "anbernic,rg40xx-v-power-led")) {
+ 		h->sleep_period_ns = RG40XX_V_SLEEP_PERIOD_NS;
+ 		h->sleep_duty_ns = RG40XX_V_SLEEP_DUTY_NS;
+-		h->has_haptics = false;
+-		h->has_default_pinctrl = false;
++		h->has_haptics = true;
++		h->has_default_pinctrl = true;
+ 	} else {
+ 		h->sleep_period_ns = RG35XX_PRO_SLEEP_PERIOD_NS;
+ 		h->sleep_duty_ns = RG35XX_PRO_SLEEP_DUTY_NS;
+@@ -307,10 +333,14 @@ static int rg35xx_pro_probe(struct platform_device *pdev)
+ 	mutex_init(&h->lock);
+ 	INIT_WORK(&h->play_work, rg35xx_pro_play_work);
+ 
+-	h->pwm = devm_pwm_get(dev, "enable");
++	if (of_device_is_compatible(dev->of_node,
++				    "anbernic,rg40xx-v-power-led"))
++		h->pwm = devm_pwm_get(dev, "sleep-led");
++	else
++		h->pwm = devm_pwm_get(dev, "enable");
+ 	if (IS_ERR(h->pwm))
+ 		return dev_err_probe(dev, PTR_ERR(h->pwm),
+-				     "failed to request PWM2\n");
++				     "failed to request suspend LED PWM\n");
+ 
+ 	pwm_init_state(h->pwm, &state);
+ 	state.enabled = false;
+@@ -318,7 +348,22 @@ static int rg35xx_pro_probe(struct platform_device *pdev)
+ 	ret = pwm_apply_might_sleep(h->pwm, &state);
+ 	if (ret)
+ 		return dev_err_probe(dev, ret,
+-				     "failed to initialize PWM2\n");
++				     "failed to initialize suspend LED PWM\n");
++
++	if (of_device_is_compatible(dev->of_node,
++				    "anbernic,rg40xx-v-power-led")) {
++		h->rumble_pwm = devm_pwm_get(dev, "rumble");
++		if (IS_ERR(h->rumble_pwm))
++			return dev_err_probe(dev, PTR_ERR(h->rumble_pwm),
++					     "failed to request rumble PWM3\n");
++
++		pwm_init_state(h->rumble_pwm, &state);
++		state.enabled = false;
++		ret = pwm_apply_might_sleep(h->rumble_pwm, &state);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "failed to initialize rumble PWM3\n");
++	}
+ 
+ 	ret = rg35xx_pro_led_gpio_get(h);
+ 	if (ret)
+@@ -341,11 +386,6 @@ static int rg35xx_pro_probe(struct platform_device *pdev)
+ 
+ 	platform_set_drvdata(pdev, h);
+ 
+-	if (!h->has_haptics) {
+-		dev_info(dev, "RG40XX-V suspend power-LED coordinator ready\n");
+-		return 0;
+-	}
+-
+ 	h->input = devm_input_allocate_device(dev);
+ 	if (!h->input)
+ 		return -ENOMEM;
+@@ -369,7 +409,10 @@ static int rg35xx_pro_probe(struct platform_device *pdev)
+ 		return dev_err_probe(dev, ret,
+ 				     "failed to register FF device\n");
+ 
+-	dev_info(dev, "rumble/power-LED coordinator ready\n");
++	if (h->rumble_pwm)
++		dev_info(dev, "RG40XX-V rumble/power-LED coordinator ready\n");
++	else
++		dev_info(dev, "rumble/power-LED coordinator ready\n");
+ 
+ 	return 0;
+ }
+@@ -382,7 +425,9 @@ static void rg35xx_pro_shutdown(struct platform_device *pdev)
+ 
+ 	mutex_lock(&h->lock);
+ 
+-	rg35xx_pro_pwm_off(h);
++	rg35xx_pro_rumble_pwm_off(h);
++	if (h->rumble_pwm)
++		rg35xx_pro_pwm_off(h);
+ 
+ 	if (h->power_led)
+ 		gpiod_set_value_cansleep(h->power_led, 0);

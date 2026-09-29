@@ -3,26 +3,30 @@
 OUTPUTS="$(/usr/bin/wlr-randr 2>/dev/null | awk '/^[A-Za-z0-9-]+ / {print $1}')"
 [ -n "$OUTPUTS" ] || exit 0
 
-HDMI="$(printf '%s
-' "$OUTPUTS" | grep '^HDMI-A-' | head -n 1)"
+HDMI="$(printf '%s\n' "$OUTPUTS" | grep '^HDMI-A-' | head -n 1)"
 if [ -n "$HDMI" ]; then
     /usr/bin/wlr-randr --output "$HDMI" --on --preferred >/dev/null 2>&1 || true
-    printf '%s
-' "$OUTPUTS" | while read -r OUTPUT; do
+    printf '%s\n' "$OUTPUTS" | while read -r OUTPUT; do
         [ -n "$OUTPUT" ] || continue
         [ "$OUTPUT" = "$HDMI" ] && continue
         /usr/bin/wlr-randr --output "$OUTPUT" --off >/dev/null 2>&1 || true
     done
-    exit 0
+else
+    PRIMARY="$(printf '%s\n' "$OUTPUTS" | head -n 1)"
+    if [ -n "$PRIMARY" ]; then
+        /usr/bin/wlr-randr --output "$PRIMARY" --on --preferred >/dev/null 2>&1 || true
+        printf '%s\n' "$OUTPUTS" | while read -r OUTPUT; do
+            [ -n "$OUTPUT" ] || continue
+            [ "$OUTPUT" = "$PRIMARY" ] && continue
+            /usr/bin/wlr-randr --output "$OUTPUT" --off >/dev/null 2>&1 || true
+        done
+    fi
 fi
 
-PRIMARY="$(printf '%s
-' "$OUTPUTS" | head -n 1)"
-[ -n "$PRIMARY" ] || exit 0
-/usr/bin/wlr-randr --output "$PRIMARY" --on --preferred >/dev/null 2>&1 || true
-printf '%s
-' "$OUTPUTS" | while read -r OUTPUT; do
-    [ -n "$OUTPUT" ] || continue
-    [ "$OUTPUT" = "$PRIMARY" ] && continue
-    /usr/bin/wlr-randr --output "$OUTPUT" --off >/dev/null 2>&1 || true
-done
+# The compositor survives hotplug, but the resident layer-shell client may
+# retain output-local state from the previous topology. Recreate only that
+# client once after applying the new output policy. The input socket closes
+# with the old process, releasing any Quick Menu capture automatically.
+/usr/bin/nuubos-quick-menu-session restart >/run/nuubos/quick-menu-session.log 2>&1 &
+
+exit 0

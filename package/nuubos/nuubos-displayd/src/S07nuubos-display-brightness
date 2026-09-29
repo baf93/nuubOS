@@ -1,0 +1,35 @@
+#!/bin/sh
+
+CONTROL=/usr/bin/nuubos-displayctl
+
+restore_brightness()
+{
+    if [ ! -x "$CONTROL" ]; then
+        echo "nuubOS display brightness: displayctl unavailable" >&2
+        return 1
+    fi
+
+    if ! "$CONTROL" restore; then
+        echo "nuubOS display brightness: restore failed" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+case "$1" in
+    start)
+        restore_brightness
+        ;;
+    stop)
+        ;;
+    restart)
+        restore_brightness
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}" >&2
+        exit 1
+        ;;
+esac
+
+exit $?

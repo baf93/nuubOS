@@ -1,0 +1,570 @@
+component BatteryGlyph inherits Rectangle {
+    in property <int> percent: -1;
+    in property <bool> charging: false;
+
+    width: 32px;
+    height: 24px;
+    background: #00000000;
+
+    Image { x: 0; y: 0; width: parent.width; height: parent.height; source: @image-url("assets/icons/battery-empty.svg"); image-fit: contain; visible: root.percent >= 0 && root.percent <= 15; }
+    Image { x: 0; y: 0; width: parent.width; height: parent.height; source: @image-url("assets/icons/battery-quarter.svg"); image-fit: contain; visible: root.percent > 15 && root.percent <= 35; }
+    Image { x: 0; y: 0; width: parent.width; height: parent.height; source: @image-url("assets/icons/battery-half.svg"); image-fit: contain; visible: root.percent > 35 && root.percent <= 60; }
+    Image { x: 0; y: 0; width: parent.width; height: parent.height; source: @image-url("assets/icons/battery-three-quarters.svg"); image-fit: contain; visible: root.percent > 60 && root.percent <= 85; }
+    Image { x: 0; y: 0; width: parent.width; height: parent.height; source: @image-url("assets/icons/battery-full.svg"); image-fit: contain; visible: root.percent > 85; }
+
+    Text {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        text: "?";
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        color: #7f858e;
+        font-size: 14px;
+        font-weight: 700;
+        visible: root.percent < 0;
+    }
+
+    Image {
+        x: (parent.width - 15px) / 2;
+        y: (parent.height - 17px) / 2;
+        width: 15px;
+        height: 17px;
+        source: @image-url("assets/icons/bolt.svg");
+        image-fit: contain;
+        visible: root.charging && root.percent >= 0;
+    }
+}
+
+component FaceButtonHint inherits Rectangle {
+    in property <int> active-position: -1;
+
+    width: 28px;
+    height: 28px;
+    background: #00000000;
+
+    Rectangle {
+        x: 10px;
+        y: 1px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: root.active-position == 0 ? #3a86ff : #24272d;
+        border-width: 1px;
+        border-color: root.active-position == 0 ? #73a8ff : #555b64;
+    }
+
+    Rectangle {
+        x: 19px;
+        y: 10px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: root.active-position == 1 ? #3a86ff : #24272d;
+        border-width: 1px;
+        border-color: root.active-position == 1 ? #73a8ff : #555b64;
+    }
+
+    Rectangle {
+        x: 10px;
+        y: 19px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: root.active-position == 2 ? #3a86ff : #24272d;
+        border-width: 1px;
+        border-color: root.active-position == 2 ? #73a8ff : #555b64;
+    }
+
+    Rectangle {
+        x: 1px;
+        y: 10px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: root.active-position == 3 ? #3a86ff : #24272d;
+        border-width: 1px;
+        border-color: root.active-position == 3 ? #73a8ff : #555b64;
+    }
+}
+
+component MenuActionHint inherits Rectangle {
+    width: 26px;
+    height: 26px;
+    border-radius: 5px;
+    background: #d8dbe0;
+    border-width: 1px;
+    border-color: #f5f6f8;
+
+    Text {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "H";
+        color: #0d0e10;
+        font-size: 16px;
+        font-weight: 800;
+    }
+}
+
+component HorizontalAdjustHint inherits Rectangle {
+    width: 28px;
+    height: 26px;
+    border-radius: 5px;
+    background: #d8dbe0;
+    border-width: 1px;
+    border-color: #f5f6f8;
+
+    Text {
+        x: 2px;
+        y: 0;
+        width: parent.width - 4px;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "↔";
+        color: #0d0e10;
+        font-size: 18px;
+        font-weight: 700;
+    }
+}
+
+export component QuickMenuWindow inherits Window {
+    in-out property <int> selected-index: 0;
+    in-out property <bool> brightness-visible: false;
+    in-out property <int> brightness-value: 60;
+    in-out property <float> brightness-fraction: 0.6;
+    in-out property <string> brightness-label: "60%";
+    in-out property <int> battery-percent: -1;
+    in-out property <string> battery-state: "unknown";
+    in-out property <string> battery-label: "--%";
+
+    in-out property <bool> context-section-visible: false;
+    in-out property <string> context-section-title: "CONTEXT";
+    in-out property <string> context-primary-label: "";
+
+    /*
+     * Physical face positions, never Xbox/Nintendo letters:
+     * 0 top, 1 right, 2 bottom, 3 left, -1 unavailable.
+     */
+    in-out property <int> confirm-face-position: -1;
+    in-out property <int> back-face-position: -1;
+
+    in-out property <bool> lifecycle-active: false;
+    in-out property <string> lifecycle-mode: "";
+    in-out property <float> line-progress: 1.0;
+    in-out property <float> curtain-progress: 1.0;
+
+    property <length> panel-width:
+        root.width < 900px ? root.width * 0.54 : 400px;
+    property <length> display-section-y:
+        root.context-section-visible ? 152px : 82px;
+    property <length> system-section-y:
+        root.display-section-y + (root.brightness-visible ? 98px : 0px);
+
+    title: "nuubOS Quick Menu";
+    background: #00000000;
+    default-font-family: "Cantarell";
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: #0000007a;
+    }
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: root.panel-width;
+        height: parent.height;
+        background: #0d0e10;
+
+        Rectangle {
+            x: parent.width - 1px;
+            y: 0;
+            width: 1px;
+            height: parent.height;
+            background: #2c3036;
+        }
+
+        Text {
+            x: 20px;
+            y: 17px;
+            width: 180px;
+            text: "Quick Menu";
+            color: #f5f6f8;
+            font-size: 25px;
+            font-weight: 700;
+        }
+
+        BatteryGlyph {
+            x: parent.width - 88px;
+            y: 15px;
+            percent: root.battery-percent;
+            charging: root.battery-state == "charging";
+        }
+
+        Text {
+            x: parent.width - 50px;
+            y: 15px;
+            width: 34px;
+            height: 24px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            text: root.battery-label;
+            color: #e5e7eb;
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        Rectangle {
+            x: 20px;
+            y: 59px;
+            width: parent.width - 40px;
+            height: 1px;
+            background: #25282d;
+        }
+
+        /*
+         * Optional context block.  Sections remain independent, so future
+         * adapters can show/hide them without changing the system shell.
+         */
+        Rectangle {
+            x: 0;
+            y: 76px;
+            width: parent.width;
+            height: 66px;
+            background: #00000000;
+            visible: root.context-section-visible;
+
+            Text {
+                x: 20px;
+                y: 0;
+                text: root.context-section-title;
+                color: #3a86ff;
+                font-size: 13px;
+                font-weight: 700;
+            }
+
+            Rectangle {
+                x: 16px;
+                y: 20px;
+                width: parent.width - 32px;
+                height: 38px;
+                background: #121418;
+                border-width: 1px;
+                border-color: #24272c;
+
+                Text {
+                    x: 13px;
+                    vertical-alignment: center;
+                    text: root.context-primary-label;
+                    color: #d8dbe0;
+                    font-size: 17px;
+                    font-weight: 600;
+                }
+            }
+        }
+
+        Text {
+            x: 20px;
+            y: root.display-section-y;
+            text: "DISPLAY / AUDIO";
+            color: #3a86ff;
+            font-size: 13px;
+            font-weight: 700;
+            visible: root.brightness-visible;
+        }
+
+        Rectangle {
+            x: 16px;
+            y: root.display-section-y + 20px;
+            width: parent.width - 32px;
+            height: 58px;
+            background: root.selected-index == 3 ? #1a1d22 : #111214;
+            border-width: 1px;
+            border-color: root.selected-index == 3 ? #3a86ff : #1c1e22;
+            visible: root.brightness-visible;
+
+            Text {
+                x: 14px;
+                y: 9px;
+                text: "Brightness";
+                color: root.selected-index == 3 ? #ffffff : #d9dce1;
+                font-size: 17px;
+                font-weight: root.selected-index == 3 ? 700 : 600;
+            }
+
+            Text {
+                x: parent.width - 58px;
+                y: 9px;
+                width: 44px;
+                horizontal-alignment: right;
+                text: root.brightness-label;
+                color: root.selected-index == 3 ? #ffffff : #a8adb5;
+                font-size: 16px;
+                font-weight: 600;
+            }
+
+            Rectangle {
+                x: 14px;
+                y: 38px;
+                width: parent.width - 28px;
+                height: 4px;
+                border-radius: 2px;
+                background: #2a2e34;
+
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: parent.width * root.brightness-fraction;
+                    height: parent.height;
+                    border-radius: 2px;
+                    background: #3a86ff;
+                }
+            }
+        }
+
+
+        Text {
+            x: 20px;
+            y: root.system-section-y;
+            text: "SYSTEM";
+            color: #3a86ff;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        Rectangle {
+            x: 16px;
+            y: root.system-section-y + 20px;
+            width: parent.width - 32px;
+            height: 40px;
+            background: root.selected-index == 0 ? #1a1d22 : #111214;
+            border-width: 1px;
+            border-color: root.selected-index == 0 ? #3a86ff : #1c1e22;
+
+            Text {
+                x: 14px;
+                vertical-alignment: center;
+                text: "Sleep";
+                color: root.selected-index == 0 ? #ffffff : #d9dce1;
+                font-size: 18px;
+                font-weight: root.selected-index == 0 ? 700 : 600;
+            }
+        }
+
+        Rectangle {
+            x: 16px;
+            y: root.system-section-y + 66px;
+            width: parent.width - 32px;
+            height: 40px;
+            background: root.selected-index == 1 ? #1a1d22 : #111214;
+            border-width: 1px;
+            border-color: root.selected-index == 1 ? #3a86ff : #1c1e22;
+
+            Text {
+                x: 14px;
+                vertical-alignment: center;
+                text: "Reboot";
+                color: root.selected-index == 1 ? #ffffff : #d9dce1;
+                font-size: 18px;
+                font-weight: root.selected-index == 1 ? 700 : 600;
+            }
+        }
+
+        Rectangle {
+            x: 16px;
+            y: root.system-section-y + 112px;
+            width: parent.width - 32px;
+            height: 40px;
+            background: root.selected-index == 2 ? #1a1d22 : #111214;
+            border-width: 1px;
+            border-color: root.selected-index == 2 ? #3a86ff : #1c1e22;
+
+            Text {
+                x: 14px;
+                vertical-alignment: center;
+                text: "Power Off";
+                color: root.selected-index == 2 ? #ffffff : #d9dce1;
+                font-size: 18px;
+                font-weight: root.selected-index == 2 ? 700 : 600;
+            }
+        }
+
+        /* Universal context-sensitive action bar. */
+        Rectangle {
+            x: 0;
+            y: parent.height - 58px;
+            width: parent.width;
+            height: 58px;
+            background: #0a0b0d;
+
+            Rectangle {
+                x: 16px;
+                y: 0;
+                width: parent.width - 32px;
+                height: 1px;
+                background: #25282d;
+            }
+
+            /* Primary slot: Select for actions, Adjust for horizontal sliders. */
+            FaceButtonHint {
+                x: 18px;
+                y: 15px;
+                active-position: root.confirm-face-position;
+                visible: !(root.brightness-visible && root.selected-index == 3);
+            }
+
+            Text {
+                x: 52px;
+                y: 20px;
+                text: "Select";
+                color: #b8bdc5;
+                font-size: 15px;
+                font-weight: 600;
+                visible: !(root.brightness-visible && root.selected-index == 3);
+            }
+
+            HorizontalAdjustHint {
+                x: 18px;
+                y: 16px;
+                visible: root.brightness-visible && root.selected-index == 3;
+            }
+
+            Text {
+                x: 54px;
+                y: 20px;
+                text: "Adjust";
+                color: #b8bdc5;
+                font-size: 15px;
+                font-weight: 600;
+                visible: root.brightness-visible && root.selected-index == 3;
+            }
+
+            FaceButtonHint {
+                x: 126px;
+                y: 15px;
+                active-position: root.back-face-position;
+            }
+
+            Text {
+                x: 160px;
+                y: 20px;
+                text: "Back";
+                color: #a8adb5;
+                font-size: 15px;
+                font-weight: 600;
+            }
+
+            MenuActionHint {
+                x: 226px;
+                y: 16px;
+            }
+
+            Text {
+                x: 260px;
+                y: 20px;
+                text: "Close";
+                color: #8e949d;
+                font-size: 15px;
+                font-weight: 600;
+            }
+        }
+    }
+
+    /*
+     * Existing qualified P0.1 lifecycle animation, kept above fullscreen
+     * clients by the Quick Menu's layer-shell Overlay surface.
+     */
+    Rectangle {
+        x: 0;
+        y: -(parent.height * 0.485) * root.curtain-progress;
+        width: parent.width;
+        height: parent.height * 0.485;
+        clip: true;
+        visible: root.lifecycle-active;
+
+        Image {
+            x: 0;
+            y: 0;
+            width: root.width;
+            height: root.height;
+            source: root.lifecycle-mode == "reboot"
+                ? @image-url("assets/reboot-splash.png")
+                : @image-url("assets/poweroff-splash.png");
+            image-fit: fill;
+            image-rendering: pixelated;
+        }
+    }
+
+    Rectangle {
+        x: 0;
+        y: parent.height * 0.485
+            + (parent.height * 0.515) * root.curtain-progress;
+        width: parent.width;
+        height: parent.height * 0.515;
+        clip: true;
+        visible: root.lifecycle-active;
+
+        Image {
+            x: 0;
+            y: -(root.height * 0.485);
+            width: root.width;
+            height: root.height;
+            source: root.lifecycle-mode == "reboot"
+                ? @image-url("assets/reboot-splash.png")
+                : @image-url("assets/poweroff-splash.png");
+            image-fit: fill;
+            image-rendering: pixelated;
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height * 0.485
+            - (parent.height * 0.485) * root.curtain-progress;
+        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        height: 3px;
+        background: #5b86d6;
+        visible: root.lifecycle-active;
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height * 0.485
+            + (parent.height * 0.515) * root.curtain-progress
+            - self.height;
+        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        height: 3px;
+        background: #5b86d6;
+        visible: root.lifecycle-active;
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height * 0.485
+            - (parent.height * 0.485) * root.curtain-progress
+            - 2px;
+        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        height: 7px;
+        background: #5b86d6;
+        opacity: 0.06;
+        visible: root.lifecycle-active;
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height * 0.485
+            + (parent.height * 0.515) * root.curtain-progress
+            - 5px;
+        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        height: 7px;
+        background: #5b86d6;
+        opacity: 0.06;
+        visible: root.lifecycle-active;
+    }
+}

@@ -35,7 +35,14 @@ log "mode=$MODE"
 #   line contract 220 ms
 #   plus margin before ownership handoff
 #
-if pidof nuubui-home >/dev/null 2>&1 && [ -p /run/nuubos/ui-control ]; then
+if [ "${NUUBOS_LIFECYCLE_PREANIMATED:-0}" = "1" ]; then
+    #
+    # A system-wide Overlay client (currently Quick Menu) has already
+    # completed the exact v0.8.1 lifecycle animation and is holding the
+    # final raster on KMS. Do not trigger a second Home animation underneath.
+    #
+    log "slint-transition=preanimated-overlay"
+elif pidof nuubui-home >/dev/null 2>&1 && [ -p /run/nuubos/ui-control ]; then
     printf '%s\n' "$MODE" > /run/nuubos/ui-control
     log "slint-transition=sent"
     sleep 0.80

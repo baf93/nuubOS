@@ -28,6 +28,8 @@ define NUUBOS_DISPLAYD_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/sbin/nuubos-displayd
 	$(INSTALL) -D -m 0755 $(@D)/nuubos-displayctl \
 		$(TARGET_DIR)/usr/bin/nuubos-displayctl
+	$(INSTALL) -D -m 0755 $(@D)/S07nuubos-display-brightness \
+		$(TARGET_DIR)/etc/init.d/S07nuubos-display-brightness
 	$(INSTALL) -D -m 0755 $(@D)/S08nuubos-displayd \
 		$(TARGET_DIR)/etc/init.d/S08nuubos-displayd
 endef

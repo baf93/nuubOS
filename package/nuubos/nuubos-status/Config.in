@@ -1,0 +1,10 @@
+config BR2_PACKAGE_NUUBOS_STATUS
+	bool "nuubos-status"
+	select BR2_PACKAGE_WPA_SUPPLICANT
+	select BR2_PACKAGE_WPA_SUPPLICANT_CLI
+	select BR2_PACKAGE_BLUEZ5_UTILS
+	select BR2_PACKAGE_BLUEZ5_UTILS_CLIENT
+	help
+	  Event-driven nuubOS topbar status service. It owns the normalized
+	  current-user, clock, Wi-Fi, system-battery and connected Bluetooth
+	  controller status contract consumed by nuubUI.

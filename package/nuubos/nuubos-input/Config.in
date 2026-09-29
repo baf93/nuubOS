@@ -1,0 +1,4 @@
+config BR2_PACKAGE_NUUBOS_INPUT
+	bool "nuubOS logical input service"
+	help
+	  Owns semantic controller bindings and publishes logical input actions.

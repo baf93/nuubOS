@@ -1,0 +1,11 @@
+Font Awesome Free 6.7.2
+
+Selected SVG icons are redistributed from Font Awesome Free 6.7.2.
+Icons are licensed under Creative Commons Attribution 4.0 International (CC BY 4.0).
+Copyright 2024 Fonticons, Inc.
+https://fontawesome.com/
+
+The original icon geometry is preserved. nuubOS applies fixed colors for predictable
+Slint rendering; the charging bolt additionally uses the same path as a dark outline
+underlay so the border follows the bolt silhouette exactly.
+See LICENSE.txt in the icon directory for the complete Font Awesome Free license.

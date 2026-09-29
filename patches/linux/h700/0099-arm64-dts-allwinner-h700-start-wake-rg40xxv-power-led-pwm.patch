@@ -1,0 +1,11 @@
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-2024.dts
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-2024.dts
+@@ -517,3 +517,8 @@
+ &mmc1 {
+ 	keep-power-in-suspend;
+ };
++
++/* nuubOS: START is the controller wake key for H700 s2idle. */
++&{/gpio-keys-gamepad/button-start} {
++	wakeup-source;
++};

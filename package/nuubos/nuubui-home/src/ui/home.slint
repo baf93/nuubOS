@@ -1,3 +1,186 @@
+component BatteryGlyph inherits Rectangle {
+    in property <int> percent: -1;
+    in property <bool> compact: false;
+    in property <bool> charging: false;
+
+    width: root.compact ? 13px : 32px;
+    height: root.compact ? 10px : 24px;
+    background: #00000000;
+
+    Image {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("assets/icons/battery-empty.svg");
+        image-fit: contain;
+        visible: root.percent >= 0 && root.percent <= 15;
+    }
+    Image {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("assets/icons/battery-quarter.svg");
+        image-fit: contain;
+        visible: root.percent > 15 && root.percent <= 35;
+    }
+    Image {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("assets/icons/battery-half.svg");
+        image-fit: contain;
+        visible: root.percent > 35 && root.percent <= 60;
+    }
+    Image {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("assets/icons/battery-three-quarters.svg");
+        image-fit: contain;
+        visible: root.percent > 60 && root.percent <= 85;
+    }
+    Image {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("assets/icons/battery-full.svg");
+        image-fit: contain;
+        visible: root.percent > 85;
+    }
+    Text {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        text: "?";
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        color: #7f858e;
+        font-size: root.compact ? 8px : 11px;
+        font-weight: 700;
+        visible: root.percent < 0;
+    }
+
+    Image {
+        x: (parent.width - (root.compact ? 7px : 15px)) / 2;
+        y: (parent.height - (root.compact ? 8px : 17px)) / 2;
+        width: root.compact ? 7px : 15px;
+        height: root.compact ? 8px : 17px;
+        source: @image-url("assets/icons/bolt.svg");
+        image-fit: contain;
+        visible: root.charging && root.percent >= 0;
+    }
+}
+
+component ControllerStatus inherits Rectangle {
+    in property <string> player-label: "1";
+    in property <int> battery-percent: -1;
+
+    width: 34px;
+    height: 38px;
+    background: #00000000;
+
+    Image {
+        x: 0;
+        y: 14px;
+        width: 22px;
+        height: 22px;
+        source: @image-url("assets/icons/gamepad.svg");
+        image-fit: contain;
+    }
+
+    Rectangle {
+        x: 16px;
+        y: 4px;
+        width: 13px;
+        height: 13px;
+        border-radius: 7px;
+        background: #3a86ff;
+
+        Text {
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: root.player-label;
+            color: #ffffff;
+            font-size: 11px;
+            font-weight: 700;
+        }
+    }
+
+    BatteryGlyph {
+        x: 19px;
+        y: 34px;
+        compact: true;
+        percent: root.battery-percent;
+    }
+}
+
+component WifiStatus inherits Rectangle {
+    in property <string> state: "disconnected";
+
+    width: 25px;
+    height: 45px;
+    background: #00000000;
+
+    Image {
+        x: 1px;
+        y: 14px;
+        width: 22px;
+        height: 22px;
+        source: @image-url("assets/icons/wifi.svg");
+        image-fit: contain;
+        opacity: root.state == "connected" ? 1.0 : root.state == "connecting" ? 0.82 : 0.34;
+    }
+
+    Image {
+        x: 16px;
+        y: 5px;
+        width: 9px;
+        height: 9px;
+        source: @image-url("assets/icons/circle-notch.svg");
+        image-fit: contain;
+        visible: root.state == "connecting";
+    }
+
+    Image {
+        x: 16px;
+        y: 5px;
+        width: 9px;
+        height: 9px;
+        source: @image-url("assets/icons/xmark.svg");
+        image-fit: contain;
+        opacity: root.state == "off" ? 1.0 : 0.62;
+        visible: root.state == "off" || root.state == "disconnected";
+    }
+}
+
+component MenuActionHint inherits Rectangle {
+    width: 26px;
+    height: 26px;
+    border-radius: 5px;
+    background: #d8dbe0;
+    border-width: 1px;
+    border-color: #f5f6f8;
+
+    Text {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "H";
+        color: #0d0e10;
+        font-size: 16px;
+        font-weight: 800;
+    }
+}
+
 export component HomeWindow inherits Window {
     /*
      * Two-stage lifecycle transition.
@@ -9,21 +192,33 @@ export component HomeWindow inherits Window {
      * curtain-progress:
      *   0 = lifecycle raster closed/full-screen
      *   1 = top/bottom raster halves fully open off-screen
-     *
-     * Boot:
-     *   line 0 -> 1
-     *   curtain 0 -> 1
-     *
-     * Reboot / Poweroff:
-     *   curtain 1 -> 0
-     *   line 1 -> 0
      */
     in-out property <float> line-progress: 0.0;
     in-out property <float> curtain-progress: 0.0;
     in-out property <string> transition-mode: "boot";
 
+    in-out property <string> topbar-time: "--:--";
+    in-out property <string> current-user-name: "Player";
+    in-out property <string> wifi-state: "disconnected";
+    in-out property <int> battery-percent: -1;
+    in-out property <string> battery-state: "unknown";
+    in-out property <string> battery-label: "--%";
+    in-out property <int> controller-count: 0;
+    in-out property <int> controller-one-battery: -1;
+    in-out property <int> controller-two-battery: -1;
+    in-out property <int> controller-three-battery: -1;
+    in-out property <int> controller-four-battery: -1;
+
+    property <length> controllers-start-x:
+        root.controller-count >= 4 ? root.width - 253px
+        : root.controller-count == 3 ? root.width - 219px
+        : root.controller-count == 2 ? root.width - 185px
+        : root.controller-count == 1 ? root.width - 151px
+        : root.width - 113px;
+
     title: "nuubOS";
-    background: #10141b;
+    background: #0d0e10;
+    default-font-family: "Cantarell";
 
     animate line-progress {
         duration: 220ms;
@@ -41,57 +236,146 @@ export component HomeWindow inherits Window {
         y: 0;
         width: parent.width;
         height: parent.height;
-        background: #10141b;
+        background: #0d0e10;
 
+        /* Topbar: matte background shared with the Quick Menu. */
         Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 48px;
-            background: #18202a;
+            height: 50px;
+            background: #0d0e10;
 
+            Rectangle {
+                x: 0;
+                y: parent.height - 1px;
+                width: parent.width;
+                height: 1px;
+                background: #25282d;
+            }
+
+            /* Left: nuubOS wordmark + current user. */
             Text {
                 x: 18px;
-                y: 10px;
-                text: "nuubOS";
-                color: #f2f6fb;
-                font-size: 22px;
+                y: 15px;
+                width: 44px;
+                text: "nuub";
+                color: #f5f6f8;
+                font-size: 19px;
                 font-weight: 700;
             }
-
             Text {
-                x: 18px;
-                y: 31px;
-                text: "Small System. Big Adventures.";
-                color: #7f93a8;
-                font-size: 10px;
+                x: 64px;
+                y: 15px;
+                width: 26px;
+                text: "OS";
+                color: #3a86ff;
+                font-size: 19px;
+                font-weight: 700;
+            }
+            Rectangle {
+                x: 118px;
+                y: 11px;
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: #2c3036;
+                background: #00000000;
+            }
+            Image {
+                x: 122px;
+                y: 15px;
+                width: 20px;
+                height: 20px;
+                source: @image-url("assets/icons/user.svg");
+                image-fit: contain;
+            }
+
+            /* Center: wall clock supplied by nuubos-statusd. */
+            Text {
+                x: (parent.width - 76px) / 2;
+                y: 15px;
+                width: 76px;
+                horizontal-alignment: center;
+                text: root.topbar-time;
+                color: #d9dce1;
+                font-size: 19px;
+                font-weight: 600;
+            }
+
+            /* Right: up to four connected Bluetooth controllers. */
+            ControllerStatus {
+                x: root.controllers-start-x;
+                y: 0px;
+                player-label: "1";
+                battery-percent: root.controller-one-battery;
+                visible: root.controller-count >= 1;
+            }
+            ControllerStatus {
+                x: root.controllers-start-x + 34px;
+                y: 0px;
+                player-label: "2";
+                battery-percent: root.controller-two-battery;
+                visible: root.controller-count >= 2;
+            }
+            ControllerStatus {
+                x: root.controllers-start-x + 68px;
+                y: 0px;
+                player-label: "3";
+                battery-percent: root.controller-three-battery;
+                visible: root.controller-count >= 3;
+            }
+            ControllerStatus {
+                x: root.controllers-start-x + 102px;
+                y: 0px;
+                player-label: "4";
+                battery-percent: root.controller-four-battery;
+                visible: root.controller-count >= 4;
+            }
+
+            WifiStatus {
+                x: parent.width - 113px;
+                y: 0px;
+                state: root.wifi-state;
+            }
+
+            BatteryGlyph {
+                x: parent.width - 84px;
+                y: 13px;
+                percent: root.battery-percent;
+                charging: root.battery-state == "charging";
             }
 
             Text {
-                x: parent.width - self.width - 18px;
-                y: 16px;
-                text: "HOME";
-                color: #9fb3c8;
-                font-size: 14px;
-                font-weight: 600;
+                x: parent.width - 48px;
+                y: 14px;
+                width: 40px;
+                height: 24px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                text: root.battery-label;
+                color: #e5e7eb;
+                font-size: 19px;
+                font-weight: 700;
             }
         }
 
         Rectangle {
             x: 0;
-            y: 48px;
+            y: 50px;
             width: parent.width;
-            height: parent.height - 92px;
-            background: #10141b;
+            height: parent.height - 102px;
+            background: #0d0e10;
 
             Rectangle {
                 x: 20px;
                 y: 20px;
                 width: parent.width - 40px;
                 height: parent.height - 40px;
-                background: #121924;
+                background: #111214;
                 border-width: 1px;
-                border-color: #2e3d4d;
+                border-color: #1c1e22;
 
                 Rectangle {
                     x: 0;
@@ -105,8 +389,8 @@ export component HomeWindow inherits Window {
                     x: 24px;
                     y: 24px;
                     text: "Recently Played";
-                    color: #f2f6fb;
-                    font-size: 24px;
+                    color: #f5f6f8;
+                    font-size: 27px;
                     font-weight: 700;
                 }
 
@@ -114,43 +398,64 @@ export component HomeWindow inherits Window {
                     x: 24px;
                     y: 68px;
                     text: "nuubUI graphics foundation";
-                    color: #9fb3c8;
-                    font-size: 16px;
+                    color: #a8adb5;
+                    font-size: 19px;
                 }
 
                 Text {
                     x: 24px;
                     y: 100px;
                     text: "Native layout • 640×480 • Wayland";
-                    color: #7f93a8;
-                    font-size: 13px;
+                    color: #7f858e;
+                    font-size: 16px;
                 }
             }
         }
 
+        /* Universal bottom action bar: render actions, never controller letters. */
         Rectangle {
             x: 0;
-            y: parent.height - 44px;
+            y: parent.height - 52px;
             width: parent.width;
-            height: 44px;
-            background: #18202a;
+            height: 52px;
+            background: #0d0e10;
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: 1px;
+                background: #25282d;
+            }
 
             Text {
                 x: 18px;
+                y: 16px;
+                text: "Small System. Big Adventures.";
+                color: #7f858e;
+                font-size: 17px;
+                font-weight: 500;
+            }
+
+            MenuActionHint {
+                x: parent.width - 150px;
                 y: 13px;
-                text: "InputService controller integration pending";
-                color: #9fb3c8;
-                font-size: 12px;
+            }
+
+            Text {
+                x: parent.width - 116px;
+                y: 17px;
+                width: 98px;
+                horizontal-alignment: right;
+                text: "Quick Menu";
+                color: #a8adb5;
+                font-size: 16px;
+                font-weight: 600;
             }
         }
     }
 
-    /*
-     * TOP HALF OF THE LIFECYCLE RASTER.
-     *
-     * The split is aligned to the existing branded blue separator line:
-     * ~48.5% of the 640x480 native viewport.
-     */
+    /* Lifecycle curtain below is intentionally unchanged. */
     Rectangle {
         x: 0;
         y: -(parent.height * 0.485) * root.curtain-progress;
@@ -174,12 +479,6 @@ export component HomeWindow inherits Window {
         }
     }
 
-    /*
-     * BOTTOM HALF OF THE SAME RASTER.
-     *
-     * Closed: its image aligns exactly with the top half.
-     * Open: the whole half exits below the viewport.
-     */
     Rectangle {
         x: 0;
         y: parent.height * 0.485
@@ -204,19 +503,6 @@ export component HomeWindow inherits Window {
         }
     }
 
-    /*
-     * The existing splash separator becomes the animation itself.
-     *
-     * Stage 1 Boot:
-     *   normal line (~48.3% width) -> full viewport width.
-     *
-     * Stage 2 Boot:
-     *   the full-width line splits into two edges and opens vertically.
-     *
-     * Shutdown is the exact semantic reverse:
-     *   two full-width lines converge from top/bottom -> one line at centre
-     *   -> the line contracts back to its branded width.
-     */
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: parent.height * 0.485
@@ -238,10 +524,6 @@ export component HomeWindow inherits Window {
         visible: root.curtain-progress < 0.999;
     }
 
-    /*
-     * Very restrained matte glow around the two line edges. It is deliberately
-     * faint; the solid blue lines remain the actual visual element.
-     */
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: parent.height * 0.485

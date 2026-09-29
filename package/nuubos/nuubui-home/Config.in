@@ -3,6 +3,7 @@ config BR2_PACKAGE_NUUBUI_HOME
 	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
 	select BR2_PACKAGE_HOST_RUSTC
 	select BR2_PACKAGE_LIBDRM
+	select BR2_PACKAGE_CANTARELL
 	help
 	  nuubUI placeholder Home implemented in Rust + Slint.
 	  Provides the first graphics micro-step with a top bar,

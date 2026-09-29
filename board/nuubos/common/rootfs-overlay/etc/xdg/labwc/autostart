@@ -1,3 +1,4 @@
 #!/bin/sh
 /usr/bin/nuubui-home-session &
 /usr/bin/nuubos-wl-output-watch &
+/usr/bin/nuubos-quick-menu-session &

@@ -1,0 +1,9 @@
+config BR2_PACKAGE_NUUBOS_QUICK_MENU
+	bool "nuubOS system-wide Quick Menu overlay"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_HOST_RUSTC
+	select BR2_PACKAGE_NUUBOS_INPUT
+	select BR2_PACKAGE_NUUBOS_STATUS
+	select BR2_PACKAGE_CANTARELL
+	help
+	  Resident Rust + Slint Quick Menu client consuming logical input actions.

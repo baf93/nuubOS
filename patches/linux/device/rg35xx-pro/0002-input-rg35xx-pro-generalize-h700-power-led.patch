@@ -1,0 +1,160 @@
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-v.dts
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg40xx-v.dts
+@@ -19,6 +19,36 @@
+ 
+ 
+ /*
++ * nuubOS suspend power LED coordinator. Runtime keeps PI12 as a normal
++ * GPIO power LED. During s2idle the coordinator releases the GPIO, routes
++ * PWM2 to PI12, and drives a 3 s waveform with 1 s high / 2 s low.
++ */
++&pio {
++	pwm2_pi12_power_led_pin: pwm2-pi12-power-led-pin {
++		pins = "PI12";
++		function = "pwm2";
++	};
++};
++
++&{/leds} {
++	/delete-node/ led-0;
++};
++
++/ {
++	suspend_power_led {
++		compatible = "anbernic,rg40xx-v-power-led";
++
++		pinctrl-names = "sleep";
++		pinctrl-0 = <&pwm2_pi12_power_led_pin>;
++
++		power-led-gpios = <&pio 8 12 GPIO_ACTIVE_HIGH>;
++
++		pwms = <&pwm 2 3000000000 0>;
++		pwm-names = "enable";
++	};
++};
++
++/*
+  * nuubOS: RG40XX-V physical X/Y wiring differs from the inherited
+  * RG35XX Plus mapping: physical X is PA2 and physical Y is PA3.
+  */
+--- a/drivers/input/misc/Kconfig
++++ b/drivers/input/misc/Kconfig
+@@ -648,12 +648,13 @@
+ 	  called pwm-beeper.
+ 
+ config INPUT_RG35XX_PRO_HAPTICS
+-	bool "Anbernic RG35XX Pro haptics and power LED"
++	bool "Anbernic H700 haptics and suspend power LED coordinators"
+ 	depends on ARCH_SUNXI && OF && PWM && GPIOLIB && LEDS_CLASS
+ 	select INPUT_FF_MEMLESS
+ 	help
+-	  Coordinate the RG35XX Pro vibration motor and power LED.
+-	  Both functions share PWM2 through different physical pins.
++	  Coordinate H700 handheld power LEDs across system suspend.
++	  On RG35XX Pro this also coordinates the vibration motor because
++	  both functions share PWM2 through different physical pins.
+ 
+ config INPUT_PWM_VIBRA
+ 	tristate "PWM vibrator support"
+--- a/drivers/input/misc/rg35xx-pro-haptics.c
++++ b/drivers/input/misc/rg35xx-pro-haptics.c
+@@ -27,6 +27,8 @@
+ #define RG35XX_PRO_RUMBLE_PERIOD_NS	1000000ULL
+ #define RG35XX_PRO_SLEEP_PERIOD_NS	2500000000ULL
+ #define RG35XX_PRO_SLEEP_DUTY_NS		1250000000ULL
++#define RG40XX_V_SLEEP_PERIOD_NS		3000000000ULL
++#define RG40XX_V_SLEEP_DUTY_NS		1000000000ULL
+ 
+ struct rg35xx_pro_haptics {
+ 	struct device *dev;
+@@ -39,9 +41,13 @@
+ 	struct work_struct play_work;
+ 	struct mutex lock;
+ 
++	u64 sleep_period_ns;
++	u64 sleep_duty_ns;
+ 	u16 level;
+ 	bool led_on;
+ 	bool suspended;
++	bool has_haptics;
++	bool has_default_pinctrl;
+ };
+ 
+ static int rg35xx_pro_pwm_off(struct rg35xx_pro_haptics *h)
+@@ -77,8 +83,8 @@
+ 	struct pwm_state state;
+ 
+ 	pwm_get_state(h->pwm, &state);
+-	state.period = RG35XX_PRO_SLEEP_PERIOD_NS;
+-	state.duty_cycle = RG35XX_PRO_SLEEP_DUTY_NS;
++	state.period = h->sleep_period_ns;
++	state.duty_cycle = h->sleep_duty_ns;
+ 	state.enabled = true;
+ 
+ 	return pwm_apply_might_sleep(h->pwm, &state);
+@@ -182,9 +188,11 @@
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = pinctrl_pm_select_default_state(h->dev);
+-	if (ret)
+-		return ret;
++	if (h->has_default_pinctrl) {
++		ret = pinctrl_pm_select_default_state(h->dev);
++		if (ret)
++			return ret;
++	}
+ 
+ 	ret = rg35xx_pro_led_gpio_get(h);
+ 	if (ret)
+@@ -283,6 +291,19 @@
+ 	h->dev = dev;
+ 	h->led_on = true;
+ 
++	if (of_device_is_compatible(dev->of_node,
++				    "anbernic,rg40xx-v-power-led")) {
++		h->sleep_period_ns = RG40XX_V_SLEEP_PERIOD_NS;
++		h->sleep_duty_ns = RG40XX_V_SLEEP_DUTY_NS;
++		h->has_haptics = false;
++		h->has_default_pinctrl = false;
++	} else {
++		h->sleep_period_ns = RG35XX_PRO_SLEEP_PERIOD_NS;
++		h->sleep_duty_ns = RG35XX_PRO_SLEEP_DUTY_NS;
++		h->has_haptics = true;
++		h->has_default_pinctrl = true;
++	}
++
+ 	mutex_init(&h->lock);
+ 	INIT_WORK(&h->play_work, rg35xx_pro_play_work);
+ 
+@@ -318,6 +339,13 @@
+ 		return dev_err_probe(dev, ret,
+ 				     "failed to register power LED\n");
+ 
++	platform_set_drvdata(pdev, h);
++
++	if (!h->has_haptics) {
++		dev_info(dev, "RG40XX-V suspend power-LED coordinator ready\n");
++		return 0;
++	}
++
+ 	h->input = devm_input_allocate_device(dev);
+ 	if (!h->input)
+ 		return -ENOMEM;
+@@ -341,8 +369,6 @@
+ 		return dev_err_probe(dev, ret,
+ 				     "failed to register FF device\n");
+ 
+-	platform_set_drvdata(pdev, h);
+-
+ 	dev_info(dev, "rumble/power-LED coordinator ready\n");
+ 
+ 	return 0;
+@@ -366,6 +392,7 @@
+ 
+ static const struct of_device_id rg35xx_pro_of_match[] = {
+ 	{ .compatible = "anbernic,rg35xx-pro-haptics" },
++	{ .compatible = "anbernic,rg40xx-v-power-led" },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, rg35xx_pro_of_match);

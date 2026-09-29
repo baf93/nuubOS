@@ -1,0 +1,60 @@
+#!/bin/sh
+
+PIDFILE=/run/nuubos/quick-menu.pid
+DAEMON=/usr/bin/nuubos-quick-menu
+
+pid_command()
+{
+    PID="$1"
+
+    [ -n "$PID" ] || return 1
+    [ -r "/proc/$PID/cmdline" ] || return 1
+
+    tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null \
+        | sed -n '1p'
+}
+
+is_quick_menu_pid()
+{
+    PID="$1"
+    CMD="$(pid_command "$PID")"
+
+    [ "$CMD" = "$DAEMON" ]
+}
+
+stop_current()
+{
+    if [ -r "$PIDFILE" ]; then
+        PID="$(cat "$PIDFILE" 2>/dev/null)"
+        if is_quick_menu_pid "$PID"; then
+            kill "$PID" 2>/dev/null || true
+        fi
+    fi
+
+    rm -f \
+        /run/nuubos/quick-menu.pid \
+        /run/nuubos/quick-menu-mapped \
+        /run/nuubos/quick-menu-surface \
+        /run/nuubos/quick-menu-state
+}
+
+case "${1:-start}" in
+    restart)
+        stop_current
+        ;;
+    start)
+        if [ -r "$PIDFILE" ]; then
+            PID="$(cat "$PIDFILE" 2>/dev/null)"
+            if is_quick_menu_pid "$PID"; then
+                exit 0
+            fi
+            rm -f "$PIDFILE"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|restart}" >&2
+        exit 1
+        ;;
+esac
+
+exec "$DAEMON"

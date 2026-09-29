@@ -2,6 +2,9 @@
 
 POWER_STATE=/sys/power/state
 DEVICE_HOOK=/usr/lib/nuubos/device-suspend-hook
+INPUT_RUNTIME=/run/nuubos/input
+SUPPRESS_START="$INPUT_RUNTIME/suppress-start"
+INTERRUPTS=/proc/interrupts
 
 suspend_log()
 {
@@ -17,6 +20,48 @@ run_device_hook()
 	fi
 }
 
+read_start_irq_count()
+{
+	awk '
+		/Key Start/ {
+			total = 0
+			for (i = 2; i <= NF; i++) {
+				if ($i ~ /^[0-9]+$/)
+					total += $i
+				else
+					break
+			}
+			print total
+			exit
+		}
+	' "$INTERRUPTS" 2>/dev/null
+}
+
+cancel_start_guard()
+{
+	rm -f "$SUPPRESS_START"
+}
+
+resume_wifi()
+{
+	command -v wpa_cli >/dev/null 2>&1 || return 0
+	[ -d /sys/class/net/wlan0 ] || return 0
+
+	WPA_STATE="$(wpa_cli -i wlan0 status 2>/dev/null | awk -F= '/^wpa_state=/ { print $2; exit }')"
+
+	if [ "$WPA_STATE" != "COMPLETED" ]; then
+		# One explicit request to the already-running supplicant. No daemon
+		# restart, driver reload/rebind, or retry loop.
+		wpa_cli -i wlan0 reconnect >/dev/null 2>&1 || true
+		suspend_log "Wi-Fi resume requested from existing wpa_supplicant"
+	fi
+
+	# Restore the production radio policy in case the driver reset it.
+	if command -v iw >/dev/null 2>&1; then
+		iw dev wlan0 set power_save off >/dev/null 2>&1 || true
+	fi
+}
+
 [ -w "$POWER_STATE" ] || {
 	suspend_log "power state interface unavailable" >&2
 	exit 1
@@ -27,17 +72,48 @@ run_device_hook prepare || {
 	exit 1
 }
 
+mkdir -p "$INPUT_RUNTIME"
+
+START_IRQ_BEFORE="$(read_start_irq_count)"
+printf '%s\n' "${START_IRQ_BEFORE:-unknown}" > "$SUPPRESS_START"
+
 sync
 
 if ! echo freeze > "$POWER_STATE"; then
+	cancel_start_guard
 	run_device_hook resume >/dev/null 2>&1 || true
 	suspend_log "s2idle entry failed" >&2
 	exit 1
 fi
 
+START_IRQ_AFTER="$(read_start_irq_count)"
+
+case "$START_IRQ_BEFORE:$START_IRQ_AFTER" in
+	''*|*unknown*|*: )
+		# No reliable START wake evidence: never leak suppression.
+		cancel_start_guard
+		suspend_log "wake source not classifiable as START; guard cleared"
+		;;
+	*)
+		if [ "$START_IRQ_AFTER" -gt "$START_IRQ_BEFORE" ] 2>/dev/null; then
+			#
+			# START woke the device.  Keep the marker until nuubos-inputd
+			# observes the physical BTN_START release.  The press/repeat/
+			# release sequence is fully consumed and never reaches UI logic.
+			#
+			suspend_log "wake source START; guard held until physical release"
+		else
+			cancel_start_guard
+			suspend_log "wake source not START; guard cleared"
+		fi
+		;;
+esac
+
 if ! run_device_hook resume; then
 	suspend_log "device resume handling failed" >&2
 	exit 1
 fi
+
+resume_wifi
 
 exit 0

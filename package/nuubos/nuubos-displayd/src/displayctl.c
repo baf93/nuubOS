@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #define BACKLIGHT_CLASS_DIR "/sys/class/backlight"
+#define DRM_CLASS_DIR       "/sys/class/drm"
 
 #define CONFIG_PATH "/state/config/nuubos.conf"
 #define CONFIG_TMP  "/state/config/nuubos.conf.displayctl.tmp"
@@ -24,8 +25,10 @@ static void usage(const char *argv0)
 		"Usage:\n"
 		"  %s brightness\n"
 		"  %s brightness 0..100\n"
+		"  %s brightness-live 0..100\n"
+		"  %s hdmi\n"
 		"  %s restore\n",
-		argv0, argv0, argv0);
+		argv0, argv0, argv0, argv0, argv0);
 }
 
 static int parse_percent(const char *text, unsigned int *value)
@@ -361,6 +364,65 @@ fail:
 	return -1;
 }
 
+static int command_hdmi(void)
+{
+	DIR *dir;
+	struct dirent *entry;
+	bool found = false;
+	bool connected = false;
+
+	dir = opendir(DRM_CLASS_DIR);
+	if (!dir) {
+		fprintf(stderr,
+			"nuubos-displayctl: cannot inspect DRM connectors: %s\n",
+			strerror(errno));
+		return 1;
+	}
+
+	while ((entry = readdir(dir)) != NULL) {
+		char status_path[512];
+		char status[32];
+		FILE *file;
+		int n;
+
+		if (!strstr(entry->d_name, "-HDMI-A-"))
+			continue;
+
+		n = snprintf(status_path, sizeof(status_path),
+			     "%s/%s/status", DRM_CLASS_DIR, entry->d_name);
+		if (n < 0 || (size_t)n >= sizeof(status_path))
+			continue;
+
+		file = fopen(status_path, "r");
+		if (!file)
+			continue;
+
+		if (!fgets(status, sizeof(status), file)) {
+			fclose(file);
+			continue;
+		}
+
+		fclose(file);
+		found = true;
+
+		if (strncmp(status, "connected", 9) == 0) {
+			connected = true;
+			break;
+		}
+	}
+
+	closedir(dir);
+
+	if (!found) {
+		fprintf(stderr,
+			"nuubos-displayctl: HDMI connector is unavailable\n");
+		return 1;
+	}
+
+	printf("%s\n", connected ? "connected" : "disconnected");
+	return 0;
+}
+
 static int command_get(void)
 {
 	unsigned int percent;
@@ -375,7 +437,7 @@ static int command_get(void)
 	return 0;
 }
 
-static int command_set(const char *value)
+static int command_set(const char *value, bool persist)
 {
 	unsigned int percent;
 	unsigned int previous;
@@ -399,7 +461,7 @@ static int command_set(const char *value)
 		return 1;
 	}
 
-	if (update_config(percent) != 0) {
+	if (persist && update_config(percent) != 0) {
 		int saved_errno = errno;
 
 		/*
@@ -458,7 +520,13 @@ int main(int argc, char **argv)
 		return command_get();
 
 	if (argc == 3 && strcmp(argv[1], "brightness") == 0)
-		return command_set(argv[2]);
+		return command_set(argv[2], true);
+
+	if (argc == 3 && strcmp(argv[1], "brightness-live") == 0)
+		return command_set(argv[2], false);
+
+	if (argc == 2 && strcmp(argv[1], "hdmi") == 0)
+		return command_hdmi();
 
 	if (argc == 2 && strcmp(argv[1], "restore") == 0)
 		return command_restore();

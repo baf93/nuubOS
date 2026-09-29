@@ -1,0 +1,105 @@
+#!/bin/sh
+
+DAEMON=/usr/sbin/nuubos-inputd
+PIDFILE=/run/nuubos-inputd.pid
+SOCKET=/run/nuubos/inputd.sock
+
+pid_command()
+{
+	PID="$1"
+
+	[ -n "$PID" ] || return 1
+	[ -r "/proc/$PID/cmdline" ] || return 1
+
+	tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null \
+		| sed -n '1p'
+}
+
+pid_is_inputd()
+{
+	PID="$1"
+	CMD="$(pid_command "$PID")"
+
+	[ "$CMD" = "$DAEMON" ]
+}
+
+start_service()
+{
+	if [ -r "$PIDFILE" ]; then
+		PID="$(cat "$PIDFILE" 2>/dev/null)"
+
+		if pid_is_inputd "$PID"; then
+			return 0
+		fi
+
+		rm -f "$PIDFILE"
+	fi
+
+	"$DAEMON" >/dev/null 2>&1 &
+}
+
+stop_service()
+{
+	if [ ! -r "$PIDFILE" ]; then
+		return 0
+	fi
+
+	PID="$(cat "$PIDFILE" 2>/dev/null)"
+
+	if ! pid_is_inputd "$PID"; then
+		rm -f "$PIDFILE"
+		return 0
+	fi
+
+	kill -TERM "$PID" 2>/dev/null || true
+}
+
+restart_service()
+{
+	OLD_PID=""
+
+	if [ -r "$PIDFILE" ]; then
+		OLD_PID="$(cat "$PIDFILE" 2>/dev/null)"
+	fi
+
+	if pid_is_inputd "$OLD_PID"; then
+		kill -TERM "$OLD_PID" 2>/dev/null || true
+
+		#
+		# The successor blocks in the kernel on the daemon flock until the
+		# old generation has completely removed its socket and released the
+		# lock. No production retry/rebind loop is needed.
+		#
+		"$DAEMON" --handoff >/dev/null 2>&1 &
+	else
+		rm -f "$PIDFILE" "$SOCKET"
+		"$DAEMON" >/dev/null 2>&1 &
+	fi
+}
+
+case "${1:-}" in
+	start)
+		start_service
+		;;
+	stop)
+		stop_service
+		;;
+	restart)
+		restart_service
+		;;
+	reload)
+		if [ -r "$PIDFILE" ]; then
+			PID="$(cat "$PIDFILE" 2>/dev/null)"
+
+			if pid_is_inputd "$PID"; then
+				kill -HUP "$PID" 2>/dev/null || true
+			fi
+		fi
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}" >&2
+		exit 1
+		;;
+esac
+
+exit 0

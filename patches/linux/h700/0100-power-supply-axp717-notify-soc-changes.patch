@@ -1,0 +1,84 @@
+--- a/drivers/mfd/axp20x.c
++++ b/drivers/mfd/axp20x.c
+@@ -338,6 +338,10 @@
+ 	DEFINE_RES_IRQ_NAMED(AXP717_IRQ_VBUS_REMOVAL, "VBUS_REMOVAL"),
+ };
+ 
++static const struct resource axp717_battery_power_supply_resources[] = {
++	DEFINE_RES_IRQ_NAMED(AXP717_IRQ_GAUGE_NEW_SOC, "GAUGE_NEW_SOC"),
++};
++
+ /* AXP803 and AXP813/AXP818 share the same interrupts */
+ static const struct resource axp803_usb_power_supply_resources[] = {
+ 	DEFINE_RES_IRQ_NAMED(AXP803_IRQ_VBUS_PLUGIN, "VBUS_PLUGIN"),
+@@ -1070,7 +1074,8 @@
+ 		    axp717_usb_power_supply_resources, NULL, 0, 0,
+ 		    "x-powers,axp717-usb-power-supply"),
+ 	MFD_CELL_OF("axp20x-battery-power-supply",
+-		    NULL, NULL, 0, 0, "x-powers,axp717-battery-power-supply"),
++		    axp717_battery_power_supply_resources, NULL, 0, 0,
++		    "x-powers,axp717-battery-power-supply"),
+ };
+ 
+ static const struct resource axp288_adc_resources[] = {
+--- a/drivers/power/supply/axp20x_battery.c
++++ b/drivers/power/supply/axp20x_battery.c
+@@ -122,6 +122,15 @@
+ 	bool ts_disable;
+ };
+ 
++static irqreturn_t axp20x_battery_soc_irq(int irq, void *data)
++{
++	struct axp20x_batt_ps *axp20x_batt = data;
++
++	(void)irq;
++	power_supply_changed(axp20x_batt->batt);
++	return IRQ_HANDLED;
++}
++
+ static int axp20x_battery_get_max_voltage(struct axp20x_batt_ps *axp20x_batt,
+ 					  int *val)
+ {
+@@ -1092,10 +1101,11 @@
+ static int axp20x_power_probe(struct platform_device *pdev)
+ {
+ 	struct axp20x_batt_ps *axp20x_batt;
++	struct axp20x_dev *axp20x;
+ 	struct power_supply_config psy_cfg = {};
+ 	struct power_supply_battery_info *info;
+ 	struct device *dev = &pdev->dev;
+-	int ret;
++	int irq, ret;
+ 
+ 	if (!of_device_is_available(pdev->dev.of_node))
+ 		return -ENODEV;
+@@ -1128,6 +1138,29 @@
+ 		return PTR_ERR(axp20x_batt->batt);
+ 	}
+ 
++	irq = platform_get_irq_byname_optional(pdev, "GAUGE_NEW_SOC");
++	if (irq >= 0) {
++		axp20x = dev_get_drvdata(pdev->dev.parent);
++		if (!axp20x || !axp20x->regmap_irqc)
++			return dev_err_probe(dev, -ENODEV,
++					     "AXP20x parent IRQ data unavailable\n");
++
++		irq = regmap_irq_get_virq(axp20x->regmap_irqc, irq);
++		if (irq <= 0)
++			return dev_err_probe(dev, irq ? irq : -EINVAL,
++					     "failed to map GAUGE_NEW_SOC IRQ\n");
++
++		ret = devm_request_threaded_irq(dev, irq, NULL,
++					       axp20x_battery_soc_irq, IRQF_ONESHOT,
++					       "axp717-gauge-new-soc", axp20x_batt);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "failed to request GAUGE_NEW_SOC IRQ\n");
++	} else if (irq != -ENXIO) {
++		return dev_err_probe(dev, irq,
++				     "failed to get GAUGE_NEW_SOC IRQ\n");
++	}
++
+ 	if (!power_supply_get_battery_info(axp20x_batt->batt, &info)) {
+ 		axp20x_batt->data->set_bat_info(pdev, axp20x_batt, info);
+ 		power_supply_put_battery_info(axp20x_batt->batt, info);

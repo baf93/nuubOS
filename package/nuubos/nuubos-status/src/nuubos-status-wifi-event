@@ -1,0 +1,32 @@
+#!/bin/sh
+
+PIDFILE=/run/nuubos/statusd.pid
+DAEMON=/usr/sbin/nuubos-statusd
+TIME_SYNC=/usr/libexec/nuubos-status-time-sync
+
+pid_command()
+{
+    PID="$1"
+    [ -n "$PID" ] || return 1
+    [ -r "/proc/$PID/cmdline" ] || return 1
+    tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p'
+}
+
+if [ -r "$PIDFILE" ]; then
+    PID="$(cat "$PIDFILE" 2>/dev/null)"
+    if [ "$(pid_command "$PID")" = "$DAEMON" ]; then
+        kill -USR1 "$PID" 2>/dev/null || true
+    fi
+fi
+
+# Automatic network time is device-global. Trigger one event-driven sync
+# when Wi-Fi becomes available; the helper is a no-op once the clock is valid.
+case "${2:-}" in
+    *CONNECTED*)
+        if [ -x "$TIME_SYNC" ]; then
+            "$TIME_SYNC" >/dev/null 2>&1 &
+        fi
+        ;;
+esac
+
+exit 0

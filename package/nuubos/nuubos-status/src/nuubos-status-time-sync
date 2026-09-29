@@ -1,0 +1,72 @@
+#!/bin/sh
+
+VALID_AFTER=1577836800
+LOCKDIR=/run/nuubos/status-time-sync.lock
+LOG=/run/nuubos/status-time-sync.log
+STATUS_PIDFILE=/run/nuubos/statusd.pid
+STATUS_DAEMON=/usr/sbin/nuubos-statusd
+
+pid_command()
+{
+    PID="$1"
+    [ -n "$PID" ] || return 1
+    [ -r "/proc/$PID/cmdline" ] || return 1
+    tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p'
+}
+
+clock_valid()
+{
+    NOW="$(date +%s 2>/dev/null)"
+    case "$NOW" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$NOW" -ge "$VALID_AFTER" ]
+}
+
+wifi_connected()
+{
+    command -v wpa_cli >/dev/null 2>&1 || return 1
+    wpa_cli -i wlan0 status 2>/dev/null | grep -qx 'wpa_state=COMPLETED'
+}
+
+signal_statusd()
+{
+    [ -r "$STATUS_PIDFILE" ] || return 0
+    PID="$(cat "$STATUS_PIDFILE" 2>/dev/null)"
+    if [ "$(pid_command "$PID")" = "$STATUS_DAEMON" ]; then
+        kill -USR1 "$PID" 2>/dev/null || true
+    fi
+}
+
+mkdir -p /run/nuubos
+
+if clock_valid; then
+    signal_statusd
+    exit 0
+fi
+
+wifi_connected || exit 0
+command -v nuubos-timectl >/dev/null 2>&1 || exit 0
+
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+    exit 0
+fi
+
+cleanup()
+{
+    rmdir "$LOCKDIR" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+{
+    echo "time-sync-start=$(date +%s 2>/dev/null || echo 0)"
+    /usr/sbin/nuubos-timectl sync
+    RC=$?
+    echo "time-sync-rc=$RC"
+} >> "$LOG" 2>&1
+
+if clock_valid; then
+    signal_statusd
+fi
+
+exit 0

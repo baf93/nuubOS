@@ -289,12 +289,17 @@ Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
 +
 --- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-2024.dts
 +++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-2024.dts
-@@ -510,3 +510,5 @@
+@@ -510,3 +510,10 @@
  &tcon_lcd0_out_lcd {
  	remote-endpoint = <&panel_in_rgb>;
  };
 +
 +#include "sun50i-h700-anbernic-usb0-otg.dtsi"
++
++/* nuubOS: keep the H700 family SDIO Wi-Fi host powered across s2idle. */
++&mmc1 {
++	keep-power-in-suspend;
++};
 --- /dev/null
 +++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-2024-rev6-panel.dts
 @@ -0,0 +1,14 @@
@@ -348,7 +353,7 @@ Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
 +};
 --- /dev/null
 +++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-pro.dts
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,110 @@
 +// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 +/*
 + * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
@@ -414,9 +419,6 @@ Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
 +};
 +
 +
-+&mmc1 {
-+	keep-power-in-suspend;
-+};
 +
 +&{/gpio-keys-gamepad/button-start} {
 +	wakeup-source;
