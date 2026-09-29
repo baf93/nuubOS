@@ -399,24 +399,28 @@ export component HomeWindow inherits Window {
                 background: #25282d;
             }
 
-            /* Left: nuubOS wordmark + current user. */
-            Text {
+            /* Left: nuubOS wordmark + current user. Keep both color runs content-sized
+             * in one zero-spacing layout so the mark reads as one continuous word. */
+            HorizontalLayout {
                 x: 18px;
                 y: 13px;
-                width: 45px;
-                text: "nuub";
-                color: #f5f6f8;
-                font-size: 21px;
-                font-weight: 700;
-            }
-            Text {
-                x: 61px;
-                y: 13px;
-                width: 28px;
-                text: "OS";
-                color: #3a86ff;
-                font-size: 21px;
-                font-weight: 700;
+                width: 96px;
+                height: 25px;
+                spacing: 0px;
+                alignment: start;
+
+                Text {
+                    text: "nuub";
+                    color: #f5f6f8;
+                    font-size: 21px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: "OS";
+                    color: #3a86ff;
+                    font-size: 21px;
+                    font-weight: 700;
+                }
             }
             Rectangle {
                 x: 118px;

@@ -133,15 +133,15 @@ component HorizontalAdjustHint inherits Rectangle {
 component MaterialSlider inherits Rectangle {
     in property <float> fraction: 0.0;
 
-    height: 22px;
+    height: 18px;
     background: #00000000;
 
     Rectangle {
         x: 0;
-        y: (parent.height - 4px) / 2;
+        y: (parent.height - 3px) / 2;
         width: parent.width;
-        height: 4px;
-        border-radius: 2px;
+        height: 3px;
+        border-radius: 1.5px;
         background: #2a2e34;
 
         Rectangle {
@@ -149,20 +149,18 @@ component MaterialSlider inherits Rectangle {
             y: 0;
             width: parent.width * root.fraction;
             height: parent.height;
-            border-radius: 2px;
+            border-radius: 1.5px;
             background: #3a86ff;
         }
     }
 
     Rectangle {
         x: (parent.width - self.width) * root.fraction;
-        y: 0;
-        width: 10px;
-        height: parent.height;
-        border-radius: 5px;
+        y: 1px;
+        width: 5px;
+        height: 16px;
+        border-radius: 2.5px;
         background: #3a86ff;
-        border-width: 1px;
-        border-color: #73a8ff;
     }
 }
 
