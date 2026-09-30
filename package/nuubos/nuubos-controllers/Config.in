@@ -1,0 +1,7 @@
+config BR2_PACKAGE_NUUBOS_CONTROLLERS
+	bool "nuubOS Controllers product service"
+	depends on BR2_PACKAGE_DBUS
+	select BR2_PACKAGE_NUUBOS_INPUT
+	help
+	  User-scoped controller inventory, preferred/effective player assignment,
+	  per-controller mappings and live input tester Product API.

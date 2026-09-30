@@ -1,7 +1,7 @@
 ################################################################################
 # nuubos-input
 ################################################################################
-NUUBOS_INPUT_VERSION = 0.1.0
+NUUBOS_INPUT_VERSION = 0.4.0
 NUUBOS_INPUT_SITE = $(BR2_EXTERNAL_NUUBOS_PATH)/package/nuubos/nuubos-input/src
 NUUBOS_INPUT_SITE_METHOD = local
 NUUBOS_INPUT_LICENSE = MIT

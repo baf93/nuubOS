@@ -1,3 +1,52 @@
+import { SystemVirtualKeyboard } from "components/virtual_keyboard.slint";
+
+export struct WifiNetworkEntry {
+    ssid: string,
+    security: string,
+    signal-dbm: int,
+    saved: bool,
+    current: bool,
+}
+
+export struct BluetoothDeviceEntry {
+    address: string,
+    name: string,
+    kind: string,
+    paired: bool,
+    connected: bool,
+    trusted: bool,
+    rssi: int,
+}
+
+export struct ControllerEntry {
+    id: string,
+    name: string,
+    transport: string,
+    connected: bool,
+    builtin: bool,
+    preferred-player: int,
+    effective-player: int,
+}
+
+export struct PlayerAssignmentEntry {
+    player: int,
+    controller-id: string,
+    controller-name: string,
+    available: bool,
+}
+
+export struct ControllerMappingEntry {
+    action: string,
+    label: string,
+    code: int,
+    binding: string,
+}
+
+export struct SettingsChoiceEntry {
+    value: string,
+    label: string,
+}
+
 component BatteryGlyph inherits Rectangle {
     in property <int> percent: -1;
     in property <bool> compact: false;
@@ -117,6 +166,7 @@ component ControllerStatus inherits Rectangle {
         y: 34px;
         compact: true;
         percent: root.battery-percent;
+        visible: root.battery-percent >= 0;
     }
 }
 
@@ -229,69 +279,264 @@ component SettingsTopic inherits Rectangle {
     }
 }
 
-component ConnectivityStatusCard inherits Rectangle {
+component SettingsSelectableRow inherits Rectangle {
     in property <string> title: "";
-    in property <string> status: "Unavailable";
     in property <string> detail: "";
-    in property <bool> active: false;
+    in property <string> value: "";
+    in property <bool> selected: false;
+    in property <bool> enabled: true;
 
-    height: 68px;
-    border-radius: 7px;
-    background: #15171b;
+    height: 40px;
+    border-radius: 6px;
+    background: root.selected ? #1b2940 : #15171b;
     border-width: 1px;
-    border-color: root.active ? #315f9f : #24272d;
+    border-color: root.selected ? #3a86ff : #24272d;
+    opacity: root.enabled ? 1.0 : 0.45;
 
-    Rectangle {
-        x: 0;
-        y: 0;
-        width: 3px;
-        height: parent.height;
-        border-radius: 2px;
-        background: root.active ? #3a86ff : #343840;
+    Text {
+        x: 12px;
+        y: root.detail == "" ? 0px : 5px;
+        width: parent.width - 130px;
+        height: root.detail == "" ? parent.height : 20px;
+        vertical-alignment: center;
+        text: root.title;
+        color: root.selected ? #f5f6f8 : #c8ccd2;
+        font-size: 18px;
+        font-weight: root.selected ? 700 : 600;
     }
 
     Text {
-        x: 14px;
-        y: 10px;
-        width: parent.width - 118px;
-        text: root.title;
-        color: #f0f2f5;
-        font-size: 18px;
+        x: 12px;
+        y: 23px;
+        width: parent.width - 130px;
+        text: root.detail;
+        color: #7f858e;
+        font-size: 11px;
+        visible: root.detail != "";
+    }
+
+    Text {
+        x: parent.width - 118px;
+        y: 0;
+        width: 106px;
+        height: parent.height;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        text: root.value;
+        color: root.selected ? #cfe2ff : #8e949d;
+        font-size: 15px;
+        font-weight: 600;
+    }
+}
+
+
+component DeviceScopeBadge inherits Rectangle {
+    width: 17px;
+    height: 17px;
+    border-radius: 9px;
+    background: #17243a;
+    border-width: 1px;
+    border-color: #3a86ff;
+
+    Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "D";
+        color: #9ec5ff;
+        font-size: 10px;
+        font-weight: 800;
+    }
+}
+
+component UserScopeBadge inherits Rectangle {
+    width: 17px;
+    height: 17px;
+    border-radius: 9px;
+    background: #17243a;
+    border-width: 1px;
+    border-color: #3a86ff;
+
+    Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "U";
+        color: #9ec5ff;
+        font-size: 10px;
+        font-weight: 800;
+    }
+}
+
+component SettingsActionButton inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> selected: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+
+    height: 40px;
+    border-radius: 6px;
+    background: root.danger
+        ? (root.selected ? #542329 : #28171a)
+        : (root.selected ? #24589a : #17345b);
+    border-width: 1px;
+    border-color: root.danger
+        ? (root.selected ? #d95a67 : #74343c)
+        : (root.selected ? #73a8ff : #315f9f);
+    opacity: root.enabled ? 1.0 : 0.42;
+
+    Text {
+        x: 12px;
+        y: 0;
+        width: parent.width - 24px;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.label;
+        color: root.danger ? #ffc0c6 : #e8f1ff;
+        font-size: 17px;
         font-weight: 700;
     }
+}
 
-    Text {
-        x: 14px;
-        y: 36px;
-        width: parent.width - 28px;
-        text: root.detail;
-        color: #858b94;
-        font-size: 13px;
-        font-weight: 500;
-    }
+component WifiToggle inherits Rectangle {
+    in property <bool> checked: false;
+    in property <bool> selected: false;
+
+    width: 42px;
+    height: 22px;
+    border-radius: 11px;
+    background: root.checked ? #234b80 : #24272d;
+    border-width: 1px;
+    border-color: root.selected ? #73a8ff : root.checked ? #3a86ff : #40454d;
 
     Rectangle {
-        x: parent.width - 110px;
-        y: 11px;
-        width: 98px;
-        height: 24px;
-        border-radius: 12px;
-        background: root.active ? #1b2940 : #202329;
-        border-width: 1px;
-        border-color: root.active ? #3a86ff : #343840;
+        x: root.checked ? parent.width - 18px : 4px;
+        y: 4px;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: root.checked ? #dbe9ff : #9aa0a8;
+        animate x { duration: 120ms; easing: ease-in-out; }
+    }
+}
 
-        Text {
-            x: 4px;
-            y: 0;
-            width: parent.width - 8px;
-            height: parent.height;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            text: root.status;
-            color: root.active ? #cfe2ff : #a8adb5;
-            font-size: 12px;
-            font-weight: 700;
-        }
+component WifiNetworkListRow inherits Rectangle {
+    in property <string> ssid: "";
+    in property <string> security: "";
+    in property <int> signal-dbm: 0;
+    in property <bool> saved: false;
+    in property <bool> current: false;
+    in property <bool> selected: false;
+
+    height: 44px;
+    border-radius: 6px;
+    background: root.selected ? #1b2940 : #15171b;
+    border-width: 1px;
+    border-color: root.selected ? #3a86ff : root.current ? #315f9f : #24272d;
+
+    Text {
+        x: 12px;
+        y: 5px;
+        width: parent.width - 128px;
+        text: root.ssid;
+        color: #f0f2f5;
+        font-size: 17px;
+        font-weight: root.current || root.selected ? 700 : 600;
+        overflow: elide;
+    }
+
+    Text {
+        x: 12px;
+        y: 25px;
+        width: parent.width - 128px;
+        text: root.current ? "Connected"
+            : root.saved ? root.security + " • Saved"
+            : root.security;
+        color: #7f858e;
+        font-size: 12px;
+        overflow: elide;
+    }
+
+    Text {
+        x: parent.width - 112px;
+        y: 0;
+        width: 100px;
+        height: parent.height;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        text: root.signal-dbm == 0 ? ""
+            : root.signal-dbm >= -55 ? "Excellent"
+            : root.signal-dbm >= -67 ? "Good"
+            : root.signal-dbm >= -75 ? "Fair"
+            : "Weak";
+        color: root.signal-dbm >= -67 ? #9dc1ff : #8e949d;
+        font-size: 12px;
+        font-weight: 600;
+    }
+}
+
+
+component BluetoothDeviceListRow inherits Rectangle {
+    in property <string> name: "";
+    in property <string> kind: "Device";
+    in property <bool> paired: false;
+    in property <bool> connected: false;
+    in property <int> rssi: 0;
+    in property <bool> selected: false;
+
+    height: 44px;
+    border-radius: 6px;
+    background: root.selected ? #1b2940 : #15171b;
+    border-width: 1px;
+    border-color: root.selected ? #3a86ff : root.connected ? #315f9f : #24272d;
+
+    Text {
+        x: 12px;
+        y: 5px;
+        width: parent.width - 116px;
+        text: root.name;
+        color: #f0f2f5;
+        font-size: 17px;
+        font-weight: root.connected || root.selected ? 700 : 600;
+        overflow: elide;
+    }
+
+    Text {
+        x: 12px;
+        y: 25px;
+        width: parent.width - 116px;
+        text: root.connected ? root.kind + " • Connected"
+            : root.paired ? root.kind + " • Paired"
+            : root.kind;
+        color: #7f858e;
+        font-size: 12px;
+        overflow: elide;
+    }
+
+    Text {
+        x: parent.width - 104px;
+        y: 0;
+        width: 92px;
+        height: parent.height;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        text: root.connected ? "Connected"
+            : root.paired ? "Saved"
+            : root.rssi == 0 ? ""
+            : root.rssi >= -55 ? "Excellent"
+            : root.rssi >= -67 ? "Good"
+            : root.rssi >= -75 ? "Fair"
+            : "Weak";
+        color: root.connected ? #9dc1ff : #8e949d;
+        font-size: 12px;
+        font-weight: 600;
     }
 }
 
@@ -388,6 +633,104 @@ component FaceButtonHint inherits Rectangle {
     }
 }
 
+
+component ControllerTesterVisual inherits Rectangle {
+    in property <bool> face-south: false;
+    in property <bool> face-east: false;
+    in property <bool> face-north: false;
+    in property <bool> face-west: false;
+    in property <bool> dpad-up: false;
+    in property <bool> dpad-down: false;
+    in property <bool> dpad-left: false;
+    in property <bool> dpad-right: false;
+    in property <bool> l1: false;
+    in property <bool> r1: false;
+    in property <bool> l2: false;
+    in property <bool> r2: false;
+    in property <bool> l3: false;
+    in property <bool> r3: false;
+    in property <bool> start: false;
+    in property <bool> select: false;
+    in property <bool> hotkey: false;
+    in property <int> left-x: 0;
+    in property <int> left-y: 0;
+    in property <int> right-x: 0;
+    in property <int> right-y: 0;
+    in property <int> left-trigger: 0;
+    in property <int> right-trigger: 0;
+
+    height: 194px;
+    background: #111318;
+    border-width: 1px;
+    border-color: #30343c;
+    border-radius: 12px;
+
+    Rectangle {
+        x: 38px; y: 20px; width: parent.width - 76px; height: 144px;
+        background: #1b1e24;
+        border-width: 1px;
+        border-color: #3a3f48;
+        border-radius: 30px;
+    }
+
+    Rectangle { x: 54px; y: 8px; width: 64px; height: 18px; border-radius: 6px;
+        background: (root.l2 || root.left-trigger != 0) ? #3a86ff : #242830;
+        Text { text: "L2"; color: #f5f6f8; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    Rectangle { x: 126px; y: 8px; width: 64px; height: 18px; border-radius: 6px;
+        background: root.l1 ? #3a86ff : #242830;
+        Text { text: "L1"; color: #f5f6f8; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    Rectangle { x: parent.width - 190px; y: 8px; width: 64px; height: 18px; border-radius: 6px;
+        background: root.r1 ? #3a86ff : #242830;
+        Text { text: "R1"; color: #f5f6f8; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    Rectangle { x: parent.width - 118px; y: 8px; width: 64px; height: 18px; border-radius: 6px;
+        background: (root.r2 || root.right-trigger != 0) ? #3a86ff : #242830;
+        Text { text: "R2"; color: #f5f6f8; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+
+    /* D-pad */
+    Rectangle { x: 72px; y: 66px; width: 24px; height: 24px; border-radius: 4px; background: root.dpad-up ? #3a86ff : #30343b; }
+    Rectangle { x: 72px; y: 112px; width: 24px; height: 24px; border-radius: 4px; background: root.dpad-down ? #3a86ff : #30343b; }
+    Rectangle { x: 49px; y: 89px; width: 24px; height: 24px; border-radius: 4px; background: root.dpad-left ? #3a86ff : #30343b; }
+    Rectangle { x: 95px; y: 89px; width: 24px; height: 24px; border-radius: 4px; background: root.dpad-right ? #3a86ff : #30343b; }
+
+    /* Face cluster, controller-agnostic positions */
+    Rectangle { x: parent.width - 96px; y: 64px; width: 22px; height: 22px; border-radius: 11px; background: root.face-north ? #3a86ff : #30343b; }
+    Rectangle { x: parent.width - 72px; y: 88px; width: 22px; height: 22px; border-radius: 11px; background: root.face-east ? #3a86ff : #30343b; }
+    Rectangle { x: parent.width - 96px; y: 112px; width: 22px; height: 22px; border-radius: 11px; background: root.face-south ? #3a86ff : #30343b; }
+    Rectangle { x: parent.width - 120px; y: 88px; width: 22px; height: 22px; border-radius: 11px; background: root.face-west ? #3a86ff : #30343b; }
+
+    /* Sticks */
+    Rectangle {
+        x: 132px; y: 108px; width: 46px; height: 46px; border-radius: 23px;
+        background: root.l3 ? #3a86ff : #262a31; border-width: 1px; border-color: #505762;
+        Rectangle {
+            width: 10px; height: 10px; border-radius: 5px; background: #9dc1ff;
+            x: 18px + root.left-x * 14px / 100;
+            y: 18px + root.left-y * 14px / 100;
+        }
+    }
+    Rectangle {
+        x: parent.width - 178px; y: 108px; width: 46px; height: 46px; border-radius: 23px;
+        background: root.r3 ? #3a86ff : #262a31; border-width: 1px; border-color: #505762;
+        Rectangle {
+            width: 10px; height: 10px; border-radius: 5px; background: #9dc1ff;
+            x: 18px + root.right-x * 14px / 100;
+            y: 18px + root.right-y * 14px / 100;
+        }
+    }
+
+    Rectangle { x: parent.width / 2 - 50px; y: 70px; width: 28px; height: 14px; border-radius: 7px; background: root.select ? #3a86ff : #30343b;
+        Text { text: "SEL"; color: #f5f6f8; font-size: 8px; horizontal-alignment: center; vertical-alignment: center; } }
+    Rectangle { x: parent.width / 2 - 14px; y: 70px; width: 28px; height: 14px; border-radius: 7px; background: root.hotkey ? #3a86ff : #30343b;
+        Text { text: "H"; color: #f5f6f8; font-size: 8px; horizontal-alignment: center; vertical-alignment: center; } }
+    Rectangle { x: parent.width / 2 + 22px; y: 70px; width: 28px; height: 14px; border-radius: 7px; background: root.start ? #3a86ff : #30343b;
+        Text { text: "STA"; color: #f5f6f8; font-size: 8px; horizontal-alignment: center; vertical-alignment: center; } }
+
+}
+
 export component HomeWindow inherits Window {
     /*
      * Two-stage lifecycle transition.
@@ -418,6 +761,7 @@ export component HomeWindow inherits Window {
 
     in-out property <bool> settings-open: false;
     in-out property <int> settings-selected-index: 0;
+    in-out property <int> select-face-position: -1;
     in-out property <int> back-face-position: -1;
 
     in-out property <string> connectivity-wifi-status: "Unavailable";
@@ -426,6 +770,173 @@ export component HomeWindow inherits Window {
     in-out property <string> connectivity-bluetooth-status: "Unavailable";
     in-out property <string> connectivity-bluetooth-detail: "Waiting for Bluetooth service";
     in-out property <bool> connectivity-bluetooth-active: false;
+
+    in-out property <bool> bluetooth-enabled: false;
+    in-out property <bool> bluetooth-scanning: false;
+    in-out property <string> bluetooth-notice: "";
+    in-out property <[BluetoothDeviceEntry]> bluetooth-devices: [];
+    in-out property <[BluetoothDeviceEntry]> bluetooth-known-devices: [];
+    in-out property <int> bluetooth-device-index: 0;
+    in-out property <int> bluetooth-device-scroll-offset: 0;
+    in-out property <int> bluetooth-known-index: 0;
+    in-out property <int> bluetooth-known-scroll-offset: 0;
+    in-out property <int> bluetooth-detail-index: 0;
+    in-out property <int> bluetooth-detail-return-view: 8;
+    in-out property <string> bluetooth-selected-address: "";
+    in-out property <string> bluetooth-selected-name: "";
+    in-out property <string> bluetooth-selected-kind: "Device";
+    in-out property <bool> bluetooth-selected-paired: false;
+    in-out property <bool> bluetooth-selected-connected: false;
+    in-out property <bool> bluetooth-selected-trusted: false;
+
+    /* Controllers & Input is entirely active-user scoped. */
+    in-out property <[ControllerEntry]> controllers: [];
+    in-out property <[PlayerAssignmentEntry]> player-assignments: [];
+    in-out property <[ControllerMappingEntry]> controller-mapping: [];
+    in-out property <int> controllers-menu-index: 0;
+    /* Generic Settings choice dropdown: the default UI for every discrete
+     * multi-value setting. Continuous values keep sliders/left-right. */
+    in-out property <bool> settings-choice-open: false;
+    in-out property <string> settings-choice-context: "";
+    in-out property <string> settings-choice-title: "";
+    in-out property <[SettingsChoiceEntry]> settings-choice-options: [];
+    in-out property <int> settings-choice-index: 0;
+    in-out property <int> settings-choice-scroll: 0;
+    in-out property <int> player-assignment-index: 0;
+    in-out property <int> controller-list-index: 0;
+    in-out property <int> controller-list-scroll-offset: 0;
+    in-out property <int> controller-detail-index: 0;
+    in-out property <int> controller-mapping-index: 0;
+    in-out property <int> controller-mapping-scroll-offset: 0;
+    in-out property <string> controller-selected-id: "";
+    in-out property <string> controller-selected-name: "";
+    in-out property <string> controller-selected-transport: "";
+    in-out property <int> controller-selected-preferred-player: 0;
+    in-out property <int> controller-selected-effective-player: 0;
+    in-out property <bool> controller-remap-waiting: false;
+    in-out property <string> controller-remap-action: "";
+    in-out property <int> controller-left-deadzone: 20;
+    in-out property <int> controller-right-deadzone: 20;
+    in-out property <string> tester-action: "Waiting for input";
+    in-out property <int> controller-tester-return-view: 10;
+
+    in-out property <bool> tester-face-south: false;
+    in-out property <bool> tester-face-east: false;
+    in-out property <bool> tester-face-north: false;
+    in-out property <bool> tester-face-west: false;
+    in-out property <bool> tester-dpad-up: false;
+    in-out property <bool> tester-dpad-down: false;
+    in-out property <bool> tester-dpad-left: false;
+    in-out property <bool> tester-dpad-right: false;
+    in-out property <bool> tester-l1: false;
+    in-out property <bool> tester-r1: false;
+    in-out property <bool> tester-l2: false;
+    in-out property <bool> tester-r2: false;
+    in-out property <bool> tester-l3: false;
+    in-out property <bool> tester-r3: false;
+    in-out property <bool> tester-start: false;
+    in-out property <bool> tester-select: false;
+    in-out property <bool> tester-hotkey: false;
+    in-out property <int> tester-left-x: 0;
+    in-out property <int> tester-left-y: 0;
+    in-out property <int> tester-right-x: 0;
+    in-out property <int> tester-right-y: 0;
+    in-out property <int> tester-left-trigger: 0;
+    in-out property <int> tester-right-trigger: 0;
+
+    in-out property <bool> rumble-supported: false;
+    in-out property <bool> rumble-enabled: true;
+    in-out property <int> rumble-index: 0;
+
+    in-out property <bool> lighting-supported: false;
+    in-out property <string> lighting-mode: "off";
+    in-out property <int> lighting-brightness: 50;
+    in-out property <int> lighting-red: 58;
+    in-out property <int> lighting-green: 134;
+    in-out property <int> lighting-blue: 255;
+    in-out property <bool> lighting-system-effects: true;
+    in-out property <string> lighting-active-effect: "";
+    in-out property <string> lighting-color-name: "Blue";
+    in-out property <int> lighting-index: 0;
+    in-out property <bool> lighting-preview-open: false;
+    in-out property <int> lighting-preview-index: 0;
+
+    /* Settings navigation depth:
+     * 0 categories, 1 Connectivity, 2 Wi-Fi connect/scan,
+     * 3 saved networks, 4 network detail, 6 system keyboard,
+     * 7 Bluetooth discovery, 8 known Bluetooth devices, 9 Bluetooth device detail,
+     * 10 Controllers & Input, 11 Player Assignment, 12 controller list/picker,
+     * 13 controller detail, 14 per-controller mapping, 15 input tester,
+     * 17 RGB Lighting. */
+    in-out property <int> settings-view: 0;
+    in-out property <int> connectivity-selected-index: 0;
+    in-out property <int> wifi-menu-index: 0;
+    in-out property <int> wifi-menu-scroll-offset: 0;
+    in-out property <int> wifi-network-index: 0;
+    in-out property <int> wifi-network-scroll-offset: 0;
+    in-out property <int> wifi-saved-index: 0;
+    in-out property <int> wifi-saved-scroll-offset: 0;
+    in-out property <int> wifi-detail-index: 0;
+    in-out property <int> wifi-detail-scroll-offset: 0;
+    in-out property <int> wifi-detail-return-view: 2;
+
+    /* Responsive Settings viewport capacities. These bindings are derived from
+     * the actual logical Window height, so HDMI/output resize immediately
+     * changes how many rows fit without carrying 640x480 scroll thresholds. */
+    in-out property <int> settings-list-visible-rows:
+        max(1, floor(((root.height - 102px) - 92px - 40px) / 48px) + 1);
+    in-out property <int> wifi-detail-visible-rows:
+        max(1, floor(((root.height - 102px) - 104px) / 44px));
+    in-out property <int> wifi-ip-index: 0;
+
+    in-out property <bool> wifi-enabled: false;
+    in-out property <bool> wifi-scanning: false;
+    in-out property <string> wifi-current-ssid: "";
+    in-out property <string> wifi-notice: "";
+    in-out property <[WifiNetworkEntry]> wifi-networks: [];
+    in-out property <[WifiNetworkEntry]> wifi-saved-networks: [];
+
+    in-out property <string> wifi-selected-ssid: "";
+    in-out property <string> wifi-selected-security: "";
+    in-out property <bool> wifi-selected-saved: false;
+    in-out property <bool> wifi-selected-current: false;
+    in-out property <bool> wifi-pending-hidden: false;
+
+    /* System virtual keyboard. Layout is a product setting boundary: Language/Region
+     * can change keyboard-layout later without any Wi-Fi-specific UI changes. */
+    in-out property <string> keyboard-layout: "qwerty";
+    in-out property <string> keyboard-input-kind: "text";
+
+    /* Controller-first system keyboard state; TextInput keeps physical keyboard support. */
+    in-out property <int> keyboard-purpose: 0;
+    in-out property <int> keyboard-return-view: 2;
+    in-out property <int> keyboard-index: 0;
+    in-out property <int> keyboard-page: 0;
+    in-out property <bool> keyboard-shift: false;
+    in-out property <bool> keyboard-secret: false;
+    in-out property <string> keyboard-title: "";
+    in-out property <string> keyboard-value: "";
+    in-out property <[string]> keyboard-row-zero: [];
+    in-out property <[string]> keyboard-row-one: [];
+    in-out property <[string]> keyboard-row-two: [];
+    in-out property <[string]> keyboard-row-three: [];
+
+    /* Per-network IP configuration. Automatic values are runtime/read-only. */
+    in-out property <string> wifi-ip-mode: "automatic";
+    in-out property <string> wifi-ip-address: "";
+    in-out property <int> wifi-ip-prefix: 0;
+    in-out property <string> wifi-ip-netmask: "";
+    in-out property <string> wifi-ip-gateway: "";
+    in-out property <string> wifi-ip-dns: "";
+    in-out property <string> wifi-runtime-address: "";
+    in-out property <int> wifi-runtime-prefix: 0;
+    in-out property <string> wifi-runtime-netmask: "";
+    in-out property <string> wifi-runtime-gateway: "";
+    in-out property <string> wifi-runtime-dns: "";
+
+    callback focus-system-keyboard();
+    callback system-keyboard-place-cursor(int);
+    callback system-keyboard-accepted();
 
     property <length> controllers-start-x:
         root.controller-count >= 4 ? root.width - 253px
@@ -447,6 +958,9 @@ export component HomeWindow inherits Window {
         duration: 460ms;
         easing: ease-in-out;
     }
+
+    focus-system-keyboard() => { system-keyboard.focus-entry(); }
+    system-keyboard-place-cursor(offset) => { system-keyboard.place-cursor-at(offset); }
 
     /* HOME stays completely still behind the lifecycle curtain. */
     Rectangle {
@@ -717,49 +1231,96 @@ export component HomeWindow inherits Window {
                 border-width: 1px;
                 border-color: #202329;
                 border-radius: 0px;
+                clip: true;
 
+                /* Category landing page. */
                 Text {
                     x: 22px;
                     y: 16px;
                     width: parent.width - 44px;
-                    text: root.settings-selected-index == 0 ? "General"
-                        : root.settings-selected-index == 1 ? "Connectivity"
-                        : root.settings-selected-index == 2 ? "Controllers & Input"
-                        : root.settings-selected-index == 3 ? "Display & Audio"
-                        : root.settings-selected-index == 4 ? "Gaming"
-                        : "System";
+                    text: root.settings-view == 0
+                        ? (root.settings-selected-index == 0 ? "General"
+                            : root.settings-selected-index == 1 ? "Connectivity"
+                            : root.settings-selected-index == 2 ? "Controllers & Input"
+                            : root.settings-selected-index == 3 ? "Display & Audio"
+                            : root.settings-selected-index == 4 ? "Gaming"
+                            : "System")
+                        : root.settings-view == 1 ? "Connectivity"
+                        : root.settings-view == 2 ? "Connect to Wi-Fi"
+                        : root.settings-view == 3 ? "Saved Networks"
+                        : root.settings-view == 4 ? root.wifi-selected-ssid
+                        : root.settings-view == 6 ? root.keyboard-title
+                        : root.settings-view == 7 ? "Connect New Device"
+                        : root.settings-view == 8 ? "My Devices"
+                        : root.settings-view == 9 ? root.bluetooth-selected-name
+                        : root.settings-view == 10 ? "Controllers & Input"
+                        : root.settings-view == 11 ? "Player Assignment"
+                        : root.settings-view == 12 ? "Controllers"
+                        : root.settings-view == 13 ? root.controller-selected-name
+                        : root.settings-view == 14 ? "Input Tester"
+                        : root.settings-view == 15 ? "Controller Mapping"
+                        : root.settings-view == 16 ? "Internal Rumble"
+                        : root.settings-view == 17 ? "RGB Lighting"
+                        : "Settings";
                     color: #f5f6f8;
-                    font-size: 26px;
+                    font-size: (root.settings-view == 4 && root.wifi-selected-ssid.character-count > 18)
+                        || (root.settings-view == 9 && root.bluetooth-selected-name.character-count > 18)
+                        || (root.settings-view == 13 && root.controller-selected-name.character-count > 18) ? 21px : 26px;
                     font-weight: 700;
-                            }
+                    overflow: elide;
+                }
 
                 Text {
                     x: 22px;
                     y: 52px;
                     width: parent.width - 44px;
-                    text: root.settings-selected-index == 0
-                        ? "Profiles, language and time"
-                        : root.settings-selected-index == 1
-                            ? "Wireless connections and paired devices"
-                            : root.settings-selected-index == 2
-                                ? "Controllers, mapping and input tools"
-                                : root.settings-selected-index == 3
-                                    ? "Screen, HDMI, brightness and audio"
-                                    : root.settings-selected-index == 4
-                                        ? "Gaming behaviour and performance"
-                                        : "Power, storage and system maintenance";
+                    text: root.settings-view == 0
+                        ? (root.settings-selected-index == 0 ? "Profiles, language and time"
+                            : root.settings-selected-index == 1 ? ""
+                            : root.settings-selected-index == 2 ? ""
+                            : root.settings-selected-index == 3 ? "Screen, HDMI, brightness and audio"
+                            : root.settings-selected-index == 4 ? "Gaming behaviour and performance"
+                            : "Power, storage and system maintenance")
+                        : root.settings-view == 1 ? ""
+                        : root.settings-view == 2 ? (root.wifi-networks.length == 0
+                            ? "Scanning nearby networks…"
+                            : root.wifi-scanning ? "Refreshing nearby networks…"
+                            : "Choose a network or add a hidden network")
+                        : root.settings-view == 3 ? "Saved device-global Wi-Fi networks"
+                        : root.settings-view == 4 ? root.wifi-selected-security
+                            + (root.wifi-selected-saved ? " • Saved" : "")
+                            + (root.wifi-selected-current ? " • Connected" : "")
+                        : root.settings-view == 6 ? (root.keyboard-secret ? "Password is hidden while typing" : "Controller or physical keyboard")
+                        : root.settings-view == 7 ? (root.bluetooth-scanning ? "Scanning nearby Bluetooth devices…" : "Choose a nearby Bluetooth device")
+                        : root.settings-view == 8 ? "Paired and connected Bluetooth devices"
+                        : root.settings-view == 9 ? root.bluetooth-selected-kind
+                            + (root.bluetooth-selected-paired ? " • Paired" : "")
+                            + (root.bluetooth-selected-connected ? " • Connected" : "")
+                        : root.settings-view == 10 ? ""
+                        : root.settings-view == 11 ? "Preferred slots are compacted when a controller is unavailable"
+                        : root.settings-view == 12 ? "Available built-in, USB and Bluetooth controllers"
+                        : root.settings-view == 13 ? root.controller-selected-transport
+                            + (root.controller-selected-effective-player > 0 ? " • Runtime P" + root.controller-selected-effective-player : "")
+                        : root.settings-view == 14 ? "All buttons and axes • Hotkey + Start to exit"
+                        : root.settings-view == 15 ? (root.controller-remap-waiting ? "Press the new button now…" : "Select an action to remap")
+                        : root.settings-view == 16 ? "User preference for the internal console rumble"
+                        : root.settings-view == 17 ? (root.lighting-active-effect != "" ? "System effect • " + root.lighting-active-effect : root.lighting-mode == "screen" ? "Screen Reactive • follows compositor color feed" : "User RGB baseline and system effects")
+                        : "Settings";
                     color: #7f858e;
-                    font-size: 16px;
+                    font-size: 14px;
                     font-weight: 500;
-                            }
+                    overflow: elide;
+                }
 
+                /* Normal category placeholders. Connectivity is the first real Settings domain. */
                 Text {
                     x: 22px;
                     y: 88px;
-                    text: root.settings-selected-index == 1 ? "Live state" : "Sections";
+                    text: root.settings-selected-index == 1 ? "Connectivity" : "Sections";
                     color: #8e949d;
                     font-size: 15px;
                     font-weight: 700;
+                    visible: root.settings-view == 0 && root.settings-selected-index != 1 && root.settings-selected-index != 2;
                 }
 
                 SettingsTopic {
@@ -771,9 +1332,8 @@ export component HomeWindow inherits Window {
                         : root.settings-selected-index == 3 ? "Display & HDMI"
                         : root.settings-selected-index == 4 ? "Performance Profiles"
                         : "Battery & Power";
-                    visible-topic: root.settings-selected-index != 1;
+                    visible-topic: root.settings-view == 0 && root.settings-selected-index != 1 && root.settings-selected-index != 2;
                 }
-
                 SettingsTopic {
                     x: 22px;
                     y: 166px;
@@ -783,31 +1343,8 @@ export component HomeWindow inherits Window {
                         : root.settings-selected-index == 3 ? "Brightness"
                         : root.settings-selected-index == 4 ? "Global Gaming Options"
                         : "Storage";
-                    visible-topic: root.settings-selected-index != 1;
+                    visible-topic: root.settings-view == 0 && root.settings-selected-index != 1 && root.settings-selected-index != 2;
                 }
-
-                ConnectivityStatusCard {
-                    x: 22px;
-                    y: 116px;
-                    width: parent.width - 44px;
-                    title: "Wi-Fi";
-                    status: root.connectivity-wifi-status;
-                    detail: root.connectivity-wifi-detail;
-                    active: root.connectivity-wifi-active;
-                    visible: root.settings-selected-index == 1;
-                }
-
-                ConnectivityStatusCard {
-                    x: 22px;
-                    y: 194px;
-                    width: parent.width - 44px;
-                    title: "Bluetooth";
-                    status: root.connectivity-bluetooth-status;
-                    detail: root.connectivity-bluetooth-detail;
-                    active: root.connectivity-bluetooth-active;
-                    visible: root.settings-selected-index == 1;
-                }
-
                 SettingsTopic {
                     x: 22px;
                     y: 216px;
@@ -817,23 +1354,760 @@ export component HomeWindow inherits Window {
                         : root.settings-selected-index == 3 ? "Audio"
                         : root.settings-selected-index == 5 ? "System Information"
                         : "";
-                    visible-topic: root.settings-selected-index == 0
-                        || root.settings-selected-index == 2
+                    visible-topic: root.settings-view == 0 && (root.settings-selected-index == 0
                         || root.settings-selected-index == 3
-                        || root.settings-selected-index == 5;
+                        || root.settings-selected-index == 5);
                 }
-
                 SettingsTopic {
                     x: 22px;
                     y: 266px;
                     width: parent.width - 44px;
                     label: root.settings-selected-index == 2 ? "Rumble & RGB"
-                        : root.settings-selected-index == 5 ? "Updates & Recovery"
-                        : "";
-                    visible-topic: root.settings-selected-index == 2
-                        || root.settings-selected-index == 5;
+                        : root.settings-selected-index == 5 ? "Updates & Recovery" : "";
+                    visible-topic: root.settings-view == 0 && root.settings-selected-index == 5;
+                }
+
+
+                /* Controllers & Input is entirely active-user scoped. Keep the same
+                 * macro-section visible while the category is merely highlighted. */
+                Text {
+                    x: 22px;
+                    y: 66px;
+                    text: "CONTROLLERS & INPUT";
+                    color: #3a86ff;
+                    font-size: 13px;
+                    font-weight: 700;
+                    visible: root.settings-view == 10
+                        || (root.settings-view == 0 && root.settings-selected-index == 2);
+                }
+                UserScopeBadge {
+                    x: 174px;
+                    y: 64px;
+                    visible: root.settings-view == 10
+                        || (root.settings-view == 0 && root.settings-selected-index == 2);
+                }
+                SettingsSelectableRow {
+                    x: 22px; y: 84px; width: parent.width - 44px;
+                    title: "Player Assignment";
+                    value: "P1–P4";
+                    selected: root.settings-view == 10 && root.controllers-menu-index == 0;
+                    visible: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
+                }
+                SettingsSelectableRow {
+                    x: 22px; y: 130px; width: parent.width - 44px;
+                    title: "Controllers";
+                    value: root.controllers.length + " available";
+                    selected: root.settings-view == 10 && root.controllers-menu-index == 1;
+                    visible: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
+                }
+                SettingsSelectableRow {
+                    x: 22px; y: 176px; width: parent.width - 44px;
+                    title: "Internal Rumble";
+                    value: root.rumble-supported ? (root.rumble-enabled ? "Enabled" : "Disabled") : "Unavailable";
+                    selected: root.settings-view == 10 && root.controllers-menu-index == 2;
+                    enabled: root.rumble-supported;
+                    visible: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
+                }
+                SettingsSelectableRow {
+                    x: 22px; y: 222px; width: parent.width - 44px;
+                    title: "RGB Lighting";
+                    value: root.lighting-supported ? (
+                        root.lighting-mode == "off" ? "Off"
+                        : root.lighting-mode == "static" ? "Static"
+                        : root.lighting-mode == "breathe" ? "Breathe"
+                        : root.lighting-mode == "rainbow" ? "Rainbow"
+                        : root.lighting-mode == "pulse" ? "Pulse"
+                        : root.lighting-mode == "chase" ? "Chase"
+                        : root.lighting-mode == "wave" ? "Wave"
+                        : root.lighting-mode == "sparkle" ? "Sparkle"
+                        : root.lighting-mode == "screen" ? "Screen Reactive"
+                        : root.lighting-mode
+                    ) : "Unavailable";
+                    selected: root.settings-view == 10 && root.controllers-menu-index == 3;
+                    enabled: root.lighting-supported;
+                    visible: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
+                }
+
+                /* Preferred player assignment. */
+                for assignment[i] in root.player-assignments: SettingsSelectableRow {
+                    x: 22px;
+                    y: 92px + i * 48px;
+                    width: parent.width - 44px;
+                    title: "Player " + assignment.player;
+                    value: assignment.controller-name == "" ? "Automatic" : assignment.controller-name
+                        + (assignment.available ? "" : " • unavailable");
+                    selected: root.settings-view == 11 && root.player-assignment-index == i;
+                    visible: root.settings-view == 11;
+                }
+
+                /* Available controller inventory. */
+                for controller[i] in root.controllers: SettingsSelectableRow {
+                    x: 22px;
+                    y: 92px + (i - root.controller-list-scroll-offset) * 48px;
+                    width: parent.width - 44px;
+                    title: controller.name;
+                    value: controller.effective-player > 0 ? "P" + controller.effective-player : controller.transport;
+                    selected: root.settings-view == 12 && root.controller-list-index == i;
+                    visible: root.settings-view == 12
+                        && i >= root.controller-list-scroll-offset
+                        && i < root.controller-list-scroll-offset + root.settings-list-visible-rows;
+                }
+
+                SettingsSelectableRow {
+                    x: 22px; y: 92px; width: parent.width - 44px;
+                    title: "Controller Mapping";
+                    value: "";
+                    selected: root.settings-view == 13 && root.controller-detail-index == 0;
+                    visible: root.settings-view == 13;
+                }
+                SettingsSelectableRow {
+                    x: 22px; y: 140px; width: parent.width - 44px;
+                    title: "Input Tester";
+                    value: "";
+                    selected: root.settings-view == 13 && root.controller-detail-index == 1;
+                    visible: root.settings-view == 13;
+                }
+
+                /* Per-controller Input Tester: one graphical controller plus
+                 * one large mapped/physical label. */
+                ControllerTesterVisual {
+                    x: 22px; y: 76px; width: parent.width - 44px;
+                    visible: root.settings-view == 14;
+                    face-south: root.tester-face-south;
+                    face-east: root.tester-face-east;
+                    face-north: root.tester-face-north;
+                    face-west: root.tester-face-west;
+                    dpad-up: root.tester-dpad-up;
+                    dpad-down: root.tester-dpad-down;
+                    dpad-left: root.tester-dpad-left;
+                    dpad-right: root.tester-dpad-right;
+                    l1: root.tester-l1; r1: root.tester-r1;
+                    l2: root.tester-l2; r2: root.tester-r2;
+                    l3: root.tester-l3; r3: root.tester-r3;
+                    start: root.tester-start;
+                    select: root.tester-select;
+                    hotkey: root.tester-hotkey;
+                    left-x: root.tester-left-x; left-y: root.tester-left-y;
+                    right-x: root.tester-right-x; right-y: root.tester-right-y;
+                    left-trigger: root.tester-left-trigger;
+                    right-trigger: root.tester-right-trigger;
+                }
+                Text {
+                    x: 22px; y: 286px; width: parent.width - 44px; height: 48px;
+                    text: root.tester-action;
+                    color: #f5f6f8;
+                    font-size: 20px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    visible: root.settings-view == 14;
+                    overflow: elide;
+                }
+
+                /* Deadzone is a first-class per-controller mapping setting. */
+                SettingsSelectableRow {
+                    x: 22px;
+                    y: 92px - root.controller-mapping-scroll-offset * 44px;
+                    width: parent.width - 44px;
+                    title: "Left Stick Deadzone";
+                    value: root.controller-left-deadzone + "%";
+                    selected: root.settings-view == 15 && root.controller-mapping-index == 0;
+                    visible: root.settings-view == 15
+                        && 0 >= root.controller-mapping-scroll-offset
+                        && 0 < root.controller-mapping-scroll-offset + root.settings-list-visible-rows;
+                }
+                SettingsSelectableRow {
+                    x: 22px;
+                    y: 136px - root.controller-mapping-scroll-offset * 44px;
+                    width: parent.width - 44px;
+                    title: "Right Stick Deadzone";
+                    value: root.controller-right-deadzone + "%";
+                    selected: root.settings-view == 15 && root.controller-mapping-index == 1;
+                    visible: root.settings-view == 15
+                        && 1 >= root.controller-mapping-scroll-offset
+                        && 1 < root.controller-mapping-scroll-offset + root.settings-list-visible-rows;
+                }
+                for mapping[i] in root.controller-mapping: SettingsSelectableRow {
+                    x: 22px;
+                    y: 92px + (i + 2 - root.controller-mapping-scroll-offset) * 44px;
+                    width: parent.width - 44px;
+                    title: mapping.label;
+                    value: mapping.binding;
+                    selected: root.settings-view == 15 && root.controller-mapping-index == i + 2;
+                    visible: root.settings-view == 15
+                        && i + 2 >= root.controller-mapping-scroll-offset
+                        && i + 2 < root.controller-mapping-scroll-offset + root.settings-list-visible-rows;
+                }
+
+                SettingsSelectableRow {
+                    x: 22px; y: 92px; width: parent.width - 44px;
+                    title: "Enabled";
+                    value: root.rumble-enabled ? "On" : "Off";
+                    selected: root.settings-view == 16 && root.rumble-index == 0;
+                    visible: root.settings-view == 16;
+                }
+                SettingsSelectableRow {
+                    x: 22px; y: 140px; width: parent.width - 44px;
+                    title: "Test Rumble";
+                    value: "";
+                    selected: root.settings-view == 16 && root.rumble-index == 1;
+                    visible: root.settings-view == 16;
+                }
+
+                SettingsSelectableRow {
+                    x: 22px; y: 92px; width: parent.width - 44px;
+                    title: "Mode"; value:
+                        root.lighting-mode == "off" ? "Off"
+                        : root.lighting-mode == "static" ? "Static"
+                        : root.lighting-mode == "breathe" ? "Breathe"
+                        : root.lighting-mode == "rainbow" ? "Rainbow"
+                        : root.lighting-mode == "pulse" ? "Pulse"
+                        : root.lighting-mode == "chase" ? "Chase"
+                        : root.lighting-mode == "wave" ? "Wave"
+                        : root.lighting-mode == "sparkle" ? "Sparkle"
+                        : root.lighting-mode == "screen" ? "Screen Reactive"
+                        : root.lighting-mode;
+                    selected: root.settings-view == 17 && root.lighting-index == 0;
+                    visible: root.settings-view == 17;
+                }
+                SettingsSelectableRow {
+                    x: 22px; y: 140px; width: parent.width - 44px;
+                    title: "Brightness"; value: root.lighting-brightness + "%";
+                    selected: root.settings-view == 17 && root.lighting-index == 1;
+                    visible: root.settings-view == 17;
+                }
+                SettingsSelectableRow {
+                    x: 22px; y: 188px; width: parent.width - 44px;
+                    title: "Color";
+                    value: (root.lighting-mode == "static"
+                        || root.lighting-mode == "breathe"
+                        || root.lighting-mode == "pulse"
+                        || root.lighting-mode == "chase"
+                        || root.lighting-mode == "wave") ? root.lighting-color-name : "Automatic";
+                    selected: root.settings-view == 17 && root.lighting-index == 2;
+                    enabled: root.lighting-mode == "static"
+                        || root.lighting-mode == "breathe"
+                        || root.lighting-mode == "pulse"
+                        || root.lighting-mode == "chase"
+                        || root.lighting-mode == "wave";
+                    visible: root.settings-view == 17;
+                }
+                SettingsSelectableRow {
+                    x: 22px; y: 236px; width: parent.width - 44px;
+                    title: "System Effects"; value: root.lighting-system-effects ? "On" : "Off";
+                    selected: root.settings-view == 17 && root.lighting-index == 3;
+                    visible: root.settings-view == 17;
+                }
+                SettingsSelectableRow {
+                    x: 22px; y: 284px; width: parent.width - 44px;
+                    title: "Preview System Effects"; value: "";
+                    selected: root.settings-view == 17 && root.lighting-index == 4;
+                    visible: root.settings-view == 17;
+                }
+
+                /* Generic dropdown used by every discrete multi-value Settings
+                 * choice. Player Assignment, RGB Mode and RGB Color already use
+                 * this common component/state. */
+                Rectangle {
+                    x: 16px;
+                    y: 66px;
+                    width: parent.width - 32px;
+                    height: 286px;
+                    background: #17191d;
+                    border-width: 1px;
+                    border-color: #3a86ff;
+                    border-radius: 8px;
+                    visible: root.settings-choice-open;
+                    z: 95;
+
+                    Text {
+                        x: 16px; y: 12px; width: parent.width - 32px; height: 26px;
+                        text: root.settings-choice-title;
+                        color: #f5f6f8; font-size: 18px; font-weight: 700;
+                        overflow: elide;
+                    }
+                    for option[i] in root.settings-choice-options: SettingsSelectableRow {
+                        x: 12px;
+                        y: 48px + (i - root.settings-choice-scroll) * 42px;
+                        width: parent.width - 24px;
+                        title: option.label;
+                        value: "";
+                        selected: root.settings-choice-index == i;
+                        visible: i >= root.settings-choice-scroll
+                            && i < root.settings-choice-scroll + 5;
+                    }
+                }
+
+                /* System Effect preview carousel. It overlays RGB Settings and can be
+                 * interrupted immediately with Back. */
+                Rectangle {
+                    x: 14px;
+                    y: 62px;
+                    width: parent.width - 28px;
+                    height: 280px;
+                    background: #17191d;
+                    border-width: 1px;
+                    border-color: #3a86ff;
+                    border-radius: 10px;
+                    visible: root.settings-view == 17 && root.lighting-preview-open;
+                    z: 90;
+
+                    Text {
+                        x: 18px; y: 14px; width: parent.width - 36px;
+                        text: "System Effect Preview";
+                        color: #f5f6f8; font-size: 20px; font-weight: 700;
+                        horizontal-alignment: center;
+                    }
+
+                    Image {
+                        x: (parent.width - 56px) / 2;
+                        y: 56px; width: 56px; height: 56px;
+                        source: root.lighting-preview-index == 0
+                            ? @image-url("assets/icons/battery-empty.svg")
+                            : root.lighting-preview-index == 1
+                            ? @image-url("assets/icons/gamepad.svg")
+                            : root.lighting-preview-index == 2
+                            ? @image-url("assets/icons/wifi.svg")
+                            : @image-url("assets/icons/circle-notch.svg");
+                        image-fit: contain;
+                    }
+
+                    Text {
+                        x: 18px; y: 126px; width: parent.width - 36px;
+                        text: root.lighting-preview-index == 0 ? "Low Battery"
+                            : root.lighting-preview-index == 1 ? "Controller Connected"
+                            : root.lighting-preview-index == 2 ? "Wi-Fi Search"
+                            : root.lighting-preview-index == 3 ? "Boot"
+                            : "System Launch";
+                        color: #f5f6f8; font-size: 19px; font-weight: 700;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        x: 24px; y: 162px; width: parent.width - 48px;
+                        text: root.lighting-preview-index == 0 ? "Temporary red warning pulse"
+                            : root.lighting-preview-index == 1 ? "Connection confirmation effect"
+                            : root.lighting-preview-index == 2 ? "Animated wireless search"
+                            : root.lighting-preview-index == 3 ? "nuubOS blue loading animation"
+                            : "Context color while launching a system";
+                        color: #8e949d; font-size: 14px;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        x: 18px; y: 214px; width: parent.width - 36px;
+                        text: (root.lighting-preview-index + 1) + " / 5";
+                        color: #3a86ff; font-size: 14px; font-weight: 700;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        x: 18px; y: 244px; width: parent.width - 36px;
+                        text: "Left / Right to browse   •   Back to stop";
+                        color: #7f858e; font-size: 13px;
+                        horizontal-alignment: center;
+                    }
+                }
+
+                /* Connectivity is already visible while the category is highlighted.
+                 * Confirm moves focus into the same two macro-sections instead of
+                 * opening another conceptual landing page. */
+                Text {
+                    x: 22px;
+                    y: 66px;
+                    text: "WI-FI";
+                    color: #3a86ff;
+                    font-size: 13px;
+                    font-weight: 700;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+                DeviceScopeBadge {
+                    x: 68px;
+                    y: 64px;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+                SettingsSelectableRow {
+                    x: 22px;
+                    y: 84px;
+                    width: parent.width - 44px;
+                    title: "Wi-Fi";
+                    value: "";
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == 0;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+                WifiToggle {
+                    x: parent.width - 82px;
+                    y: 93px;
+                    checked: root.wifi-enabled;
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == 0;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+                SettingsSelectableRow {
+                    x: 22px;
+                    y: 130px;
+                    width: parent.width - 44px;
+                    title: "Connect";
+                    value: root.connectivity-wifi-active ? root.wifi-current-ssid : "Not connected";
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == 1;
+                    enabled: root.wifi-enabled;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+                SettingsSelectableRow {
+                    x: 22px;
+                    y: 176px;
+                    width: parent.width - 44px;
+                    title: "Saved Networks";
+                    value: root.wifi-saved-networks.length + " saved";
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == 2;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+
+                Text {
+                    x: 22px;
+                    y: 222px;
+                    text: "BLUETOOTH";
+                    color: #3a86ff;
+                    font-size: 13px;
+                    font-weight: 700;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+                DeviceScopeBadge {
+                    x: 106px;
+                    y: 220px;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+                SettingsSelectableRow {
+                    x: 22px;
+                    y: 240px;
+                    width: parent.width - 44px;
+                    title: "Bluetooth";
+                    value: "";
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == 3;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+                WifiToggle {
+                    x: parent.width - 82px;
+                    y: 249px;
+                    checked: root.bluetooth-enabled;
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == 3;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+                SettingsSelectableRow {
+                    x: 22px;
+                    y: 284px;
+                    width: parent.width - 44px;
+                    title: "Connect New Device";
+                    value: "";
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == 4;
+                    enabled: root.bluetooth-enabled;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+                SettingsSelectableRow {
+                    x: 22px;
+                    y: 328px;
+                    width: parent.width - 44px;
+                    title: "My Devices";
+                    value: root.bluetooth-known-devices.length + " devices";
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == 5;
+                    enabled: root.bluetooth-enabled;
+                    visible: root.settings-view == 1
+                        || (root.settings-view == 0 && root.settings-selected-index == 1);
+                }
+
+                /* Connect page. Entering this view starts a product-service scan
+                 * session; results stay live until this page is left. */
+                SettingsSelectableRow {
+                    x: 22px;
+                    y: 92px - root.wifi-network-scroll-offset * 48px;
+                    width: parent.width - 44px;
+                    title: "Add Hidden Network";
+                    value: "+";
+                    selected: root.settings-view == 2 && root.wifi-network-index == 0;
+                    visible: root.settings-view == 2
+                        && 0 >= root.wifi-network-scroll-offset
+                        && 0 < root.wifi-network-scroll-offset + root.settings-list-visible-rows;
+                }
+                for network[i] in root.wifi-networks: WifiNetworkListRow {
+                    x: 22px;
+                    y: 92px + (i + 1 - root.wifi-network-scroll-offset) * 48px;
+                    width: parent.width - 44px;
+                    ssid: network.ssid;
+                    security: network.security;
+                    signal-dbm: network.signal-dbm;
+                    saved: network.saved;
+                    current: network.current;
+                    selected: root.settings-view == 2 && root.wifi-network-index == i + 1;
+                    visible: root.settings-view == 2
+                        && i + 1 >= root.wifi-network-scroll-offset
+                        && i + 1 < root.wifi-network-scroll-offset + root.settings-list-visible-rows;
+                }
+                Text {
+                    x: 22px;
+                    y: 206px;
+                    width: parent.width - 44px;
+                    horizontal-alignment: center;
+                    text: root.wifi-scanning ? "Scanning…" : "Searching for nearby networks…";
+                    color: #7f858e;
+                    font-size: 13px;
+                    visible: root.settings-view == 2 && root.wifi-networks.length == 0;
+                }
+
+                /* Saved networks are a flat list. Selecting one opens the same
+                 * editor used by the current network. */
+                for network[i] in root.wifi-saved-networks: WifiNetworkListRow {
+                    x: 22px;
+                    y: 92px + (i - root.wifi-saved-scroll-offset) * 48px;
+                    width: parent.width - 44px;
+                    ssid: network.ssid;
+                    security: network.security;
+                    signal-dbm: network.signal-dbm;
+                    saved: true;
+                    current: network.current;
+                    selected: root.settings-view == 3 && root.wifi-saved-index == i;
+                    visible: root.settings-view == 3
+                        && i >= root.wifi-saved-scroll-offset
+                        && i < root.wifi-saved-scroll-offset + root.settings-list-visible-rows;
+                }
+                Text {
+                    x: 22px;
+                    y: 150px;
+                    width: parent.width - 44px;
+                    horizontal-alignment: center;
+                    text: "No saved Wi-Fi networks";
+                    color: #7f858e;
+                    font-size: 13px;
+                    visible: root.settings-view == 3 && root.wifi-saved-networks.length == 0;
+                }
+
+
+                /* Bluetooth discovery is active only while this page is open. */
+                for device[i] in root.bluetooth-devices: BluetoothDeviceListRow {
+                    x: 22px;
+                    y: 92px + (i - root.bluetooth-device-scroll-offset) * 48px;
+                    width: parent.width - 44px;
+                    name: device.name;
+                    kind: device.kind;
+                    paired: device.paired;
+                    connected: device.connected;
+                    rssi: device.rssi;
+                    selected: root.settings-view == 7 && root.bluetooth-device-index == i;
+                    visible: root.settings-view == 7
+                        && i >= root.bluetooth-device-scroll-offset
+                        && i < root.bluetooth-device-scroll-offset + root.settings-list-visible-rows;
+                }
+                Text {
+                    x: 22px;
+                    y: 150px;
+                    width: parent.width - 44px;
+                    horizontal-alignment: center;
+                    text: root.bluetooth-scanning ? "Scanning…" : "No new Bluetooth devices found";
+                    color: #7f858e;
+                    font-size: 13px;
+                    visible: root.settings-view == 7 && root.bluetooth-devices.length == 0;
+                }
+
+                /* Paired/connected Bluetooth devices. */
+                for device[i] in root.bluetooth-known-devices: BluetoothDeviceListRow {
+                    x: 22px;
+                    y: 92px + (i - root.bluetooth-known-scroll-offset) * 48px;
+                    width: parent.width - 44px;
+                    name: device.name;
+                    kind: device.kind;
+                    paired: device.paired;
+                    connected: device.connected;
+                    rssi: device.rssi;
+                    selected: root.settings-view == 8 && root.bluetooth-known-index == i;
+                    visible: root.settings-view == 8
+                        && i >= root.bluetooth-known-scroll-offset
+                        && i < root.bluetooth-known-scroll-offset + root.settings-list-visible-rows;
+                }
+                Text {
+                    x: 22px;
+                    y: 150px;
+                    width: parent.width - 44px;
+                    horizontal-alignment: center;
+                    text: "No paired Bluetooth devices";
+                    color: #7f858e;
+                    font-size: 13px;
+                    visible: root.settings-view == 8 && root.bluetooth-known-devices.length == 0;
+                }
+
+                /* One device, one management surface. */
+                Rectangle {
+                    x: 22px;
+                    y: 92px;
+                    width: parent.width - 44px;
+                    height: 132px;
+                    background: #00000000;
+                    visible: root.settings-view == 9;
+
+                    SettingsActionButton {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        label: !root.bluetooth-selected-paired ? "Pair & Connect"
+                            : root.bluetooth-selected-connected ? "Disconnect"
+                            : "Connect";
+                        selected: root.bluetooth-detail-index == 0;
+                    }
+
+                    SettingsActionButton {
+                        x: 0px;
+                        y: 56px;
+                        width: parent.width;
+                        label: root.bluetooth-selected-paired ? "Forget Device" : "Pair with PIN";
+                        selected: root.bluetooth-detail-index == 1;
+                        danger: root.bluetooth-selected-paired;
+                        enabled: true;
+                    }
+                }
+
+                /* Network editor. Password and IP parameters live on one scrollable
+                 * surface to avoid a stack of nested settings pages. */
+                Rectangle {
+                    x: 22px;
+                    y: 82px;
+                    width: parent.width - 44px;
+                    height: parent.height - 104px;
+                    clip: true;
+                    background: #00000000;
+                    visible: root.settings-view == 4;
+
+                    SettingsSelectableRow {
+                        x: 0px;
+                        y: (0 - root.wifi-detail-scroll-offset) * 44px;
+                        width: parent.width;
+                        title: root.wifi-selected-current ? "Disconnect" : "Connect";
+                        value: root.wifi-selected-current ? "Connected" : "Connect";
+                        selected: root.wifi-detail-index == 0;
+                    }
+                    SettingsSelectableRow {
+                        x: 0px;
+                        y: (1 - root.wifi-detail-scroll-offset) * 44px;
+                        width: parent.width;
+                        title: "Password";
+                        value: root.wifi-selected-security == "Open" ? "None" : "Change";
+                        selected: root.wifi-detail-index == 1;
+                        enabled: root.wifi-selected-security != "Open";
+                    }
+                    SettingsSelectableRow {
+                        x: 0px;
+                        y: (2 - root.wifi-detail-scroll-offset) * 44px;
+                        width: parent.width;
+                        title: "IPv4";
+                        value: root.wifi-ip-mode == "automatic" ? "Automatic" : "Manual";
+                        selected: root.wifi-detail-index == 2;
+                    }
+                    SettingsSelectableRow {
+                        x: 0px;
+                        y: (3 - root.wifi-detail-scroll-offset) * 44px;
+                        width: parent.width;
+                        title: "Address";
+                        value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-address : root.wifi-ip-address;
+                        selected: root.wifi-detail-index == 3;
+                        enabled: root.wifi-ip-mode == "manual";
+                    }
+                    SettingsSelectableRow {
+                        x: 0px;
+                        y: (4 - root.wifi-detail-scroll-offset) * 44px;
+                        width: parent.width;
+                        title: "Subnet Mask";
+                        value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-netmask : root.wifi-ip-netmask;
+                        selected: root.wifi-detail-index == 4;
+                        enabled: root.wifi-ip-mode == "manual";
+                    }
+                    SettingsSelectableRow {
+                        x: 0px;
+                        y: (5 - root.wifi-detail-scroll-offset) * 44px;
+                        width: parent.width;
+                        title: "Gateway";
+                        value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-gateway : root.wifi-ip-gateway;
+                        selected: root.wifi-detail-index == 5;
+                        enabled: root.wifi-ip-mode == "manual";
+                    }
+                    SettingsSelectableRow {
+                        x: 0px;
+                        y: (6 - root.wifi-detail-scroll-offset) * 44px;
+                        width: parent.width;
+                        title: "DNS";
+                        value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-dns : root.wifi-ip-dns;
+                        selected: root.wifi-detail-index == 6;
+                        enabled: root.wifi-ip-mode == "manual";
+                    }
+                    SettingsActionButton {
+                        x: 0px;
+                        y: (7 - root.wifi-detail-scroll-offset) * 44px + 10px;
+                        width: parent.width;
+                        label: "Apply Changes";
+                        selected: root.wifi-detail-index == 7;
+                    }
+                    SettingsActionButton {
+                        x: 0px;
+                        y: (8 - root.wifi-detail-scroll-offset) * 44px + 14px;
+                        width: parent.width;
+                        label: "Forget Network";
+                        selected: root.wifi-detail-index == 8;
+                        danger: true;
+                        enabled: root.wifi-selected-saved;
+                    }
+                }
+
+                Text {
+                    x: 22px;
+                    y: parent.height - 22px;
+                    width: parent.width - 44px;
+                    text: root.bluetooth-notice;
+                    color: #d5a34c;
+                    font-size: 11px;
+                    horizontal-alignment: right;
+                    overflow: elide;
+                    visible: root.bluetooth-notice != "" && root.settings-view >= 7 && root.settings-view <= 9;
+                }
+
+                Text {
+                    x: 22px;
+                    y: parent.height - 22px;
+                    width: parent.width - 44px;
+                    text: root.wifi-notice;
+                    color: #d5a34c;
+                    font-size: 11px;
+                    horizontal-alignment: right;
+                    overflow: elide;
+                    visible: root.wifi-notice != "" && root.settings-view != 6;
                 }
             }
+        }
+
+        /* System-wide virtual keyboard bottom sheet. It intentionally spans the
+         * full display width so every Settings domain shares the same keyboard
+         * surface, independent of the right-pane width. */
+        system-keyboard := SystemVirtualKeyboard {
+            x: 0px;
+            y: 176px;
+            width: parent.width;
+            height: parent.height - 228px;
+            z: 20;
+            visible: root.settings-open && root.settings-view == 6;
+            value <=> root.keyboard-value;
+            title: root.keyboard-title;
+            secret: root.keyboard-secret;
+            input-kind: root.keyboard-input-kind;
+            layout-name: root.keyboard-layout;
+            selected-index: root.keyboard-index;
+            page: root.keyboard-page;
+            row-zero: root.keyboard-row-zero;
+            row-one: root.keyboard-row-one;
+            row-two: root.keyboard-row-two;
+            row-three: root.keyboard-row-three;
+            accepted => { root.system-keyboard-accepted(); }
         }
 
         /* Context-sensitive bottom action bar. */
@@ -896,14 +2170,31 @@ export component HomeWindow inherits Window {
             }
 
             FaceButtonHint {
-                x: 150px;
+                x: 148px;
+                y: 12px;
+                active-position: root.select-face-position;
+                visible: root.settings-open;
+            }
+
+            Text {
+                x: 182px;
+                y: 17px;
+                text: "Select";
+                color: #a8adb5;
+                font-size: 17px;
+                font-weight: 600;
+                visible: root.settings-open;
+            }
+
+            FaceButtonHint {
+                x: 270px;
                 y: 12px;
                 active-position: root.back-face-position;
                 visible: root.settings-open;
             }
 
             Text {
-                x: 186px;
+                x: 304px;
                 y: 17px;
                 text: "Back";
                 color: #a8adb5;

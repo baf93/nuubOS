@@ -1,0 +1,8 @@
+#!/bin/sh
+DAEMON=/usr/sbin/nuubos-lightingd
+PIDFILE=/run/nuubos/lightingd.pid
+running(){ [ -r "$PIDFILE" ] || return 1; PID="$(cat "$PIDFILE" 2>/dev/null)"; [ -r "/proc/$PID/cmdline" ] || return 1; [ "$(tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p')" = "$DAEMON" ]; }
+start(){ mkdir -p /run/nuubos; running && return 0; rm -f "$PIDFILE"; start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "$DAEMON"; }
+stop(){ if running; then kill -TERM "$(cat "$PIDFILE")" 2>/dev/null || true; fi; rm -f "$PIDFILE"; }
+case "${1:-}" in start) start;; stop) stop;; restart) stop; start;; *) echo "Usage: $0 {start|stop|restart}" >&2; exit 1;; esac
+exit 0

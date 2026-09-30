@@ -1,0 +1,6 @@
+config BR2_PACKAGE_NUUBOS_LIGHTING
+	bool "nuubOS user lighting product service"
+	depends on BR2_PACKAGE_DBUS
+	select BR2_PACKAGE_NUUBOS_RGB
+	help
+	  User-scoped RGB baseline modes and temporary system effects.

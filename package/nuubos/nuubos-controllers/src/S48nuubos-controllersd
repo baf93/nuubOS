@@ -1,0 +1,47 @@
+#!/bin/sh
+
+DAEMON=/usr/sbin/nuubos-controllersd
+PIDFILE=/run/nuubos/controllersd.pid
+
+pid_command()
+{
+    PID="$1"
+    [ -n "$PID" ] || return 1
+    [ -r "/proc/$PID/cmdline" ] || return 1
+    tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p'
+}
+
+running()
+{
+    [ -r "$PIDFILE" ] || return 1
+    PID="$(cat "$PIDFILE" 2>/dev/null)"
+    [ "$(pid_command "$PID")" = "$DAEMON" ]
+}
+
+start_service()
+{
+    mkdir -p /run/nuubos
+    if running; then
+        return 0
+    fi
+    rm -f "$PIDFILE"
+    start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "$DAEMON"
+}
+
+stop_service()
+{
+    if running; then
+        PID="$(cat "$PIDFILE" 2>/dev/null)"
+        kill -TERM "$PID" 2>/dev/null || true
+    fi
+    rm -f "$PIDFILE"
+}
+
+case "${1:-}" in
+    start) start_service ;;
+    stop) stop_service ;;
+    restart) stop_service; start_service ;;
+    *) echo "Usage: $0 {start|stop|restart}" >&2; exit 1 ;;
+esac
+
+exit 0

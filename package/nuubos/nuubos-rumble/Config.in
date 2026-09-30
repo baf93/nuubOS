@@ -1,0 +1,5 @@
+config BR2_PACKAGE_NUUBOS_RUMBLE
+	bool "nuubOS internal rumble product service"
+	depends on BR2_PACKAGE_DBUS
+	help
+	  User-scoped internal rumble policy and test service.

@@ -1,0 +1,132 @@
+// nuubOS reusable system virtual keyboard.
+// Architecture inspired by Slint's MIT-licensed virtual keyboard example,
+// adapted for controller-first navigation and nuubOS visual language.
+
+component KeyboardKey inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> selected: false;
+
+    height: 34px;
+    border-radius: 5px;
+    background: root.selected ? #2d5c9a : #1a1c20;
+    border-width: 1px;
+    border-color: root.selected ? #73a8ff : #343840;
+    visible: root.label != "";
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.label;
+        color: root.selected ? #ffffff : #c8ccd2;
+        font-size: root.label == "Space" || root.label == "Done" || root.label == "Back" ? 12px : 15px;
+        font-weight: root.selected ? 700 : 600;
+    }
+}
+
+export component SystemVirtualKeyboard inherits Rectangle {
+    in-out property <string> value: "";
+    in property <string> title: "";
+    in property <bool> secret: false;
+    in property <string> input-kind: "text";
+    in property <string> layout-name: "qwerty";
+    in property <int> selected-index: 0;
+    in property <int> page: 0;
+    in property <[string]> row-zero: [];
+    in property <[string]> row-one: [];
+    in property <[string]> row-two: [];
+    in property <[string]> row-three: [];
+
+    callback accepted();
+    callback focus-entry();
+    callback place-cursor-at(int);
+
+    background: #101114;
+    border-width: 1px;
+    border-color: #2b2e34;
+
+    focus-entry() => { physical-input.focus(); }
+    place-cursor-at(offset) => { physical-input.set-selection-offsets(offset, offset); }
+
+    Rectangle {
+        x: 18px;
+        y: 10px;
+        width: parent.width - 36px;
+        height: 38px;
+        border-radius: 6px;
+        background: #15171b;
+        border-width: 1px;
+        border-color: #343840;
+        clip: true;
+
+        physical-input := TextInput {
+            x: 10px;
+            y: 4px;
+            width: max(parent.width - 20px, self.preferred-width + 16px);
+            height: parent.height - 8px;
+            text <=> root.value;
+            input-type: root.secret ? InputType.password
+                : root.input-kind == "number" ? InputType.number
+                : root.input-kind == "decimal" ? InputType.decimal
+                : InputType.text;
+            color: #f5f6f8;
+            font-size: 17px;
+            vertical-alignment: center;
+            accepted => { root.accepted(); }
+            cursor-position-changed(cursor-position) => {
+                if cursor-position.x + self.x < 10px {
+                    self.x = 10px - cursor-position.x;
+                } else if cursor-position.x + self.x > parent.width - 12px - self.text-cursor-width {
+                    self.x = parent.width - cursor-position.x - 12px - self.text-cursor-width;
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        x: 18px; y: 58px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        for key[i] in root.row-zero: KeyboardKey {
+            label: key;
+            selected: root.selected-index == i;
+        }
+    }
+    HorizontalLayout {
+        x: 18px; y: 98px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        for key[i] in root.row-one: KeyboardKey {
+            label: key;
+            selected: root.selected-index == 10 + i;
+        }
+    }
+    HorizontalLayout {
+        x: 18px; y: 138px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        for key[i] in root.row-two: KeyboardKey {
+            label: key;
+            selected: root.selected-index == 20 + i;
+        }
+    }
+    HorizontalLayout {
+        x: 18px; y: 178px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        for key[i] in root.row-three: KeyboardKey {
+            label: key;
+            selected: root.selected-index == 30 + i;
+        }
+    }
+
+    Text {
+        x: 18px;
+        y: 222px;
+        width: parent.width - 36px;
+        text: root.input-kind == "ipv4" ? "IPv4"
+            : root.input-kind == "dns" ? "DNS / IPv4 list"
+            : root.input-kind == "number" ? "Numeric"
+            : root.page == 0 ? (root.layout-name == "azerty" ? "ABC • AZERTY"
+                : root.layout-name == "qwertz" ? "ABC • QWERTZ"
+                : "ABC • QWERTY")
+            : root.page == 1 ? "123 • numbers & punctuation"
+            : "SYM • symbols";
+        color: #6f7580;
+        font-size: 12px;
+        horizontal-alignment: center;
+    }
+}

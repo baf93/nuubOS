@@ -35,8 +35,8 @@
 #define MAX_CLIENTS 16
 #define MAX_LINE 256
 
-#define HORIZONTAL_REPEAT_DELAY_MS 300
-#define HORIZONTAL_REPEAT_INTERVAL_MS 60
+#define NAV_REPEAT_DELAY_MS 350
+#define NAV_REPEAT_INTERVAL_MS 90
 
 #define BITS_PER_LONG (sizeof(unsigned long) * 8U)
 #define NBITS(n) (((n) + BITS_PER_LONG - 1U) / BITS_PER_LONG)
@@ -70,11 +70,29 @@ struct nav_axis {
 	int direction;
 };
 
+struct tester_axis {
+	bool present;
+	bool unipolar;
+	int code;
+	int minimum;
+	int maximum;
+	int center;
+};
+
+static const int tester_axis_codes[] = {
+	ABS_X, ABS_Y, ABS_RX, ABS_RY, ABS_Z, ABS_RZ,
+	ABS_GAS, ABS_BRAKE, ABS_HAT0X, ABS_HAT0Y,
+};
+
 struct input_dev {
 	int fd;
 	bool grabbed;
-	char path[64];
+	char path[512];
 	char name[128];
+	char controller_id[160];
+	int mapped_codes[sizeof(bindings) / sizeof(bindings[0])];
+	int left_deadzone_percent;
+	int right_deadzone_percent;
 
 	/*
 	 * Navigation is described exclusively through Linux input semantics,
@@ -85,12 +103,14 @@ struct input_dev {
 	struct nav_axis abs_y;
 	struct nav_axis hat_x;
 	struct nav_axis hat_y;
+	struct tester_axis tester_axes[sizeof(tester_axis_codes) / sizeof(tester_axis_codes[0])];
 };
 
 enum client_role {
 	CLIENT_ROLE_GENERIC = 0,
 	CLIENT_ROLE_HOME,
 	CLIENT_ROLE_QUICK_MENU,
+	CLIENT_ROLE_CONTROLLERS,
 };
 
 struct client {
@@ -119,6 +139,15 @@ static char last_device[128] = "none";
 static FILE *log_file;
 static char repeat_action[32];
 static long long repeat_next_ms;
+static char raw_capture_controller[160];
+
+static bool configure_nav_axis(struct input_dev *input,
+			       struct nav_axis *axis,
+			       int code,
+			       bool horizontal,
+			       bool discrete);
+static void configure_tester_axes(struct input_dev *input);
+static int normalize_tester_abs(const struct input_dev *input, int code, int value);
 
 static void log_message(const char *fmt, ...)
 {
@@ -155,6 +184,169 @@ static bool bit_is_set(const unsigned long *bits, unsigned int bit)
 	unsigned int offset = bit % BITS_PER_LONG;
 
 	return (bits[word] & (1UL << offset)) != 0;
+}
+
+
+static void sanitize_token(const char *src, char *dst, size_t dst_size)
+{
+	size_t used = 0;
+
+	if (!dst || dst_size == 0)
+		return;
+
+	while (src && *src && used + 1 < dst_size) {
+		unsigned char c = (unsigned char)*src++;
+
+		if ((c >= 'a' && c <= 'z') ||
+		    (c >= 'A' && c <= 'Z') ||
+		    (c >= '0' && c <= '9') ||
+		    c == '-' || c == '_' || c == ':' || c == '.')
+			dst[used++] = (char)c;
+		else
+			dst[used++] = '_';
+	}
+
+	dst[used] = '\0';
+}
+
+static void read_active_user(char *out, size_t out_size)
+{
+	FILE *fp;
+
+	if (!out || out_size == 0)
+		return;
+
+	snprintf(out, out_size, "default");
+
+	fp = fopen("/run/nuubos/user/active", "r");
+	if (!fp)
+		return;
+
+	if (fgets(out, (int)out_size, fp) == NULL)
+		snprintf(out, out_size, "default");
+
+	fclose(fp);
+
+	out[strcspn(out, "\r\n")] = '\0';
+	if (out[0] == '\0')
+		snprintf(out, out_size, "default");
+}
+
+static void controller_mapping_path(const char *controller_id,
+				    char *out, size_t out_size)
+{
+	char user[128];
+	char encoded[321];
+	size_t i;
+	size_t used = 0;
+
+	read_active_user(user, sizeof(user));
+
+	for (i = 0; controller_id && controller_id[i] != '\0' &&
+	     used + 2 < sizeof(encoded); i++) {
+		unsigned char c = (unsigned char)controller_id[i];
+		static const char hex[] = "0123456789abcdef";
+
+		encoded[used++] = hex[c >> 4];
+		encoded[used++] = hex[c & 0x0f];
+	}
+	encoded[used] = '\0';
+
+	snprintf(out, out_size,
+		 "/state/users/%s/controllers/%s.conf",
+		 user, encoded[0] ? encoded : "default");
+}
+
+static void compute_controller_id(int fd, const char *name,
+				  char *out, size_t out_size)
+{
+	struct input_id id;
+	char uniq[128];
+	char safe_name[128];
+
+	if (strcmp(name, "adc-joystick") == 0 ||
+	    strcmp(name, "gpio-keys-gamepad") == 0) {
+		snprintf(out, out_size, "builtin");
+		return;
+	}
+
+	memset(&id, 0, sizeof(id));
+	(void)ioctl(fd, EVIOCGID, &id);
+
+	memset(uniq, 0, sizeof(uniq));
+	if (ioctl(fd, EVIOCGUNIQ(sizeof(uniq)), uniq) >= 0 && uniq[0] != '\0') {
+		sanitize_token(uniq, safe_name, sizeof(safe_name));
+		snprintf(out, out_size, "bus%04x:%s", id.bustype, safe_name);
+		return;
+	}
+
+	sanitize_token(name, safe_name, sizeof(safe_name));
+	snprintf(out, out_size, "bus%04x-v%04x-p%04x:%s",
+		 id.bustype, id.vendor, id.product, safe_name);
+}
+
+static void load_controller_mapping(struct input_dev *input)
+{
+	char path[512];
+	FILE *fp;
+	char line[MAX_LINE];
+	size_t i;
+
+	for (i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++)
+		input->mapped_codes[i] = bindings[i].code;
+	input->left_deadzone_percent = 20;
+	input->right_deadzone_percent = 20;
+
+	controller_mapping_path(input->controller_id, path, sizeof(path));
+	fp = fopen(path, "r");
+	if (!fp)
+		return;
+
+	while (fgets(line, sizeof(line), fp)) {
+		char name[64];
+		int code;
+
+		if (sscanf(line, "LEFT_DEADZONE=%d", &code) == 1) {
+			if (code >= 0 && code <= 50)
+				input->left_deadzone_percent = code;
+			continue;
+		}
+		if (sscanf(line, "RIGHT_DEADZONE=%d", &code) == 1) {
+			if (code >= 0 && code <= 50)
+				input->right_deadzone_percent = code;
+			continue;
+		}
+		if (sscanf(line, "%63[^=]=%d", name, &code) != 2)
+			continue;
+
+		for (i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++) {
+			if (strcmp(name, bindings[i].name) == 0 &&
+			    code >= 0 && code <= KEY_MAX) {
+				input->mapped_codes[i] = code;
+				break;
+			}
+		}
+	}
+
+	fclose(fp);
+}
+
+static void reload_controller_mappings(void)
+{
+	size_t i;
+
+	for (i = 0; i < input_count; i++) {
+		load_controller_mapping(&inputs[i]);
+		(void)configure_nav_axis(&inputs[i], &inputs[i].abs_x,
+					 ABS_X, true, false);
+		(void)configure_nav_axis(&inputs[i], &inputs[i].abs_y,
+					 ABS_Y, false, false);
+		(void)configure_nav_axis(&inputs[i], &inputs[i].hat_x,
+					 ABS_HAT0X, true, true);
+		(void)configure_nav_axis(&inputs[i], &inputs[i].hat_y,
+					 ABS_HAT0Y, false, true);
+		configure_tester_axes(&inputs[i]);
+	}
 }
 
 static bool suppress_start_marker_present(void)
@@ -223,12 +415,12 @@ static struct binding *binding_by_name(const char *name)
 	return NULL;
 }
 
-static const char *action_for_code(int code)
+static const char *action_for_code(const struct input_dev *input, int code)
 {
 	size_t i;
 
 	for (i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++) {
-		if (bindings[i].code == code)
+		if (input->mapped_codes[i] == code)
 			return bindings[i].name;
 	}
 
@@ -411,25 +603,27 @@ static void remove_own_pidfile(void)
 	if (!fp)
 		return;
 
-	(void)fscanf(fp, "%ld", &pid);
+	if (fscanf(fp, "%ld", &pid) != 1)
+		pid = -1;
 	fclose(fp);
 
 	if (pid == (long)getpid())
 		unlink(PIDFILE);
 }
 
-static bool input_has_mapped_key(int fd)
+static bool input_has_mapped_key(const struct input_dev *input)
 {
 	unsigned long bits[NBITS(KEY_MAX + 1)];
 	size_t i;
 
 	memset(bits, 0, sizeof(bits));
 
-	if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(bits)), bits) < 0)
+	if (ioctl(input->fd, EVIOCGBIT(EV_KEY, sizeof(bits)), bits) < 0)
 		return false;
 
 	for (i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++) {
-		if (bit_is_set(bits, (unsigned int)bindings[i].code))
+		if (input->mapped_codes[i] >= 0 &&
+		    bit_is_set(bits, (unsigned int)input->mapped_codes[i]))
 			return true;
 	}
 
@@ -505,15 +699,15 @@ static bool configure_nav_axis(struct input_dev *input,
 			flat = 0;
 
 		/*
-		 * 20% activation + 10% release hysteresis matches the H700 ADC
-		 * stick nominal 0..4096 range while remaining generic for
-		 * Bluetooth controllers with different ranges.
+		 * The active user's per-controller left-stick deadzone is used for
+		 * Settings navigation as well. Keep a smaller release threshold for
+		 * hysteresis so the stick does not chatter near the boundary.
 		 */
-		axis->enter_delta = range / 5;
+		axis->enter_delta = (range * input->left_deadzone_percent) / 100;
 		if (axis->enter_delta < flat * 2)
 			axis->enter_delta = flat * 2;
 
-		axis->release_delta = range / 10;
+		axis->release_delta = axis->enter_delta / 2;
 		if (axis->release_delta < flat)
 			axis->release_delta = flat;
 	}
@@ -533,6 +727,83 @@ static bool configure_nav_axis(struct input_dev *input,
 	return true;
 }
 
+static bool tester_axis_unipolar(int code)
+{
+	return code == ABS_Z || code == ABS_RZ ||
+	       code == ABS_GAS || code == ABS_BRAKE;
+}
+
+static void configure_tester_axes(struct input_dev *input)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(tester_axis_codes) / sizeof(tester_axis_codes[0]); i++) {
+		struct input_absinfo info;
+		struct tester_axis *axis = &input->tester_axes[i];
+
+		memset(axis, 0, sizeof(*axis));
+		axis->code = tester_axis_codes[i];
+		axis->unipolar = tester_axis_unipolar(axis->code);
+
+		memset(&info, 0, sizeof(info));
+		if (ioctl(input->fd, EVIOCGABS(axis->code), &info) < 0)
+			continue;
+		if (info.maximum <= info.minimum)
+			continue;
+
+		axis->present = true;
+		axis->minimum = info.minimum;
+		axis->maximum = info.maximum;
+		axis->center = info.minimum + (info.maximum - info.minimum) / 2;
+	}
+}
+
+static int normalize_tester_abs(const struct input_dev *input, int code, int value)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(input->tester_axes) / sizeof(input->tester_axes[0]); i++) {
+		const struct tester_axis *axis = &input->tester_axes[i];
+		long long numerator;
+		long long denominator;
+		long long normalized;
+
+		if (!axis->present || axis->code != code)
+			continue;
+
+		if (axis->unipolar) {
+			numerator = (long long)value - axis->minimum;
+			denominator = (long long)axis->maximum - axis->minimum;
+			if (denominator <= 0)
+				return 0;
+			normalized = numerator * 100LL / denominator;
+			if (normalized < 0)
+				normalized = 0;
+			if (normalized > 100)
+				normalized = 100;
+			return (int)normalized;
+		}
+
+		if (value >= axis->center) {
+			numerator = (long long)value - axis->center;
+			denominator = (long long)axis->maximum - axis->center;
+		} else {
+			numerator = (long long)value - axis->center;
+			denominator = (long long)axis->center - axis->minimum;
+		}
+		if (denominator <= 0)
+			return 0;
+		normalized = numerator * 100LL / denominator;
+		if (normalized < -100)
+			normalized = -100;
+		if (normalized > 100)
+			normalized = 100;
+		return (int)normalized;
+	}
+
+	return value;
+}
+
 static bool input_has_navigation_axis(const struct input_dev *input)
 {
 	return input->abs_x.present ||
@@ -543,7 +814,7 @@ static bool input_has_navigation_axis(const struct input_dev *input)
 
 static bool input_has_menu_capability(const struct input_dev *input)
 {
-	return input_has_mapped_key(input->fd) ||
+	return input_has_mapped_key(input) ||
 	       input_has_navigation_axis(input);
 }
 
@@ -674,7 +945,7 @@ static void rescan_inputs(void)
 	}
 
 	while ((entry = readdir(dir)) != NULL && input_count < MAX_INPUTS) {
-		char path[64];
+		char path[512];
 		char name[128];
 		int fd;
 
@@ -704,6 +975,10 @@ static void rescan_inputs(void)
 			 sizeof(inputs[input_count].path), "%s", path);
 		snprintf(inputs[input_count].name,
 			 sizeof(inputs[input_count].name), "%s", name);
+		compute_controller_id(fd, name,
+				      inputs[input_count].controller_id,
+				      sizeof(inputs[input_count].controller_id));
+		load_controller_mapping(&inputs[input_count]);
 
 		(void)configure_nav_axis(&inputs[input_count],
 					 &inputs[input_count].abs_x,
@@ -717,11 +992,13 @@ static void rescan_inputs(void)
 		(void)configure_nav_axis(&inputs[input_count],
 					 &inputs[input_count].hat_y,
 					 ABS_HAT0Y, false, true);
+		configure_tester_axes(&inputs[input_count]);
 
 		log_message(
-			"input-open index=%zu path=%s name=%s key-capability=%d abs-x=%d abs-y=%d hat-x=%d hat-y=%d",
+			 "input-open index=%zu path=%s name=%s id=%s key-capability=%d abs-x=%d abs-y=%d hat-x=%d hat-y=%d",
 			input_count, path, name,
-			input_has_mapped_key(fd) ? 1 : 0,
+			inputs[input_count].controller_id,
+			input_has_mapped_key(&inputs[input_count]) ? 1 : 0,
 			inputs[input_count].abs_x.present ? 1 : 0,
 			inputs[input_count].abs_y.present ? 1 : 0,
 			inputs[input_count].hat_x.present ? 1 : 0,
@@ -774,6 +1051,9 @@ static bool action_is_navigation(const char *action)
 static bool client_wants_action(const struct client *client,
 				const char *action)
 {
+	if (client->role == CLIENT_ROLE_CONTROLLERS)
+		return false;
+
 	if (action_is_navigation(action)) {
 		if (menu_open)
 			return client->role == CLIENT_ROLE_QUICK_MENU ||
@@ -845,6 +1125,42 @@ static void broadcast_action_state(const char *action, const char *state)
 	reconcile_capture_owners();
 }
 
+
+static void broadcast_raw_event(const struct input_dev *input,
+				const struct input_event *event)
+{
+	char message[320];
+	size_t i;
+	int value = event->value;
+
+	/* Input Tester consumes device-normalized EV_ABS values. The input
+	 * service owns EVIOCGABS metadata so the UI never guesses range/center. */
+	if (event->type == EV_ABS)
+		value = normalize_tester_abs(input, event->code, event->value);
+
+	snprintf(message, sizeof(message),
+		 "RAW %s %u %u %d\n",
+		 input->controller_id,
+		 (unsigned int)event->type,
+		 (unsigned int)event->code,
+		 value);
+
+	for (i = 0; i < MAX_CLIENTS; i++) {
+		if (clients[i].fd < 0 ||
+		    !clients[i].subscribed ||
+		    clients[i].role != CLIENT_ROLE_CONTROLLERS)
+			continue;
+
+		if (write_all(clients[i].fd, message) != 0) {
+			close(clients[i].fd);
+			clients[i].fd = -1;
+			clients[i].subscribed = false;
+			clients[i].role = CLIENT_ROLE_GENERIC;
+			clients[i].used = 0;
+		}
+	}
+}
+
 static long long monotonic_ms(void)
 {
 	struct timespec ts;
@@ -855,9 +1171,11 @@ static long long monotonic_ms(void)
 	return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
 }
 
-static bool repeatable_horizontal_action(const char *action)
+static bool repeatable_navigation_action(const char *action)
 {
-	return strcmp(action, "menu_left") == 0 ||
+	return strcmp(action, "menu_up") == 0 ||
+	       strcmp(action, "menu_down") == 0 ||
+	       strcmp(action, "menu_left") == 0 ||
 	       strcmp(action, "menu_right") == 0;
 }
 
@@ -865,12 +1183,12 @@ static void emit_action_state(const char *action, const char *state)
 {
 	broadcast_action_state(action, state);
 
-	if (!repeatable_horizontal_action(action))
+	if (!repeatable_navigation_action(action))
 		return;
 
 	if (strcmp(state, "pressed") == 0) {
 		snprintf(repeat_action, sizeof(repeat_action), "%s", action);
-		repeat_next_ms = monotonic_ms() + HORIZONTAL_REPEAT_DELAY_MS;
+		repeat_next_ms = monotonic_ms() + NAV_REPEAT_DELAY_MS;
 	} else if (strcmp(state, "released") == 0 &&
 		   strcmp(repeat_action, action) == 0) {
 		repeat_action[0] = '\0';
@@ -878,11 +1196,11 @@ static void emit_action_state(const char *action, const char *state)
 	}
 }
 
-static int horizontal_repeat_timeout_ms(void)
+static int navigation_repeat_timeout_ms(void)
 {
 	long long remaining;
 
-	if (!capture_active() || repeat_action[0] == '\0')
+	if (repeat_action[0] == '\0')
 		return -1;
 
 	remaining = repeat_next_ms - monotonic_ms();
@@ -894,11 +1212,11 @@ static int horizontal_repeat_timeout_ms(void)
 	return (int)remaining;
 }
 
-static void horizontal_repeat_tick(void)
+static void navigation_repeat_tick(void)
 {
 	long long now;
 
-	if (!capture_active() || repeat_action[0] == '\0')
+	if (repeat_action[0] == '\0')
 		return;
 
 	now = monotonic_ms();
@@ -906,12 +1224,12 @@ static void horizontal_repeat_tick(void)
 		return;
 
 	mapped_press_count++;
-	log_message("horizontal-repeat action=%s", repeat_action);
+	log_message("navigation-repeat action=%s", repeat_action);
 	snprintf(last_action, sizeof(last_action), "%s", repeat_action);
 	snprintf(last_device, sizeof(last_device), "%s", "repeat-timer");
 	last_value = 2;
 	broadcast_action_state(repeat_action, "pressed");
-	repeat_next_ms = now + HORIZONTAL_REPEAT_INTERVAL_MS;
+	repeat_next_ms = now + NAV_REPEAT_INTERVAL_MS;
 }
 
 static void status_reply(int fd)
@@ -990,6 +1308,13 @@ static void handle_command(struct client *client, const char *line)
 		return;
 	}
 
+	if (strcmp(line, "SUBSCRIBE CONTROLLERS") == 0) {
+		client->subscribed = true;
+		client->role = CLIENT_ROLE_CONTROLLERS;
+		(void)write_all(client->fd, "OK protocol=1 role=controllers\n");
+		return;
+	}
+
 	if (strcmp(line, "STATUS") == 0) {
 		status_reply(client->fd);
 		return;
@@ -1017,6 +1342,22 @@ static void handle_command(struct client *client, const char *line)
 		set_settings_grab(false);
 		(void)write_all(client->fd, "OK\n");
 		return;
+	}
+
+	{
+		char controller_id[160];
+		int enabled;
+
+		if (sscanf(line, "RAW CAPTURE %159s %d", controller_id, &enabled) == 2) {
+			if (enabled)
+				snprintf(raw_capture_controller,
+					 sizeof(raw_capture_controller), "%s",
+					 controller_id);
+			else
+				raw_capture_controller[0] = '\0';
+			(void)write_all(client->fd, "OK\n");
+			return;
+		}
 	}
 
 	if (sscanf(line, "BIND GET %63s", action) == 1) {
@@ -1299,6 +1640,19 @@ static void process_input(struct input_dev *input)
 	for (i = 0; i < count; i++) {
 		const char *action;
 
+		if (events[i].type == EV_KEY || events[i].type == EV_ABS)
+			broadcast_raw_event(input, &events[i]);
+
+		/*
+		 * Remapping owns the next raw key from one controller. Keep that
+		 * physical press from also navigating Settings while the Product
+		 * Service is waiting to bind it.
+		 */
+		if ((events[i].type == EV_KEY || events[i].type == EV_ABS) &&
+		    raw_capture_controller[0] != '\0' &&
+		    strcmp(raw_capture_controller, input->controller_id) == 0)
+			continue;
+
 		if (events[i].type == EV_ABS) {
 			if (process_navigation_abs(input, &events[i]))
 				continue;
@@ -1336,7 +1690,7 @@ static void process_input(struct input_dev *input)
 			continue;
 		}
 
-		action = action_for_code(events[i].code);
+		action = action_for_code(input, events[i].code);
 
 		snprintf(last_action, sizeof(last_action),
 			 "%s", action ? action : "none");
@@ -1491,6 +1845,7 @@ int main(int argc, char **argv)
 		if (reload_requested) {
 			reload_requested = 0;
 			load_bindings();
+			reload_controller_mappings();
 
 			if (menu_open) {
 				set_menu_grab(false);
@@ -1529,14 +1884,14 @@ int main(int argc, char **argv)
 			count++;
 		}
 
-		rc = poll(pfds, count, horizontal_repeat_timeout_ms());
+		rc = poll(pfds, count, navigation_repeat_timeout_ms());
 		if (rc < 0) {
 			if (errno == EINTR)
 				continue;
 			break;
 		}
 
-		horizontal_repeat_tick();
+		navigation_repeat_tick();
 
 		for (i = 0; i < (size_t)count; i++) {
 			if (pfds[i].revents == 0)
