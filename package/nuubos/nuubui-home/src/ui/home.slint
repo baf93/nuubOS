@@ -229,6 +229,72 @@ component SettingsTopic inherits Rectangle {
     }
 }
 
+component ConnectivityStatusCard inherits Rectangle {
+    in property <string> title: "";
+    in property <string> status: "Unavailable";
+    in property <string> detail: "";
+    in property <bool> active: false;
+
+    height: 68px;
+    border-radius: 7px;
+    background: #15171b;
+    border-width: 1px;
+    border-color: root.active ? #315f9f : #24272d;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 3px;
+        height: parent.height;
+        border-radius: 2px;
+        background: root.active ? #3a86ff : #343840;
+    }
+
+    Text {
+        x: 14px;
+        y: 10px;
+        width: parent.width - 118px;
+        text: root.title;
+        color: #f0f2f5;
+        font-size: 18px;
+        font-weight: 700;
+    }
+
+    Text {
+        x: 14px;
+        y: 36px;
+        width: parent.width - 28px;
+        text: root.detail;
+        color: #858b94;
+        font-size: 13px;
+        font-weight: 500;
+    }
+
+    Rectangle {
+        x: parent.width - 110px;
+        y: 11px;
+        width: 98px;
+        height: 24px;
+        border-radius: 12px;
+        background: root.active ? #1b2940 : #202329;
+        border-width: 1px;
+        border-color: root.active ? #3a86ff : #343840;
+
+        Text {
+            x: 4px;
+            y: 0;
+            width: parent.width - 8px;
+            height: parent.height;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: root.status;
+            color: root.active ? #cfe2ff : #a8adb5;
+            font-size: 12px;
+            font-weight: 700;
+        }
+    }
+}
+
 component StartActionHint inherits Rectangle {
     width: 50px;
     height: 26px;
@@ -353,6 +419,13 @@ export component HomeWindow inherits Window {
     in-out property <bool> settings-open: false;
     in-out property <int> settings-selected-index: 0;
     in-out property <int> back-face-position: -1;
+
+    in-out property <string> connectivity-wifi-status: "Unavailable";
+    in-out property <string> connectivity-wifi-detail: "Waiting for Wi-Fi service";
+    in-out property <bool> connectivity-wifi-active: false;
+    in-out property <string> connectivity-bluetooth-status: "Unavailable";
+    in-out property <string> connectivity-bluetooth-detail: "Waiting for Bluetooth service";
+    in-out property <bool> connectivity-bluetooth-active: false;
 
     property <length> controllers-start-x:
         root.controller-count >= 4 ? root.width - 253px
@@ -683,7 +756,7 @@ export component HomeWindow inherits Window {
                 Text {
                     x: 22px;
                     y: 88px;
-                    text: "Sections";
+                    text: root.settings-selected-index == 1 ? "Live state" : "Sections";
                     color: #8e949d;
                     font-size: 15px;
                     font-weight: 700;
@@ -694,11 +767,11 @@ export component HomeWindow inherits Window {
                     y: 116px;
                     width: parent.width - 44px;
                     label: root.settings-selected-index == 0 ? "User & Profile"
-                        : root.settings-selected-index == 1 ? "Wi-Fi"
                         : root.settings-selected-index == 2 ? "Controllers"
                         : root.settings-selected-index == 3 ? "Display & HDMI"
                         : root.settings-selected-index == 4 ? "Performance Profiles"
                         : "Battery & Power";
+                    visible-topic: root.settings-selected-index != 1;
                 }
 
                 SettingsTopic {
@@ -706,11 +779,33 @@ export component HomeWindow inherits Window {
                     y: 166px;
                     width: parent.width - 44px;
                     label: root.settings-selected-index == 0 ? "Language & Region"
-                        : root.settings-selected-index == 1 ? "Bluetooth"
                         : root.settings-selected-index == 2 ? "Controller Mapping"
                         : root.settings-selected-index == 3 ? "Brightness"
                         : root.settings-selected-index == 4 ? "Global Gaming Options"
                         : "Storage";
+                    visible-topic: root.settings-selected-index != 1;
+                }
+
+                ConnectivityStatusCard {
+                    x: 22px;
+                    y: 116px;
+                    width: parent.width - 44px;
+                    title: "Wi-Fi";
+                    status: root.connectivity-wifi-status;
+                    detail: root.connectivity-wifi-detail;
+                    active: root.connectivity-wifi-active;
+                    visible: root.settings-selected-index == 1;
+                }
+
+                ConnectivityStatusCard {
+                    x: 22px;
+                    y: 194px;
+                    width: parent.width - 44px;
+                    title: "Bluetooth";
+                    status: root.connectivity-bluetooth-status;
+                    detail: root.connectivity-bluetooth-detail;
+                    active: root.connectivity-bluetooth-active;
+                    visible: root.settings-selected-index == 1;
                 }
 
                 SettingsTopic {

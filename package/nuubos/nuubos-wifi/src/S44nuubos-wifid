@@ -1,0 +1,98 @@
+#!/bin/sh
+
+DAEMON=/usr/sbin/nuubos-wifid
+PIDFILE=/run/nuubos/wifid.pid
+WPA_ACTION=/usr/libexec/nuubos-wifi-event
+WPA_PIDFILE=/run/nuubos/wifid-wpa.pid
+
+pid_command()
+{
+    PID="$1"
+    [ -n "$PID" ] || return 1
+    [ -r "/proc/$PID/cmdline" ] || return 1
+    tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p'
+}
+
+wifid_running()
+{
+    [ -r "$PIDFILE" ] || return 1
+    PID="$(cat "$PIDFILE" 2>/dev/null)"
+    [ "$(pid_command "$PID")" = "$DAEMON" ]
+}
+
+stop_wpa_listener()
+{
+    if [ ! -r "$WPA_PIDFILE" ]; then
+        return 0
+    fi
+
+    PID="$(cat "$WPA_PIDFILE" 2>/dev/null)"
+    CMD="$(pid_command "$PID")"
+    case "$CMD" in
+        */wpa_cli|wpa_cli)
+            kill -TERM "$PID" 2>/dev/null || true
+            ;;
+    esac
+    rm -f "$WPA_PIDFILE"
+}
+
+start_wpa_listener()
+{
+    stop_wpa_listener
+
+    command -v wpa_cli >/dev/null 2>&1 || return 0
+    [ -d /sys/class/net/wlan0 ] || return 0
+
+    wpa_cli -B -i wlan0 -a "$WPA_ACTION" -P "$WPA_PIDFILE" \
+        >/dev/null 2>&1 || true
+}
+
+start_service()
+{
+    mkdir -p /run/nuubos
+
+    if ! wifid_running; then
+        rm -f "$PIDFILE"
+        start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "$DAEMON"
+        RC=$?
+        if [ "$RC" -ne 0 ]; then
+            echo "nuubOS Wi-Fi: failed to start wifid" >&2
+            return "$RC"
+        fi
+    fi
+
+    start_wpa_listener
+    return 0
+}
+
+stop_service()
+{
+    stop_wpa_listener
+
+    if wifid_running; then
+        PID="$(cat "$PIDFILE" 2>/dev/null)"
+        kill -TERM "$PID" 2>/dev/null || true
+    fi
+
+    rm -f "$PIDFILE"
+    return 0
+}
+
+case "${1:-}" in
+    start)
+        start_service
+        ;;
+    stop)
+        stop_service
+        ;;
+    restart)
+        stop_service
+        start_service
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

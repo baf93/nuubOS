@@ -46,6 +46,297 @@ impl Default for TopbarState {
     }
 }
 
+#[derive(Clone)]
+struct WifiProductState {
+    enabled: bool,
+    state: String,
+    ssid: String,
+    ipv4: String,
+    signal_dbm: i32,
+}
+
+impl Default for WifiProductState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            state: "unavailable".to_owned(),
+            ssid: String::new(),
+            ipv4: String::new(),
+            signal_dbm: 0,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct BluetoothProductState {
+    present: bool,
+    powered: bool,
+    address: String,
+    connected_count: u32,
+    paired_count: u32,
+}
+
+impl Default for BluetoothProductState {
+    fn default() -> Self {
+        Self {
+            present: false,
+            powered: false,
+            address: String::new(),
+            connected_count: 0,
+            paired_count: 0,
+        }
+    }
+}
+
+fn apply_wifi_product_state(ui: &HomeWindow, state: WifiProductState) {
+    let status = match state.state.as_str() {
+        "connected" => "Connected",
+        "connecting" => "Connecting",
+        "off" => "Off",
+        "disconnected" => "Disconnected",
+        _ => "Unavailable",
+    };
+
+    let detail = if state.state == "connected" {
+        let mut parts = Vec::new();
+        if !state.ssid.is_empty() {
+            parts.push(state.ssid.clone());
+        }
+        if !state.ipv4.is_empty() {
+            parts.push(state.ipv4.clone());
+        }
+        if state.signal_dbm != 0 {
+            parts.push(format!("{} dBm", state.signal_dbm));
+        }
+        if parts.is_empty() {
+            "Connected".to_owned()
+        } else {
+            parts.join("  •  ")
+        }
+    } else if state.state == "connecting" {
+        if state.ssid.is_empty() {
+            "Association in progress".to_owned()
+        } else {
+            format!("Connecting to {}", state.ssid)
+        }
+    } else if state.state == "off" || !state.enabled {
+        "Wireless radio is disabled".to_owned()
+    } else if state.state == "disconnected" {
+        "No network connected".to_owned()
+    } else {
+        "Wi-Fi product service unavailable".to_owned()
+    };
+
+    ui.set_connectivity_wifi_status(status.into());
+    ui.set_connectivity_wifi_detail(detail.into());
+    ui.set_connectivity_wifi_active(state.state == "connected");
+}
+
+fn apply_bluetooth_product_state(ui: &HomeWindow, state: BluetoothProductState) {
+    let status = if !state.present {
+        "Unavailable"
+    } else if state.powered {
+        "On"
+    } else {
+        "Off"
+    };
+
+    let detail = if !state.present {
+        "Bluetooth adapter not available".to_owned()
+    } else if !state.powered {
+        "Bluetooth radio is disabled".to_owned()
+    } else if state.connected_count > 0 {
+        format!(
+            "{} connected  •  {} paired",
+            state.connected_count, state.paired_count
+        )
+    } else if state.paired_count > 0 {
+        format!("No device connected  •  {} paired", state.paired_count)
+    } else if state.address.is_empty() {
+        "Ready for devices".to_owned()
+    } else {
+        format!("Ready  •  {}", state.address)
+    };
+
+    ui.set_connectivity_bluetooth_status(status.into());
+    ui.set_connectivity_bluetooth_detail(detail.into());
+    ui.set_connectivity_bluetooth_active(state.present && state.powered);
+}
+
+fn start_wifi_product_listener(ui: &HomeWindow) {
+    let weak = ui.as_weak();
+
+    thread::spawn(move || loop {
+        let connection = match zbus::blocking::Connection::system() {
+            Ok(connection) => connection,
+            Err(error) => {
+                eprintln!("home: Wi-Fi system bus connection failed={error}");
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+        };
+
+        let proxy = match zbus::blocking::Proxy::new(
+            &connection,
+            "org.nuubOS.Wifi",
+            "/org/nuubOS/Wifi",
+            "org.nuubOS.Wifi1",
+        ) {
+            Ok(proxy) => proxy,
+            Err(error) => {
+                eprintln!("home: Wi-Fi product proxy failed={error}");
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+        };
+
+        let initial_snapshot: zbus::Result<(bool, String, String, String, i32)> =
+            proxy.call("GetSnapshot", &());
+
+        match initial_snapshot {
+            Ok((enabled, state, ssid, ipv4, signal_dbm)) => {
+                let snapshot = WifiProductState {
+                    enabled,
+                    state,
+                    ssid,
+                    ipv4,
+                    signal_dbm,
+                };
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak.upgrade() {
+                        apply_wifi_product_state(&ui, snapshot);
+                    }
+                });
+            }
+            Err(error) => {
+                eprintln!("home: Wi-Fi snapshot failed={error}");
+            }
+        }
+
+        let mut signals = match proxy.receive_signal("StateChanged") {
+            Ok(signals) => signals,
+            Err(error) => {
+                eprintln!("home: Wi-Fi signal subscription failed={error}");
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+        };
+
+        for message in &mut signals {
+            let body = message.body();
+            let snapshot = body.deserialize::<(bool, String, String, String, i32)>();
+            let Ok((enabled, state, ssid, ipv4, signal_dbm)) = snapshot else {
+                eprintln!("home: invalid Wi-Fi StateChanged payload");
+                continue;
+            };
+
+            let snapshot = WifiProductState {
+                enabled,
+                state,
+                ssid,
+                ipv4,
+                signal_dbm,
+            };
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    apply_wifi_product_state(&ui, snapshot);
+                }
+            });
+        }
+
+        thread::sleep(Duration::from_millis(250));
+    });
+}
+
+fn start_bluetooth_product_listener(ui: &HomeWindow) {
+    let weak = ui.as_weak();
+
+    thread::spawn(move || loop {
+        let connection = match zbus::blocking::Connection::system() {
+            Ok(connection) => connection,
+            Err(error) => {
+                eprintln!("home: Bluetooth system bus connection failed={error}");
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+        };
+
+        let proxy = match zbus::blocking::Proxy::new(
+            &connection,
+            "org.nuubOS.Bluetooth",
+            "/org/nuubOS/Bluetooth",
+            "org.nuubOS.Bluetooth1",
+        ) {
+            Ok(proxy) => proxy,
+            Err(error) => {
+                eprintln!("home: Bluetooth product proxy failed={error}");
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+        };
+
+        let initial_snapshot: zbus::Result<(bool, bool, String, u32, u32)> =
+            proxy.call("GetSnapshot", &());
+
+        match initial_snapshot {
+            Ok((present, powered, address, connected_count, paired_count)) => {
+                let snapshot = BluetoothProductState {
+                    present,
+                    powered,
+                    address,
+                    connected_count,
+                    paired_count,
+                };
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak.upgrade() {
+                        apply_bluetooth_product_state(&ui, snapshot);
+                    }
+                });
+            }
+            Err(error) => {
+                eprintln!("home: Bluetooth snapshot failed={error}");
+            }
+        }
+
+        let mut signals = match proxy.receive_signal("StateChanged") {
+            Ok(signals) => signals,
+            Err(error) => {
+                eprintln!("home: Bluetooth signal subscription failed={error}");
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+        };
+
+        for message in &mut signals {
+            let body = message.body();
+            let snapshot = body.deserialize::<(bool, bool, String, u32, u32)>();
+            let Ok((present, powered, address, connected_count, paired_count)) = snapshot else {
+                eprintln!("home: invalid Bluetooth StateChanged payload");
+                continue;
+            };
+
+            let snapshot = BluetoothProductState {
+                present,
+                powered,
+                address,
+                connected_count,
+                paired_count,
+            };
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    apply_bluetooth_product_state(&ui, snapshot);
+                }
+            });
+        }
+
+        thread::sleep(Duration::from_millis(250));
+    });
+}
+
 fn load_topbar_state() -> TopbarState {
     let mut state = TopbarState::default();
     let Ok(contents) = fs::read_to_string(STATUS_STATE) else {
@@ -402,6 +693,8 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.window().set_fullscreen(true);
 
     start_status_listener(&ui);
+    start_wifi_product_listener(&ui);
+    start_bluetooth_product_listener(&ui);
     start_lifecycle_listener(&ui);
     refresh_hint_mapping(&ui);
 

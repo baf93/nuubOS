@@ -1,0 +1,14 @@
+#!/bin/sh
+
+PIDFILE=/run/nuubos/wifid.pid
+
+[ -r "$PIDFILE" ] || exit 0
+PID="$(cat "$PIDFILE" 2>/dev/null)"
+[ -n "$PID" ] || exit 0
+[ -r "/proc/$PID/cmdline" ] || exit 0
+
+CMD="$(tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p')"
+[ "$CMD" = "/usr/sbin/nuubos-wifid" ] || exit 0
+
+kill -USR1 "$PID" 2>/dev/null || true
+exit 0

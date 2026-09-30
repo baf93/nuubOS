@@ -1,0 +1,8 @@
+config BR2_PACKAGE_NUUBOS_WIFI
+	bool "nuubOS Wi-Fi product service"
+	select BR2_PACKAGE_DBUS
+	select BR2_PACKAGE_WPA_SUPPLICANT
+	select BR2_PACKAGE_WPA_SUPPLICANT_CLI
+	help
+	  Event-driven product service exposing normalized Wi-Fi state over
+	  org.nuubOS.Wifi without leaking wpa_supplicant details into nuubUI.

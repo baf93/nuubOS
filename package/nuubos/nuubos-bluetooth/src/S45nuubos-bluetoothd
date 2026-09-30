@@ -1,0 +1,68 @@
+#!/bin/sh
+
+DAEMON=/usr/sbin/nuubos-bluetoothd
+PIDFILE=/run/nuubos/bluetoothd.pid
+
+pid_command()
+{
+    PID="$1"
+    [ -n "$PID" ] || return 1
+    [ -r "/proc/$PID/cmdline" ] || return 1
+    tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p'
+}
+
+bluetoothd_running()
+{
+    [ -r "$PIDFILE" ] || return 1
+    PID="$(cat "$PIDFILE" 2>/dev/null)"
+    [ "$(pid_command "$PID")" = "$DAEMON" ]
+}
+
+start_service()
+{
+    mkdir -p /run/nuubos
+
+    if bluetoothd_running; then
+        return 0
+    fi
+
+    rm -f "$PIDFILE"
+    start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "$DAEMON"
+    RC=$?
+    if [ "$RC" -ne 0 ]; then
+        echo "nuubOS Bluetooth: failed to start bluetoothd" >&2
+        return "$RC"
+    fi
+
+    return 0
+}
+
+stop_service()
+{
+    if bluetoothd_running; then
+        PID="$(cat "$PIDFILE" 2>/dev/null)"
+        kill -TERM "$PID" 2>/dev/null || true
+    fi
+
+    rm -f "$PIDFILE"
+    return 0
+}
+
+case "${1:-}" in
+    start)
+        start_service
+        ;;
+    stop)
+        stop_service
+        ;;
+    restart)
+        stop_service
+        start_service
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

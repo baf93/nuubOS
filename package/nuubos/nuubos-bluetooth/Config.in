@@ -1,0 +1,8 @@
+config BR2_PACKAGE_NUUBOS_BLUETOOTH
+	bool "nuubOS Bluetooth product service"
+	select BR2_PACKAGE_DBUS
+	select BR2_PACKAGE_BLUEZ5_UTILS
+	help
+	  Event-driven product service exposing normalized Bluetooth adapter
+	  and device state over org.nuubOS.Bluetooth without leaking BlueZ
+	  implementation details into nuubUI.
