@@ -1,0 +1,13 @@
+[package]
+name = "ui-shot"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = ["std", "renderer-software", "compat-1-18"] }
+png = "0.18"
+i-slint-core = { version = "=1.18.1", features = ["image-decoders", "svg"] }
+
+[build-dependencies]
+slint-build = "=1.18.1"
