@@ -18,9 +18,11 @@ NUUBOS_AUDIO_DBUS_CFLAGS = \
 define NUUBOS_AUDIO_BUILD_CMDS
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		$(NUUBOS_AUDIO_DBUS_CFLAGS) \
+		-isystem $(STAGING_DIR)/usr/include/pipewire-0.3 \
+		-isystem $(STAGING_DIR)/usr/include/spa-0.2 -D_REENTRANT \
 		-std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror \
 		$(@D)/audiod.c \
-		-ldbus-1 -lasound \
+		-ldbus-1 -lasound -lpipewire-0.3 \
 		-o $(@D)/nuubos-audiod
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		-std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror \

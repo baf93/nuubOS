@@ -1312,6 +1312,8 @@ struct DisplaySnapshot {
 enum AppEvent {
     Input(LogicalEvent),
     StatusChanged,
+    /* The output device changed its own volume (Bluetooth headset buttons). */
+    DeviceVolume,
     Notify(Notification, Instant),
 }
 
@@ -1868,6 +1870,33 @@ fn apply_battery_snapshot(ui: &QuickMenuWindow, snapshot: BatterySnapshot) {
             "--%".into()
         },
     );
+}
+
+/* Product Audio pushes only volume changes made by the output device itself;
+ * our own changes come back in the command reply. */
+fn start_audio_subscription(tx: Sender<AppEvent>) {
+    thread::spawn(move || loop {
+        if let Ok(mut stream) = UnixStream::connect(AUDIO_SOCKET) {
+            if stream.write_all(b"SUBSCRIBE\n").is_ok() {
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) if line.starts_with("volume origin=device ") => {
+                            if tx.send(AppEvent::DeviceVolume).is_err() {
+                                return;
+                            }
+                        }
+                        Ok(_) => {}
+                    }
+                }
+            }
+        }
+        /* Only reached while audiod is absent or restarting. */
+        thread::sleep(Duration::from_secs(1));
+    });
 }
 
 fn start_status_subscription(tx: Sender<AppEvent>) {
@@ -2861,6 +2890,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     start_input_subscription(tx.clone());
     start_status_subscription(tx.clone());
     start_notify_subscription(tx.clone());
+    start_audio_subscription(tx.clone());
     refresh_i18n(&ui);
 
     let mut mapped = false;
@@ -2985,6 +3015,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if was_mapped && !mapped {
                             dirty = true;
                         }
+                    }
+                }
+                AppEvent::DeviceVolume => {
+                    /* Same feedback as the physical volume keys. */
+                    if !ui.get_lifecycle_active() {
+                        apply_audio_snapshot(&ui, &read_audio_snapshot());
+                        ui.set_volume_osd_visible(true);
+                        osd_deadline = Some(
+                            Instant::now() + Duration::from_millis(VOLUME_OSD_TIMEOUT_MS),
+                        );
+                        dirty = true;
                     }
                 }
                 AppEvent::StatusChanged => {

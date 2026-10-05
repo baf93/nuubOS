@@ -24,8 +24,11 @@
 #include <unistd.h>
 
 #include <nuubos/notify.h>
+#include <pipewire/pipewire.h>
 
 #define SOCKET_PATH "/run/nuubos/audiod.sock"
+/* Socket clients that sent SUBSCRIBE (Quick Menu volume OSD). */
+#define MAX_SUBSCRIBERS 4
 #define CONFIG_PATH "/state/config/nuubos.conf"
 #define CONFIG_TMP  "/state/config/.nuubos.conf.audio.tmp"
 #define INPUT_DIR   "/dev/input"
@@ -64,6 +67,7 @@
 #define BLUETOOTH_SERVICE "org.nuubOS.Bluetooth"
 #define BLUETOOTH_PATH "/org/nuubOS/Bluetooth"
 #define BLUETOOTH_INTERFACE "org.nuubOS.Bluetooth1"
+#define BLUEZ_TRANSPORT_INTERFACE "org.bluez.MediaTransport1"
 
 #define NUUBOS_BITS_PER_LONG (sizeof(unsigned long) * 8U)
 #define NUUBOS_NBITS(n) \
@@ -72,6 +76,9 @@
 struct audio_state {
 	char mode[16];
 	char selected[16];
+	/* Route whose default sink + master volume were last applied to
+	 * PipeWire; empty until an apply succeeds. */
+	char applied_route[16];
 
 	int volume_speaker;
 	int volume_headphones;
@@ -111,6 +118,9 @@ struct audio_state {
 	struct timespec volume_config_due;
 	bool pipewire_volume_dirty;
 	struct timespec pipewire_volume_due;
+
+	int subscribers[MAX_SUBSCRIBERS];
+	size_t subscriber_count;
 };
 
 static void emit_state_changed(DBusConnection *conn,
@@ -508,8 +518,10 @@ static int apply_pipewire_default(const char *selected)
 		_exit(127);
 	}
 
-	/* Never let a policy helper stall audiod (and therefore the overlay). */
-	for (int i = 0; i < 50; i++) {
+	/* Never let a policy helper stall audiod (and therefore the overlay).
+	 * It takes ~300 ms idle on H700 and longer while WirePlumber is busy
+	 * creating a just-connected Bluetooth sink. */
+	for (int i = 0; i < 150; i++) {
 		pid_t rc = waitpid(pid, &status, WNOHANG);
 
 		if (rc == pid) {
@@ -577,16 +589,32 @@ static void reconcile_selection(struct audio_state *state)
 			  sizeof(state->selected),
 			  selected);
 
-	if (apply_pipewire_default(state->selected) != 0)
+	/* Re-apply only when the route changes or the last apply failed (e.g.
+	 * the Bluetooth sink appears in PipeWire after BlueZ reports the device
+	 * connected). Unrelated Bluetooth events must not force the stored
+	 * master back over a volume the headset changed itself (AVRCP absolute
+	 * volume). */
+	if (strcmp(state->applied_route, state->selected) == 0)
+		return;
+	state->applied_route[0] = '\0';
+
+	if (apply_pipewire_default(state->selected) != 0) {
 		fprintf(stderr,
 			"nuubos-audiod: PipeWire default route sync failed for %s\n",
 			state->selected);
+		return;
+	}
 	if (strcmp(state->selected, "bluetooth") == 0) {
-		if (apply_pipewire_volume("bluetooth", state->volume_bluetooth) < 0)
+		if (apply_pipewire_volume("bluetooth", state->volume_bluetooth) < 0) {
 			fprintf(stderr, "nuubos-audiod: failed to set Bluetooth PipeWire volume\n");
+			return;
+		}
 	} else {
 		apply_selected_analog_volume(state);
 	}
+	(void)copy_string(state->applied_route,
+			  sizeof(state->applied_route),
+			  state->selected);
 }
 
 static void uppercase_copy(char *dst, size_t size, const char *src)
@@ -621,6 +649,8 @@ static void load_config(struct audio_state *state)
 
 	snprintf(state->mode, sizeof(state->mode), DEFAULT_OUTPUT_MODE);
 	snprintf(state->selected, sizeof(state->selected), "unresolved");
+	state->applied_route[0] = '\0';
+	state->subscriber_count = 0;
 
 	state->volume_speaker = DEFAULT_VOLUME_SPEAKER;
 	state->volume_headphones = DEFAULT_VOLUME_HEADPHONES;
@@ -687,8 +717,8 @@ static void load_config(struct audio_state *state)
 			int v = parse_volume(line + 24);
 			if (v >= 0)
 				state->volume_headphones = v;
-		} else if (strncmp(line, "AUDIO_VOLUME_BLUETOOTH=", 24) == 0) {
-			int v = parse_volume(line + 24);
+		} else if (strncmp(line, "AUDIO_VOLUME_BLUETOOTH=", 23) == 0) {
+			int v = parse_volume(line + 23);
 			if (v >= 0)
 				state->volume_bluetooth = v;
 		} else if (strncmp(line, "AUDIO_VOLUME_SYSTEM=", 20) == 0) {
@@ -974,9 +1004,12 @@ static bool product_audio_master_enabled(const struct audio_state *state)
 	return volume < 0 || volume > 0;
 }
 
-static int persist_selected_volume(struct audio_state *state,
-				   DBusConnection *conn,
-				   int volume)
+/* apply_sink is false when the sink already carries the new gain, i.e. the
+ * Bluetooth headset changed its own absolute volume. */
+static int set_selected_volume(struct audio_state *state,
+			       DBusConnection *conn,
+			       int volume,
+			       bool apply_sink)
 {
 	int old_volume;
 
@@ -999,7 +1032,8 @@ static int persist_selected_volume(struct audio_state *state,
 	 * wpctl on every tick caused OSD/input lag and CPU bursts large enough to
 	 * underrun Home Music on H700. The Product state changes immediately; the
 	 * final sink gain is applied once the short input burst settles. */
-	schedule_pipewire_volume_apply(state);
+	if (apply_sink)
+		schedule_pipewire_volume_apply(state);
 
 	/* PipeWire owns analog gain. Ordinary 1% master changes must not
 	 * restart playback processes: doing so caused an audible pop on every
@@ -1017,6 +1051,13 @@ static int persist_selected_volume(struct audio_state *state,
 
 	emit_state_changed(conn, state);
 	return 0;
+}
+
+static int persist_selected_volume(struct audio_state *state,
+				   DBusConnection *conn,
+				   int volume)
+{
+	return set_selected_volume(state, conn, volume, true);
 }
 
 static int persist_output_mode(struct audio_state *state,
@@ -2784,6 +2825,199 @@ static bool dbus_message_is_bluetooth_event(DBusMessage *message)
 	return false;
 }
 
+/* PipeWire registry watch: BlueZ reports a device connected before
+ * WirePlumber creates its sink, so the route apply at connect time can find
+ * no sink. A new Audio/Sink global is the event that makes it applicable. */
+struct sink_watch {
+	struct pw_loop *loop;
+	struct pw_context *context;
+	struct pw_core *core;
+	struct pw_registry *registry;
+	struct spa_hook core_listener;
+	struct spa_hook registry_listener;
+	bool sink_added;
+	bool broken;
+};
+
+static void sink_watch_global(void *data, uint32_t id, uint32_t permissions,
+			      const char *type, uint32_t version,
+			      const struct spa_dict *props)
+{
+	struct sink_watch *watch = data;
+	const char *media_class;
+
+	(void)id; (void)permissions; (void)version;
+	if (props == NULL || strcmp(type, PW_TYPE_INTERFACE_Node) != 0)
+		return;
+	media_class = spa_dict_lookup(props, PW_KEY_MEDIA_CLASS);
+	if (media_class != NULL && strcmp(media_class, "Audio/Sink") == 0)
+		watch->sink_added = true;
+}
+
+static const struct pw_registry_events sink_watch_registry_events = {
+	PW_VERSION_REGISTRY_EVENTS,
+	.global = sink_watch_global,
+};
+
+static void sink_watch_error(void *data, uint32_t id, int seq, int res,
+			     const char *message)
+{
+	struct sink_watch *watch = data;
+
+	(void)seq;
+	if (id == PW_ID_CORE && res == -EPIPE) {
+		fprintf(stderr, "nuubos-audiod: PipeWire connection lost: %s\n",
+			message);
+		watch->broken = true;
+	}
+}
+
+static const struct pw_core_events sink_watch_core_events = {
+	PW_VERSION_CORE_EVENTS,
+	.error = sink_watch_error,
+};
+
+static void sink_watch_close(struct sink_watch *watch)
+{
+	if (watch->registry != NULL) {
+		spa_hook_remove(&watch->registry_listener);
+		pw_proxy_destroy((struct pw_proxy *)watch->registry);
+		watch->registry = NULL;
+	}
+	if (watch->core != NULL) {
+		spa_hook_remove(&watch->core_listener);
+		pw_core_disconnect(watch->core);
+		watch->core = NULL;
+	}
+	if (watch->context != NULL) {
+		pw_context_destroy(watch->context);
+		watch->context = NULL;
+	}
+	if (watch->loop != NULL) {
+		pw_loop_leave(watch->loop);
+		pw_loop_destroy(watch->loop);
+		watch->loop = NULL;
+	}
+}
+
+/* Returns the fd to poll, or -1 when PipeWire is unavailable (route
+ * applies then only happen on audiod's own events, as before). */
+static int sink_watch_open(struct sink_watch *watch)
+{
+	memset(watch, 0, sizeof(*watch));
+	pw_init(NULL, NULL);
+	(void)setenv("PIPEWIRE_RUNTIME_DIR", PIPEWIRE_RUNTIME, 1);
+
+	watch->loop = pw_loop_new(NULL);
+	if (watch->loop == NULL)
+		return -1;
+	pw_loop_enter(watch->loop);
+	watch->context = pw_context_new(watch->loop, NULL, 0);
+	if (watch->context != NULL)
+		watch->core = pw_context_connect(watch->context, NULL, 0);
+	if (watch->core == NULL) {
+		fprintf(stderr, "nuubos-audiod: PipeWire registry watch unavailable\n");
+		sink_watch_close(watch);
+		return -1;
+	}
+	pw_core_add_listener(watch->core, &watch->core_listener,
+			     &sink_watch_core_events, watch);
+	watch->registry = pw_core_get_registry(watch->core,
+					       PW_VERSION_REGISTRY, 0);
+	if (watch->registry == NULL) {
+		sink_watch_close(watch);
+		return -1;
+	}
+	pw_registry_add_listener(watch->registry, &watch->registry_listener,
+				 &sink_watch_registry_events, watch);
+	return pw_loop_get_fd(watch->loop);
+}
+
+static void drop_subscriber(struct audio_state *state, size_t index)
+{
+	close(state->subscribers[index]);
+	state->subscribers[index] =
+		state->subscribers[--state->subscriber_count];
+}
+
+/* Typed event for subscribers. Only volume changes made by the output
+ * device itself are pushed: Product clients that change the volume through
+ * audiod already get the result in the command reply. */
+static void broadcast_device_volume(struct audio_state *state)
+{
+	char line[96];
+	int len = snprintf(line, sizeof(line),
+			   "volume origin=device output=%s volume=%d\n",
+			   state->selected, selected_volume(state));
+	size_t i = 0;
+
+	while (i < state->subscriber_count) {
+		if (send(state->subscribers[i], line, (size_t)len,
+			 MSG_NOSIGNAL) != len)
+			drop_subscriber(state, i);
+		else
+			i++;
+	}
+}
+
+/* AVRCP absolute volume: headset buttons change the transport Volume
+ * (0..127) and PipeWire follows it on the sink. Adopt it as the Bluetooth
+ * master instead of fighting it. Ignored until audiod has applied the
+ * Bluetooth route (the stored master wins on connect) and while one of our
+ * own volume writes is still pending. */
+static bool handle_bluez_transport_volume(DBusConnection *conn,
+					  DBusMessage *message,
+					  struct audio_state *state)
+{
+	DBusMessageIter iter, changed;
+	const char *interface = NULL;
+
+	if (!dbus_message_is_signal(message, DBUS_INTERFACE_PROPERTIES,
+				    "PropertiesChanged"))
+		return false;
+	if (!dbus_message_iter_init(message, &iter) ||
+	    dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING)
+		return false;
+	dbus_message_iter_get_basic(&iter, &interface);
+	if (strcmp(interface, BLUEZ_TRANSPORT_INTERFACE) != 0)
+		return false;
+	if (!dbus_message_iter_next(&iter) ||
+	    dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
+		return true;
+
+	dbus_message_iter_recurse(&iter, &changed);
+	while (dbus_message_iter_get_arg_type(&changed) == DBUS_TYPE_DICT_ENTRY) {
+		DBusMessageIter entry, variant;
+		const char *key = NULL;
+		dbus_uint16_t raw;
+		int volume;
+
+		dbus_message_iter_recurse(&changed, &entry);
+		dbus_message_iter_get_basic(&entry, &key);
+		dbus_message_iter_next(&entry);
+		dbus_message_iter_recurse(&entry, &variant);
+		dbus_message_iter_next(&changed);
+
+		if (strcmp(key, "Volume") != 0 ||
+		    dbus_message_iter_get_arg_type(&variant) != DBUS_TYPE_UINT16)
+			continue;
+		dbus_message_iter_get_basic(&variant, &raw);
+		if (raw > 127)
+			raw = 127;
+		volume = ((int)raw * 100 + 63) / 127;
+
+		if (strcmp(state->selected, "bluetooth") != 0 ||
+		    strcmp(state->applied_route, "bluetooth") != 0 ||
+		    state->pipewire_volume_dirty ||
+		    volume == state->volume_bluetooth)
+			continue;
+
+		if (set_selected_volume(state, conn, volume, false) == 0)
+			broadcast_device_volume(state);
+	}
+	return true;
+}
+
 static void drain_dbus(DBusConnection *conn, struct audio_state *state)
 {
 	DBusMessage *message;
@@ -2791,8 +3025,10 @@ static void drain_dbus(DBusConnection *conn, struct audio_state *state)
 	if (!conn) return;
 	dbus_connection_read_write(conn, 0);
 	while ((message = dbus_connection_pop_message(conn)) != NULL) {
-		if (!handle_audio_method(conn, message, state) &&
-		    dbus_message_is_bluetooth_event(message))
+		if (handle_audio_method(conn, message, state) ||
+		    handle_bluez_transport_volume(conn, message, state))
+			;
+		else if (dbus_message_is_bluetooth_event(message))
 			refresh = true;
 		dbus_message_unref(message);
 	}
@@ -2831,6 +3067,12 @@ static DBusConnection *open_system_bus(struct audio_state *state)
 		"type='signal',sender='org.freedesktop.DBus',"
 		"interface='org.freedesktop.DBus',member='NameOwnerChanged',"
 		"arg0='org.nuubOS.Bluetooth'", &error);
+	if (dbus_error_is_set(&error)) goto fail;
+	dbus_bus_add_match(conn,
+		"type='signal',sender='org.bluez',"
+		"interface='org.freedesktop.DBus.Properties',"
+		"member='PropertiesChanged',"
+		"arg0='" BLUEZ_TRANSPORT_INTERFACE "'", &error);
 	if (dbus_error_is_set(&error)) goto fail;
 	dbus_connection_flush(conn);
 	refresh_bluetooth_state(conn, state);
@@ -2884,6 +3126,8 @@ int main(int argc, char **argv)
 	struct audio_state state;
 	DBusConnection *dbus_conn;
 	int dbus_fd = -1;
+	struct sink_watch sink_watch;
+	int pw_fd;
 	int drm_uevent_fd;
 	int jack_fd;
 	int server;
@@ -2919,6 +3163,7 @@ int main(int argc, char **argv)
 	drm_uevent_fd = open_drm_uevent_socket(&state);
 
 	dbus_conn = open_system_bus(&state);
+	pw_fd = sink_watch_open(&sink_watch);
 	if (dbus_conn != NULL &&
 	    !dbus_connection_get_unix_fd(dbus_conn, &dbus_fd))
 		dbus_fd = -1;
@@ -2947,7 +3192,9 @@ int main(int argc, char **argv)
 	start_system_sound(&state, "boot");
 
 	while (!stop_requested) {
-		struct pollfd fds[5];
+		struct pollfd fds[6 + MAX_SUBSCRIBERS];
+		int pw_index = -1;
+		int subscriber_index;
 		nfds_t nfds = 1;
 		int jack_index = -1;
 		int drm_index = -1;
@@ -2984,6 +3231,22 @@ int main(int argc, char **argv)
 		if (sigchld_fd >= 0) {
 			sigchld_index = (int)nfds;
 			fds[nfds].fd = sigchld_fd;
+			fds[nfds].events = POLLIN;
+			nfds++;
+		}
+
+		if (pw_fd >= 0) {
+			pw_index = (int)nfds;
+			fds[nfds].fd = pw_fd;
+			fds[nfds].events = POLLIN;
+			nfds++;
+		}
+
+		/* Subscribers never send after SUBSCRIBE: watch them only to
+		 * notice a closed peer. */
+		subscriber_index = (int)nfds;
+		for (size_t i = 0; i < state.subscriber_count; i++) {
+			fds[nfds].fd = state.subscribers[i];
 			fds[nfds].events = POLLIN;
 			nfds++;
 		}
@@ -3066,6 +3329,30 @@ int main(int argc, char **argv)
 			}
 		}
 
+		for (size_t i = state.subscriber_count; i-- > 0;) {
+			if (fds[subscriber_index + (int)i].revents != 0)
+				drop_subscriber(&state, i);
+		}
+
+		if (pw_index >= 0 && fds[pw_index].revents != 0) {
+			(void)pw_loop_iterate(sink_watch.loop, 0);
+			if (sink_watch.sink_added) {
+				sink_watch.sink_added = false;
+				if (strcmp(state.applied_route, state.selected) != 0) {
+					reconcile_selection(&state);
+					if (strcmp(state.applied_route,
+						   state.selected) == 0) {
+						reroute_owned_streams(&state);
+						emit_state_changed(dbus_conn, &state);
+					}
+				}
+			}
+			if (sink_watch.broken) {
+				sink_watch_close(&sink_watch);
+				pw_fd = -1;
+			}
+		}
+
 		if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL))
 			break;
 
@@ -3090,6 +3377,19 @@ int main(int argc, char **argv)
 				       (command[n - 1] == '\n' ||
 					command[n - 1] == '\r')) {
 					command[--n] = '\0';
+				}
+
+				if (strcmp(command, "SUBSCRIBE") == 0) {
+					if (state.subscriber_count < MAX_SUBSCRIBERS &&
+					    write_reply(client, "OK\n") == 0 &&
+					    fcntl(client, F_SETFD, FD_CLOEXEC) == 0 &&
+					    fcntl(client, F_SETFL, O_NONBLOCK) == 0) {
+						state.subscribers[state.subscriber_count++] = client;
+						continue;
+					}
+					(void)write_reply(client, "ERR subscribers\n");
+					close(client);
+					continue;
 				}
 
 				handle_command(&state, dbus_conn,
@@ -3120,6 +3420,9 @@ int main(int argc, char **argv)
 	if (dbus_conn != NULL)
 		dbus_connection_unref(dbus_conn);
 
+	while (state.subscriber_count > 0)
+		drop_subscriber(&state, state.subscriber_count - 1);
+	sink_watch_close(&sink_watch);
 	close(server);
 	unlink(SOCKET_PATH);
 
