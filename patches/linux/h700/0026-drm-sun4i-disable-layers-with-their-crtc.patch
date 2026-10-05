@@ -1,0 +1,96 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] drm: sun4i: disable sun8i layers together with their CRTC
+
+sun4i uses drm_atomic_helper_commit_tail_rpm(), which commits planes with
+DRM_PLANE_COMMIT_ACTIVE_ONLY. A plane disabled in the same commit that
+turns its CRTC off is therefore skipped by drm_atomic_helper_commit_planes()
+and its sun8i layer stays enabled on the old framebuffer. That buffer is
+released right after the commit and unmapped from the display IOMMU.
+
+On H700 this happens when the compositor switches from the internal panel
+to HDMI (panel CRTC off) and later back: the TCON restarts the mixer before
+the new planes are programmed, the display engine fetches the stale IOVA
+("sun50i-iommu: Page fault ... master 0, dir rd"), the IOMMU resets the DE
+master and the panel stays black although the new frame is correct.
+
+Give the sun8i UI/VI layers an atomic_disable hook and disable the CRTC's
+planes in sun4i_crtc_atomic_disable(), as drm_atomic_helper_disable_planes_on_crtc()
+does, skipping planes without the hook (sun4i backend layers).
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+diff --git a/drivers/gpu/drm/sun4i/sun4i_crtc.c b/drivers/gpu/drm/sun4i/sun4i_crtc.c
+--- a/drivers/gpu/drm/sun4i/sun4i_crtc.c
++++ b/drivers/gpu/drm/sun4i/sun4i_crtc.c
+@@ -108,8 +108,11 @@
+ static void sun4i_crtc_atomic_disable(struct drm_crtc *crtc,
+ 				      struct drm_atomic_commit *state)
+ {
++	struct drm_crtc_state *old_state = drm_atomic_get_old_crtc_state(state,
++									 crtc);
+ 	struct drm_encoder *encoder = sun4i_crtc_get_encoder(crtc);
+ 	struct sun4i_crtc *scrtc = drm_crtc_to_sun4i_crtc(crtc);
++	struct drm_plane *plane;
+ 
+ 	DRM_DEBUG_DRIVER("Disabling the CRTC\n");
+ 
+@@ -117,6 +120,21 @@
+ 
+ 	sun4i_tcon_set_status(scrtc->tcon, encoder, false);
+ 
++	/*
++	 * drm_atomic_helper_commit_tail_rpm() commits planes for active CRTCs
++	 * only, so planes switched off together with their CRTC never reach
++	 * the hardware. Their layers would stay enabled on a buffer that is
++	 * released (and unmapped from the IOMMU) right after this commit, and
++	 * the next CRTC enable would make the display engine fetch from it
++	 * before the new planes are programmed. Disable them here.
++	 */
++	drm_atomic_crtc_state_for_each_plane(plane, old_state) {
++		const struct drm_plane_helper_funcs *funcs = plane->helper_private;
++
++		if (funcs && funcs->atomic_disable)
++			funcs->atomic_disable(plane, state);
++	}
++
+ 	if (crtc->state->event && !crtc->state->active) {
+ 		spin_lock_irq(&crtc->dev->event_lock);
+ 		drm_crtc_send_vblank_event(crtc, crtc->state->event);
+diff --git a/drivers/gpu/drm/sun4i/sun8i_ui_layer.c b/drivers/gpu/drm/sun4i/sun8i_ui_layer.c
+--- a/drivers/gpu/drm/sun4i/sun8i_ui_layer.c
++++ b/drivers/gpu/drm/sun4i/sun8i_ui_layer.c
+@@ -203,8 +203,15 @@
+ 	sun8i_ui_layer_update_buffer(layer, plane);
+ }
+ 
++static void sun8i_ui_layer_atomic_disable(struct drm_plane *plane,
++					  struct drm_atomic_commit *state)
++{
++	sun8i_ui_layer_disable(plane_to_sun8i_layer(plane));
++}
++
+ static const struct drm_plane_helper_funcs sun8i_ui_layer_helper_funcs = {
+ 	.atomic_check	= sun8i_ui_layer_atomic_check,
++	.atomic_disable	= sun8i_ui_layer_atomic_disable,
+ 	.atomic_update	= sun8i_ui_layer_atomic_update,
+ };
+ 
+diff --git a/drivers/gpu/drm/sun4i/sun8i_vi_layer.c b/drivers/gpu/drm/sun4i/sun8i_vi_layer.c
+--- a/drivers/gpu/drm/sun4i/sun8i_vi_layer.c
++++ b/drivers/gpu/drm/sun4i/sun8i_vi_layer.c
+@@ -283,8 +283,15 @@
+ 	sun8i_vi_layer_update_buffer(layer, plane);
+ }
+ 
++static void sun8i_vi_layer_atomic_disable(struct drm_plane *plane,
++					  struct drm_atomic_commit *state)
++{
++	sun8i_vi_layer_disable(plane_to_sun8i_layer(plane));
++}
++
+ static const struct drm_plane_helper_funcs sun8i_vi_layer_helper_funcs = {
+ 	.atomic_check	= sun8i_vi_layer_atomic_check,
++	.atomic_disable	= sun8i_vi_layer_atomic_disable,
+ 	.atomic_update	= sun8i_vi_layer_atomic_update,
+ };
+ 

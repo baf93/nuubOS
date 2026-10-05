@@ -1,0 +1,60 @@
+--- a/drivers/power/supply/axp20x_battery.c
++++ b/drivers/power/supply/axp20x_battery.c
+@@ -120,6 +120,7 @@
+ 	unsigned int max_ccc;
+ 	const struct axp_data	*data;
+ 	bool ts_disable;
++	int soc_irq;
+ };
+ 
+ static irqreturn_t axp20x_battery_soc_irq(int irq, void *data)
+@@ -1156,6 +1157,7 @@
+ 		if (ret)
+ 			return dev_err_probe(dev, ret,
+ 					     "failed to request GAUGE_NEW_SOC IRQ\n");
++		axp20x_batt->soc_irq = irq;
+ 	} else if (irq != -ENXIO) {
+ 		return dev_err_probe(dev, irq,
+ 				     "failed to get GAUGE_NEW_SOC IRQ\n");
+@@ -1175,11 +1177,41 @@
+ 	return 0;
+ }
+ 
++/*
++ * The PMIC interrupt line is a wakeup source (power key), so any unmasked
++ * AXP interrupt ends s2idle. A state-of-charge step is not a reason to wake
++ * the system: mask it while suspended and report the current state once on
++ * resume instead.
++ */
++static int axp20x_battery_suspend(struct device *dev)
++{
++	struct axp20x_batt_ps *axp20x_batt = dev_get_drvdata(dev);
++
++	if (axp20x_batt->soc_irq > 0)
++		disable_irq(axp20x_batt->soc_irq);
++	return 0;
++}
++
++static int axp20x_battery_resume(struct device *dev)
++{
++	struct axp20x_batt_ps *axp20x_batt = dev_get_drvdata(dev);
++
++	if (axp20x_batt->soc_irq > 0) {
++		enable_irq(axp20x_batt->soc_irq);
++		power_supply_changed(axp20x_batt->batt);
++	}
++	return 0;
++}
++
++static DEFINE_SIMPLE_DEV_PM_OPS(axp20x_battery_pm_ops,
++				axp20x_battery_suspend, axp20x_battery_resume);
++
+ static struct platform_driver axp20x_batt_driver = {
+ 	.probe    = axp20x_power_probe,
+ 	.driver   = {
+ 		.name  = "axp20x-battery-power-supply",
+ 		.of_match_table = axp20x_battery_ps_id,
++		.pm = pm_sleep_ptr(&axp20x_battery_pm_ops),
+ 	},
+ };
+ 

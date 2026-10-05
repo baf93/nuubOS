@@ -1,0 +1,88 @@
+From: nuubOS <noreply@nuubos.local>
+Subject: [PATCH] ASoC: sunxi: fix H700 codec module clock
+
+Keep H616 unchanged. Select an H700-specific codec quirk, persist the
+quirk in the runtime codec state during probe, and double only the H700
+codec module-clock rate so nominal 44.1/48 kHz PCM is clocked correctly.
+
+---
+diff --git a/sound/soc/sunxi/sun4i-codec.c b/sound/soc/sunxi/sun4i-codec.c
+index f6c2cd9..7ff8e92 100644
+--- a/sound/soc/sunxi/sun4i-codec.c
++++ b/sound/soc/sunxi/sun4i-codec.c
+@@ -330,6 +330,7 @@ struct sun4i_codec {
+ 	struct regmap	*regmap;
+ 	struct clk	*clk_apb;
+ 	struct clk	*clk_module;
++	u32		mod_clk_multiplier;
+ 	struct reset_control *rst;
+ 	struct gpio_desc *gpio_pa;
+ 	struct gpio_desc *gpio_hp;
+@@ -661,6 +662,9 @@ static int sun4i_codec_hw_params(struct snd_pcm_substream *substream,
+ 	if (!clk_freq)
+ 		return -EINVAL;
+ 
++	if (scodec->mod_clk_multiplier > 1)
++		clk_freq *= scodec->mod_clk_multiplier;
++
+ 	ret = clk_set_rate(scodec->clk_module, clk_freq);
+ 	if (ret)
+ 		return ret;
+@@ -2149,6 +2153,7 @@ struct sun4i_codec_quirks {
+ 	unsigned int reg_adc_rxdata;	/* RX FIFO offset for DMA config */
+ 	bool has_reset;
+ 	bool playback_only;
++	u32 mod_clk_multiplier;
+ 	u32 dma_max_burst;
+ };
+ 
+@@ -2242,6 +2247,18 @@ static const struct sun4i_codec_quirks sun50i_h616_codec_quirks = {
+ 	.dma_max_burst	= SUN4I_DMA_MAX_BURST,
+ };
+ 
++static const struct sun4i_codec_quirks sun50i_h700_codec_quirks = {
++	.regmap_config	= &sun50i_h616_codec_regmap_config,
++	.codec		= &sun50i_h616_codec_codec,
++	.create_card	= sun50i_h616_codec_create_card,
++	.reg_dac_fifoc	= REG_FIELD(SUN50I_H616_CODEC_DAC_FIFOC, 0, 31),
++	.reg_dac_txdata	= SUN8I_H3_CODEC_DAC_TXDATA,
++	.has_reset	= true,
++	.playback_only	= true,
++	.mod_clk_multiplier = 2,
++	.dma_max_burst	= SUN4I_DMA_MAX_BURST,
++};
++
+ static const struct sun4i_codec_quirks suniv_f1c100s_codec_quirks = {
+ 	.regmap_config	= &suniv_codec_regmap_config,
+ 	.codec		= &suniv_codec_codec,
+@@ -2283,6 +2300,10 @@ static const struct of_device_id sun4i_codec_of_match[] = {
+ 		.compatible = "allwinner,sun50i-h616-codec",
+ 		.data = &sun50i_h616_codec_quirks,
+ 	},
++	{
++		.compatible = "allwinner,sun50i-h700-codec",
++		.data = &sun50i_h700_codec_quirks,
++	},
+ 	{
+ 		.compatible = "allwinner,suniv-f1c100s-codec",
+ 		.data = &suniv_f1c100s_codec_quirks,
+@@ -2316,6 +2337,8 @@ static int sun4i_codec_probe(struct platform_device *pdev)
+ 		return -ENODEV;
+ 	}
+ 
++	scodec->mod_clk_multiplier = quirks->mod_clk_multiplier;
++
+ 	scodec->regmap = devm_regmap_init_mmio(&pdev->dev, base,
+ 					       quirks->regmap_config);
+ 	if (IS_ERR(scodec->regmap)) {
+diff --git a/arch/arm64/boot/dts/allwinner/sun50i-h700.dtsi b/arch/arm64/boot/dts/allwinner/sun50i-h700.dtsi
+index a309fc8..26098fd 100644
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h700.dtsi
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700.dtsi
+@@ -2,3 +2,6 @@
+ 
+ #include "sun50i-h616.dtsi"
+ 
++&codec {
++	compatible = "allwinner,sun50i-h700-codec";
++};

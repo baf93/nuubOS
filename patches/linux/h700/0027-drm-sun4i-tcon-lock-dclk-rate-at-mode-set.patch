@@ -1,0 +1,106 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] drm: sun4i: tcon: protect the pixel clock rate from mode set
+
+sun4i_tcon takes rate exclusivity on the channel 0 pixel clock only when
+the channel is enabled, but drm_atomic_helper_commit_modeset_disables()
+mode sets every CRTC of a commit before any of them is enabled. On H700
+TCON LCD0 and TCON TV0 share pll-video0, so when the first commit drives
+both the RGB panel and HDMI, the HDMI mode set retunes pll-video0 after
+the panel set its rate: the panel is enabled with 297 MHz / 3 = 99 MHz
+instead of 27 MHz and stays black (backlight on) for the whole boot, even
+after later panel re-initialisation.
+
+Set the channel 0 pixel clock with clk_set_rate_exclusive() in mode set
+and keep that exclusivity until the channel is disabled, so another TCON
+has to use a different PLL or adapt its divider instead.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+diff --git a/drivers/gpu/drm/sun4i/sun4i_tcon.c b/drivers/gpu/drm/sun4i/sun4i_tcon.c
+--- a/drivers/gpu/drm/sun4i/sun4i_tcon.c
++++ b/drivers/gpu/drm/sun4i/sun4i_tcon.c
+@@ -108,13 +108,41 @@
+ 
+ 	if (enabled) {
+ 		clk_prepare_enable(clk);
+-		clk_rate_exclusive_get(clk);
++		/* The pixel clock is already protected since its mode set. */
++		if (channel != 0 || !tcon->dclk_rate_locked)
++			clk_rate_exclusive_get(clk);
++		if (channel == 0)
++			tcon->dclk_rate_locked = true;
+ 	} else {
+-		clk_rate_exclusive_put(clk);
++		if (channel != 0 || tcon->dclk_rate_locked)
++			clk_rate_exclusive_put(clk);
++		if (channel == 0)
++			tcon->dclk_rate_locked = false;
+ 		clk_disable_unprepare(clk);
+ 	}
+ }
+ 
++/*
++ * TCONs can share a video PLL (on H616/H700 both TCON LCD0 and TCON TV0 are
++ * fed by pll-video0). All CRTCs of a commit are mode set before any of them
++ * is enabled, so protecting the pixel clock only when channel 0 is enabled
++ * lets a later mode set of another TCON retune the shared PLL in between:
++ * booting with HDMI connected left the RGB panel at 297 MHz / 3 = 99 MHz
++ * instead of 27 MHz and it never showed an image. Lock the rate as soon as
++ * it is set.
++ */
++static void sun4i_tcon0_set_dclk_rate(struct sun4i_tcon *tcon,
++				      unsigned long rate)
++{
++	if (tcon->dclk_rate_locked) {
++		clk_rate_exclusive_put(tcon->dclk);
++		tcon->dclk_rate_locked = false;
++	}
++
++	if (!clk_set_rate_exclusive(tcon->dclk, rate))
++		tcon->dclk_rate_locked = true;
++}
++
+ static void sun4i_tcon_setup_lvds_phy(struct sun4i_tcon *tcon,
+ 				      const struct drm_encoder *encoder)
+ {
+@@ -360,8 +388,8 @@
+ 	 */
+ 	tcon->dclk_min_div = SUN6I_DSI_TCON_DIV;
+ 	tcon->dclk_max_div = SUN6I_DSI_TCON_DIV;
+-	clk_set_rate(tcon->dclk, mode->crtc_clock * 1000 * (bpp / lanes)
+-						  / SUN6I_DSI_TCON_DIV);
++	sun4i_tcon0_set_dclk_rate(tcon, mode->crtc_clock * 1000 * (bpp / lanes)
++					      / SUN6I_DSI_TCON_DIV);
+ 
+ 	/* Set the resolution */
+ 	regmap_write(tcon->regs, SUN4I_TCON0_BASIC0_REG,
+@@ -434,7 +462,7 @@
+ 
+ 	tcon->dclk_min_div = 7;
+ 	tcon->dclk_max_div = 7;
+-	clk_set_rate(tcon->dclk, mode->crtc_clock * 1000);
++	sun4i_tcon0_set_dclk_rate(tcon, mode->crtc_clock * 1000);
+ 
+ 	/* Set the resolution */
+ 	regmap_write(tcon->regs, SUN4I_TCON0_BASIC0_REG,
+@@ -516,7 +544,7 @@
+ 
+ 	tcon->dclk_min_div = tcon->quirks->dclk_min_div;
+ 	tcon->dclk_max_div = 127;
+-	clk_set_rate(tcon->dclk, mode->crtc_clock * 1000);
++	sun4i_tcon0_set_dclk_rate(tcon, mode->crtc_clock * 1000);
+ 
+ 	/* Set the resolution */
+ 	regmap_write(tcon->regs, SUN4I_TCON0_BASIC0_REG,
+diff --git a/drivers/gpu/drm/sun4i/sun4i_tcon.h b/drivers/gpu/drm/sun4i/sun4i_tcon.h
+--- a/drivers/gpu/drm/sun4i/sun4i_tcon.h
++++ b/drivers/gpu/drm/sun4i/sun4i_tcon.h
+@@ -273,6 +273,8 @@
+ 	struct clk			*dclk;
+ 	u8				dclk_max_div;
+ 	u8				dclk_min_div;
++	/* dclk rate is exclusive from its mode set until channel 0 is off */
++	bool				dclk_rate_locked;
+ 
+ 	/* Reset control */
+ 	struct reset_control		*lcd_rst;
