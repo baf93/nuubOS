@@ -1,8 +1,9 @@
 config BR2_PACKAGE_NUUBOS_AUDIO
 	bool "nuubOS audio routing service"
+	select BR2_PACKAGE_NUUBOS_NOTIFY
 	select BR2_PACKAGE_ALSA_LIB
 	select BR2_PACKAGE_DBUS
-	select BR2_PACKAGE_BLUEZ_ALSA
+	select BR2_PACKAGE_MPG123
 	help
 	  nuubOS platform audio policy service.
 

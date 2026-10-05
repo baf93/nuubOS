@@ -1,5 +1,53 @@
 import { SystemVirtualKeyboard } from "components/virtual_keyboard.slint";
 
+
+component MarqueeText inherits Rectangle {
+    in property <string> label: "";
+    in property <color> text-color: #ffffff;
+    in property <length> text-size: 16px;
+    in property <int> text-weight: 400;
+    in property <bool> active: true;
+    in property <bool> align-right: false;
+    in property <bool> align-center: false;
+    /* Forward/back passes; a notification scrolls once and holds the end. */
+    in property <int> passes: 2;
+    out property <length> content-width: marquee-label.preferred-width;
+    /* Constant reading speed (~60 px/s): long text scrolls longer, never
+     * faster. Short overflows keep the minimum duration. */
+    property <length> overflow: max(0px, marquee-label.preferred-width - root.width);
+    out property <duration> scroll-duration: max(1250ms, root.overflow / 1px * 16ms);
+    /* Time until the end of the text has been shown (0 when it fits). */
+    out property <duration> scroll-time: root.overflow > 0px ? 320ms + root.scroll-duration * root.passes : 0ms;
+    /* Reading this evaluates the animated position (used to restart). */
+    out property <length> offset: marquee-label.x;
+
+    background: #00000000;
+    clip: true;
+
+    marquee-label := Text {
+        text: root.label;
+        color: root.text-color;
+        font-size: root.text-size;
+        font-weight: root.text-weight;
+        width: self.preferred-width;
+        height: parent.height;
+        vertical-alignment: center;
+        x: root.active && self.preferred-width > parent.width
+            ? parent.width - self.preferred-width
+            : root.align-right ? parent.width - self.preferred-width
+            : root.align-center ? (parent.width - self.preferred-width) / 2
+            : 0px;
+        animate x {
+            delay: 320ms;
+            duration: root.scroll-duration;
+            iteration-count: root.passes;
+            direction: alternate;
+            easing: linear;
+            enabled: root.active && self.preferred-width > parent.width;
+        }
+    }
+}
+
 export struct WifiNetworkEntry {
     ssid: string,
     security: string,
@@ -35,11 +83,13 @@ export struct PlayerAssignmentEntry {
     available: bool,
 }
 
+/* kind: 0 button, 1 stick axis, 2 stick deadzone, 3 Restore Default Mapping. */
 export struct ControllerMappingEntry {
-    action: string,
+    control: string,
+    kind: int,
     label: string,
-    code: int,
-    binding: string,
+    value: string,
+    customized: bool,
 }
 
 export struct SettingsChoiceEntry {
@@ -47,10 +97,18 @@ export struct SettingsChoiceEntry {
     label: string,
 }
 
+export struct UserProfileEntry {
+    id: string, name: string, avatar-spec: string, avatar-path: string, avatar: image, active: bool, default-user: bool,
+}
+export struct AvatarChoiceEntry {
+    spec: string, label: string, path: string, avatar: image,
+}
+
 component BatteryGlyph inherits Rectangle {
     in property <int> percent: -1;
     in property <bool> compact: false;
     in property <bool> charging: false;
+    in property <bool> battery-saver: false;
 
     width: root.compact ? 13px : 32px;
     height: root.compact ? 10px : 24px;
@@ -63,6 +121,7 @@ component BatteryGlyph inherits Rectangle {
         height: parent.height;
         source: @image-url("assets/icons/battery-empty.svg");
         image-fit: contain;
+        colorize: root.battery-saver ? #f2b84b : #00000000;
         visible: root.percent >= 0 && root.percent <= 15;
     }
     Image {
@@ -72,6 +131,7 @@ component BatteryGlyph inherits Rectangle {
         height: parent.height;
         source: @image-url("assets/icons/battery-quarter.svg");
         image-fit: contain;
+        colorize: root.battery-saver ? #f2b84b : #00000000;
         visible: root.percent > 15 && root.percent <= 35;
     }
     Image {
@@ -81,6 +141,7 @@ component BatteryGlyph inherits Rectangle {
         height: parent.height;
         source: @image-url("assets/icons/battery-half.svg");
         image-fit: contain;
+        colorize: root.battery-saver ? #f2b84b : #00000000;
         visible: root.percent > 35 && root.percent <= 60;
     }
     Image {
@@ -90,6 +151,7 @@ component BatteryGlyph inherits Rectangle {
         height: parent.height;
         source: @image-url("assets/icons/battery-three-quarters.svg");
         image-fit: contain;
+        colorize: root.battery-saver ? #f2b84b : #00000000;
         visible: root.percent > 60 && root.percent <= 85;
     }
     Image {
@@ -99,6 +161,7 @@ component BatteryGlyph inherits Rectangle {
         height: parent.height;
         source: @image-url("assets/icons/battery-full.svg");
         image-fit: contain;
+        colorize: root.battery-saver ? #f2b84b : #00000000;
         visible: root.percent > 85;
     }
     Text {
@@ -232,180 +295,84 @@ component MenuActionHint inherits Rectangle {
 }
 
 
+/* Settings visual grammar.
+ *
+ * Every Settings surface is built from the same few primitives so spacing,
+ * typography and focus treatment never diverge between categories:
+ *   SettingsCategory      rail entry
+ *   SettingsSectionHeader accent section label + optional localized scope chip
+ *   SettingsSelectableRow title [+ detail] and one right accessory:
+ *                         value text, on/off switch or sub-page chevron
+ *   SettingsActionButton  explicit action / destructive action
+ * Geometry (row height, step, content origin) is owned by HomeWindow and
+ * derived from the logical window size; components never assume 640x480. */
 component SettingsCategory inherits Rectangle {
     in property <string> label: "";
     in property <bool> selected: false;
 
-    height: 40px;
     border-radius: 6px;
     background: root.selected ? #1b2940 : #00000000;
     border-width: 1px;
     border-color: root.selected ? #3a86ff : #00000000;
 
-    Text {
+    MarqueeText {
         x: 12px;
         y: 0;
         width: parent.width - 20px;
         height: parent.height;
-        vertical-alignment: center;
-        text: root.label;
-        color: root.selected ? #f5f6f8 : #a8adb5;
-        font-size: 18px;
-        font-weight: root.selected ? 700 : 600;
+        label: root.label;
+        text-color: root.selected ? #f5f6f8 : #a8adb5;
+        text-size: 18px;
+        text-weight: root.selected ? 700 : 600;
+        active: root.selected;
     }
 }
 
-component SettingsTopic inherits Rectangle {
+component SettingsSectionHeader inherits Rectangle {
     in property <string> label: "";
-    in property <bool> visible-topic: true;
+    /* Localized ownership label (USER / DEVICE). Empty when the section
+     * label already is the scope. */
+    in property <string> scope-label: "";
 
-    height: 38px;
-    visible: root.visible-topic;
-    border-radius: 6px;
-    background: #15171b;
-    border-width: 1px;
-    border-color: #24272d;
+    height: 20px;
+    background: #00000000;
 
-    Text {
-        x: 12px;
+    section-label := Text {
+        x: 0;
         y: 0;
-        width: parent.width - 24px;
         height: parent.height;
         vertical-alignment: center;
         text: root.label;
-        color: #c8ccd2;
-        font-size: 17px;
-        font-weight: 600;
-    }
-}
-
-component SettingsSelectableRow inherits Rectangle {
-    in property <string> title: "";
-    in property <string> detail: "";
-    in property <string> value: "";
-    in property <bool> selected: false;
-    in property <bool> enabled: true;
-
-    height: 40px;
-    border-radius: 6px;
-    background: root.selected ? #1b2940 : #15171b;
-    border-width: 1px;
-    border-color: root.selected ? #3a86ff : #24272d;
-    opacity: root.enabled ? 1.0 : 0.45;
-
-    Text {
-        x: 12px;
-        y: root.detail == "" ? 0px : 5px;
-        width: parent.width - 130px;
-        height: root.detail == "" ? parent.height : 20px;
-        vertical-alignment: center;
-        text: root.title;
-        color: root.selected ? #f5f6f8 : #c8ccd2;
-        font-size: 18px;
-        font-weight: root.selected ? 700 : 600;
-    }
-
-    Text {
-        x: 12px;
-        y: 23px;
-        width: parent.width - 130px;
-        text: root.detail;
-        color: #7f858e;
-        font-size: 11px;
-        visible: root.detail != "";
-    }
-
-    Text {
-        x: parent.width - 118px;
-        y: 0;
-        width: 106px;
-        height: parent.height;
-        horizontal-alignment: right;
-        vertical-alignment: center;
-        text: root.value;
-        color: root.selected ? #cfe2ff : #8e949d;
-        font-size: 15px;
-        font-weight: 600;
-    }
-}
-
-
-component DeviceScopeBadge inherits Rectangle {
-    width: 17px;
-    height: 17px;
-    border-radius: 9px;
-    background: #17243a;
-    border-width: 1px;
-    border-color: #3a86ff;
-
-    Text {
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        height: parent.height;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        text: "D";
-        color: #9ec5ff;
-        font-size: 10px;
-        font-weight: 800;
-    }
-}
-
-component UserScopeBadge inherits Rectangle {
-    width: 17px;
-    height: 17px;
-    border-radius: 9px;
-    background: #17243a;
-    border-width: 1px;
-    border-color: #3a86ff;
-
-    Text {
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        height: parent.height;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        text: "U";
-        color: #9ec5ff;
-        font-size: 10px;
-        font-weight: 800;
-    }
-}
-
-component SettingsActionButton inherits Rectangle {
-    in property <string> label: "";
-    in property <bool> selected: false;
-    in property <bool> danger: false;
-    in property <bool> enabled: true;
-
-    height: 40px;
-    border-radius: 6px;
-    background: root.danger
-        ? (root.selected ? #542329 : #28171a)
-        : (root.selected ? #24589a : #17345b);
-    border-width: 1px;
-    border-color: root.danger
-        ? (root.selected ? #d95a67 : #74343c)
-        : (root.selected ? #73a8ff : #315f9f);
-    opacity: root.enabled ? 1.0 : 0.42;
-
-    Text {
-        x: 12px;
-        y: 0;
-        width: parent.width - 24px;
-        height: parent.height;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        text: root.label;
-        color: root.danger ? #ffc0c6 : #e8f1ff;
-        font-size: 17px;
+        color: #3a86ff;
+        font-size: 13px;
         font-weight: 700;
     }
+
+    Rectangle {
+        x: root.label == "" ? 0px : section-label.preferred-width + 8px;
+        y: (parent.height - self.height) / 2;
+        width: scope-text.preferred-width + 12px;
+        height: 17px;
+        border-radius: 9px;
+        background: #17243a;
+        border-width: 1px;
+        border-color: #3a86ff;
+        visible: root.scope-label != "";
+
+        scope-text := Text {
+            x: 6px;
+            y: 0;
+            height: parent.height;
+            vertical-alignment: center;
+            text: root.scope-label;
+            color: #9ec5ff;
+            font-size: 10px;
+            font-weight: 800;
+        }
+    }
 }
 
-component WifiToggle inherits Rectangle {
+component SettingsToggle inherits Rectangle {
     in property <bool> checked: false;
     in property <bool> selected: false;
 
@@ -427,117 +394,165 @@ component WifiToggle inherits Rectangle {
     }
 }
 
-component WifiNetworkListRow inherits Rectangle {
-    in property <string> ssid: "";
-    in property <string> security: "";
-    in property <int> signal-dbm: 0;
-    in property <bool> saved: false;
-    in property <bool> current: false;
+component SettingsSelectableRow inherits Rectangle {
+    in property <string> title: "";
+    in property <string> detail: "";
+    in property <string> value: "";
     in property <bool> selected: false;
+    in property <bool> enabled: true;
+    /* Live/current entity (connected network, connected device). */
+    in property <bool> emphasized: false;
+    /* Boolean setting: render the shared switch instead of value text. */
+    in property <bool> toggle: false;
+    in property <bool> toggle-on: false;
+    /* Confirm opens a sub-page. */
+    in property <bool> navigates: false;
+    /* Circular image accessory (profile pictures). */
+    in property <image> preview;
+    in property <bool> show-preview: false;
+    /* Minimum share reserved for the title when the value itself is long.
+     * Short/empty values consume only their preferred width, so the title
+     * automatically gets the otherwise-unused space. */
+    in property <float> title-fraction: 0.40;
 
-    height: 44px;
+    property <bool> has-detail: root.detail != "";
+    property <length> accessory-width: root.toggle ? 42px
+        : root.show-preview ? 28px
+        : root.navigates ? 10px
+        : 0px;
+    property <length> value-right: root.width - 12px - root.accessory-width
+        - (root.accessory-width > 0px ? 10px : 0px);
+
     border-radius: 6px;
     background: root.selected ? #1b2940 : #15171b;
     border-width: 1px;
-    border-color: root.selected ? #3a86ff : root.current ? #315f9f : #24272d;
+    border-color: root.selected ? #3a86ff : root.emphasized ? #315f9f : #24272d;
 
-    Text {
-        x: 12px;
-        y: 5px;
-        width: parent.width - 128px;
-        text: root.ssid;
-        color: #f0f2f5;
-        font-size: 17px;
-        font-weight: root.current || root.selected ? 700 : 600;
-        overflow: elide;
+    SettingsToggle {
+        x: parent.width - 12px - self.width;
+        y: (parent.height - self.height) / 2;
+        checked: root.toggle-on;
+        selected: root.selected;
+        visible: root.toggle;
     }
 
     Text {
-        x: 12px;
-        y: 25px;
-        width: parent.width - 128px;
-        text: root.current ? "Connected"
-            : root.saved ? root.security + " • Saved"
-            : root.security;
-        color: #7f858e;
-        font-size: 12px;
-        overflow: elide;
-    }
-
-    Text {
-        x: parent.width - 112px;
+        x: parent.width - 12px - root.accessory-width;
         y: 0;
-        width: 100px;
+        width: root.accessory-width;
         height: parent.height;
         horizontal-alignment: right;
         vertical-alignment: center;
-        text: root.signal-dbm == 0 ? ""
-            : root.signal-dbm >= -55 ? "Excellent"
-            : root.signal-dbm >= -67 ? "Good"
-            : root.signal-dbm >= -75 ? "Fair"
-            : "Weak";
-        color: root.signal-dbm >= -67 ? #9dc1ff : #8e949d;
-        font-size: 12px;
-        font-weight: 600;
+        text: "›";
+        color: root.selected ? #cfe2ff : #6f7680;
+        font-size: 22px;
+        font-weight: 700;
+        visible: root.navigates && !root.toggle && !root.show-preview;
+    }
+
+    Rectangle {
+        x: parent.width - 12px - self.width;
+        y: (parent.height - self.height) / 2;
+        width: 28px;
+        height: 28px;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: root.selected ? #3a86ff : #2c3036;
+        background: #11151a;
+        clip: true;
+        visible: root.show-preview && !root.toggle;
+
+        Image {
+            x: parent.border-width;
+            y: parent.border-width;
+            width: parent.width - 2 * parent.border-width;
+            height: parent.height - 2 * parent.border-width;
+            source: root.preview;
+            image-fit: contain;
+        }
+    }
+
+    value-text := MarqueeText {
+        width: root.value == ""
+            ? 0px
+            : min(self.content-width + 4px,
+                  root.value-right * (0.97 - root.title-fraction));
+        x: root.value-right - self.width;
+        y: 0;
+        height: parent.height;
+        label: root.value;
+        text-color: root.selected ? #cfe2ff : #8e949d;
+        text-size: 14px;
+        text-weight: 600;
+        align-right: true;
+        active: root.selected;
+        visible: root.value != "";
+    }
+
+    title-text := MarqueeText {
+        x: 12px;
+        y: root.has-detail ? parent.height * 0.08 : 0px;
+        width: root.value == ""
+            ? max(0px, root.value-right - 12px)
+            : max(0px, value-text.x - 20px);
+        height: root.has-detail ? parent.height * 0.50 : parent.height;
+        label: root.title;
+        text-color: root.selected ? #f5f6f8 : #c8ccd2;
+        text-size: 18px;
+        text-weight: root.selected || root.emphasized ? 700 : 600;
+        active: root.selected;
+    }
+
+    MarqueeText {
+        x: 12px;
+        y: parent.height * 0.56;
+        width: title-text.width;
+        height: parent.height * 0.36;
+        label: root.detail;
+        text-color: #7f858e;
+        text-size: 12px;
+        active: root.selected;
+        visible: root.has-detail;
     }
 }
 
-
-component BluetoothDeviceListRow inherits Rectangle {
-    in property <string> name: "";
-    in property <string> kind: "Device";
-    in property <bool> paired: false;
-    in property <bool> connected: false;
-    in property <int> rssi: 0;
+component SettingsActionButton inherits Rectangle {
+    in property <string> label: "";
     in property <bool> selected: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
 
-    height: 44px;
     border-radius: 6px;
-    background: root.selected ? #1b2940 : #15171b;
+    background: root.danger
+        ? (root.selected ? #542329 : #28171a)
+        : (root.selected ? #24589a : #17345b);
     border-width: 1px;
-    border-color: root.selected ? #3a86ff : root.connected ? #315f9f : #24272d;
+    border-color: root.danger
+        ? (root.selected ? #d95a67 : #74343c)
+        : (root.selected ? #73a8ff : #315f9f);
+    opacity: root.enabled ? 1.0 : 0.42;
 
-    Text {
+    MarqueeText {
         x: 12px;
-        y: 5px;
-        width: parent.width - 116px;
-        text: root.name;
-        color: #f0f2f5;
-        font-size: 17px;
-        font-weight: root.connected || root.selected ? 700 : 600;
-        overflow: elide;
-    }
-
-    Text {
-        x: 12px;
-        y: 25px;
-        width: parent.width - 116px;
-        text: root.connected ? root.kind + " • Connected"
-            : root.paired ? root.kind + " • Paired"
-            : root.kind;
-        color: #7f858e;
-        font-size: 12px;
-        overflow: elide;
-    }
-
-    Text {
-        x: parent.width - 104px;
         y: 0;
-        width: 92px;
+        width: parent.width - 24px;
         height: parent.height;
-        horizontal-alignment: right;
-        vertical-alignment: center;
-        text: root.connected ? "Connected"
-            : root.paired ? "Saved"
-            : root.rssi == 0 ? ""
-            : root.rssi >= -55 ? "Excellent"
-            : root.rssi >= -67 ? "Good"
-            : root.rssi >= -75 ? "Fair"
-            : "Weak";
-        color: root.connected ? #9dc1ff : #8e949d;
-        font-size: 12px;
-        font-weight: 600;
+        label: root.label;
+        text-color: root.danger ? #ffc0c6 : #e8f1ff;
+        text-size: 17px;
+        text-weight: 700;
+        align-center: true;
+        active: root.selected;
     }
+}
+
+/* Settings empty-state / helper line, aligned to the row grid. */
+component SettingsHint inherits Text {
+    horizontal-alignment: center;
+    vertical-alignment: center;
+    color: #7f858e;
+    font-size: 13px;
+    wrap: word-wrap;
 }
 
 component StartActionHint inherits Rectangle {
@@ -633,6 +648,32 @@ component FaceButtonHint inherits Rectangle {
     }
 }
 
+
+/* One controller hint: keycap + label. Bars are HorizontalLayouts of these,
+ * so spacing always follows the real width of localized labels. */
+component ActionHint inherits HorizontalLayout {
+    in property <string> kind: "face";
+    in property <int> face-position: -1;
+    in property <string> label: "";
+    spacing: 8px;
+    alignment: start;
+    horizontal-stretch: 0;
+
+    VerticalLayout {
+        alignment: center;
+        if root.kind == "nav": NavigationHint { }
+        if root.kind == "start": StartActionHint { }
+        if root.kind == "menu": MenuActionHint { }
+        if root.kind == "face": FaceButtonHint { active-position: root.face-position; }
+    }
+    Text {
+        text: root.label;
+        color: #a8adb5;
+        font-size: 17px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+}
 
 component ControllerTesterVisual inherits Rectangle {
     in property <bool> face-south: false;
@@ -746,9 +787,21 @@ export component HomeWindow inherits Window {
     in-out property <float> line-progress: 0.0;
     in-out property <float> curtain-progress: 0.0;
     in-out property <string> transition-mode: "boot";
+    in-out property <image> splash-image;
+    in-out property <float> splash-split: 0.485;
+    in-out property <float> splash-line-fraction: 0.483;
+    in-out property <length> splash-line-height: 3px;
+    /* Rust re-renders the splash whenever the surface size changes while
+     * the curtain is on screen (first configure, HDMI hotplug). */
+    callback splash-size-changed();
+    changed width => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
+    changed height => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
+    in-out property <[string]> i18n-strings: ["Recently Played", "nuubUI graphics foundation", "Native layout • 640×480 • Wayland", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P4", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost"];
 
     in-out property <string> topbar-time: "--:--";
-    in-out property <string> current-user-name: "Player";
+    in-out property <string> current-user-name: root.i18n-strings[204];
+    in-out property <image> current-user-avatar;
+    in-out property <bool> current-user-avatar-available: false;
     in-out property <string> wifi-state: "disconnected";
     in-out property <int> battery-percent: -1;
     in-out property <string> battery-state: "unknown";
@@ -761,14 +814,50 @@ export component HomeWindow inherits Window {
 
     in-out property <bool> settings-open: false;
     in-out property <int> settings-selected-index: 0;
+    in-out property <int> general-index: 0;
+    in-out property <int> general-scroll-offset: 0;
+    in-out property <[UserProfileEntry]> users: [];
+    in-out property <int> user-count: 0;
+    in-out property <string> active-user-id: "";
+    in-out property <string> default-user-id: "";
+    in-out property <string> default-user-name: "";
+    in-out property <string> user-login-mode: "select";
+    in-out property <bool> user-selection-required: false;
+    in-out property <bool> user-switch-requested: false;
+    in-out property <bool> user-picker-open: false;
+    in-out property <bool> user-picker-forced: false;
+    in-out property <int> user-picker-index: 0;
+    in-out property <int> user-picker-scroll: 0;
+    in-out property <int> user-list-index: 0;
+    in-out property <int> user-list-scroll: 0;
+    in-out property <int> profile-index: 0;
+    in-out property <string> profile-edit-user-id: "";
+    in-out property <string> profile-edit-name: "";
+    in-out property <string> profile-edit-avatar-spec: "builtin:01";
+    in-out property <image> profile-edit-avatar;
+    in-out property <bool> user-delete-confirm: false;
+    in-out property <bool> avatar-picker-open: false;
+    in-out property <[AvatarChoiceEntry]> avatar-choices: [];
+    in-out property <int> avatar-picker-index: 0;
+    in-out property <int> avatar-picker-scroll: 0;
+    in-out property <string> timezone: "UTC";
+    in-out property <bool> automatic-time: true;
+    in-out property <string> manual-date-label: "---- -- --";
+    in-out property <string> manual-time-label: "--:--";
+    in-out property <string> keyboard-layout-code: "us";
+    in-out property <string> keyboard-layout-label: "English (US)";
+    in-out property <string> last-time-sync-label: "Never";
+    in-out property <string> regional-notice: "";
+    in-out property <string> ui-language-code: "en";
+    in-out property <string> ui-language-name: "English";
     in-out property <int> select-face-position: -1;
     in-out property <int> back-face-position: -1;
 
-    in-out property <string> connectivity-wifi-status: "Unavailable";
-    in-out property <string> connectivity-wifi-detail: "Waiting for Wi-Fi service";
+    in-out property <string> connectivity-wifi-status: root.i18n-strings[205];
+    in-out property <string> connectivity-wifi-detail: root.i18n-strings[206];
     in-out property <bool> connectivity-wifi-active: false;
-    in-out property <string> connectivity-bluetooth-status: "Unavailable";
-    in-out property <string> connectivity-bluetooth-detail: "Waiting for Bluetooth service";
+    in-out property <string> connectivity-bluetooth-status: root.i18n-strings[205];
+    in-out property <string> connectivity-bluetooth-detail: root.i18n-strings[207];
     in-out property <bool> connectivity-bluetooth-active: false;
 
     in-out property <bool> bluetooth-enabled: false;
@@ -784,7 +873,7 @@ export component HomeWindow inherits Window {
     in-out property <int> bluetooth-detail-return-view: 8;
     in-out property <string> bluetooth-selected-address: "";
     in-out property <string> bluetooth-selected-name: "";
-    in-out property <string> bluetooth-selected-kind: "Device";
+    in-out property <string> bluetooth-selected-kind: root.i18n-strings[98];
     in-out property <bool> bluetooth-selected-paired: false;
     in-out property <bool> bluetooth-selected-connected: false;
     in-out property <bool> bluetooth-selected-trusted: false;
@@ -802,6 +891,10 @@ export component HomeWindow inherits Window {
     in-out property <[SettingsChoiceEntry]> settings-choice-options: [];
     in-out property <int> settings-choice-index: 0;
     in-out property <int> settings-choice-scroll: 0;
+    /* Dropdown capacity follows the same grid as the page rows. */
+    in-out property <int> settings-choice-visible-rows:
+        max(1, floor((root.settings-pane-height - (root.settings-section-y - 4px) - 16px
+            - root.settings-choice-list-y + root.settings-row-gap) / root.settings-row-step));
     in-out property <int> player-assignment-index: 0;
     in-out property <int> controller-list-index: 0;
     in-out property <int> controller-list-scroll-offset: 0;
@@ -814,10 +907,11 @@ export component HomeWindow inherits Window {
     in-out property <int> controller-selected-preferred-player: 0;
     in-out property <int> controller-selected-effective-player: 0;
     in-out property <bool> controller-remap-waiting: false;
-    in-out property <string> controller-remap-action: "";
+    in-out property <string> controller-remap-prompt: "";
+    in-out property <bool> controller-mapping-reset-armed: false;
     in-out property <int> controller-left-deadzone: 20;
     in-out property <int> controller-right-deadzone: 20;
-    in-out property <string> tester-action: "Waiting for input";
+    in-out property <string> tester-action: root.i18n-strings[208];
     in-out property <int> controller-tester-return-view: 10;
 
     in-out property <bool> tester-face-south: false;
@@ -856,10 +950,83 @@ export component HomeWindow inherits Window {
     in-out property <int> lighting-blue: 255;
     in-out property <bool> lighting-system-effects: true;
     in-out property <string> lighting-active-effect: "";
-    in-out property <string> lighting-color-name: "Blue";
+    in-out property <string> lighting-color-name: root.i18n-strings[209];
     in-out property <int> lighting-index: 0;
     in-out property <bool> lighting-preview-open: false;
     in-out property <int> lighting-preview-index: 0;
+
+    /* Display & Audio is device-scoped physical policy. */
+    in-out property <int> display-audio-index: 0;
+    in-out property <int> display-brightness: 60;
+    in-out property <bool> display-brightness-available: true;
+    in-out property <bool> display-color-temperature-available: false;
+    in-out property <int> display-color-temperature: 6500;
+    in-out property <bool> audio-test-tone-playing: false;
+    in-out property <string> audio-mode: "auto";
+    in-out property <string> audio-selected: "speaker";
+    in-out property <string> audio-output-label: root.i18n-strings[210];
+    in-out property <int> audio-volume: 100;
+    in-out property <bool> audio-volume-supported: true;
+    in-out property <bool> audio-bluetooth-available: false;
+    in-out property <bool> audio-headphones-available: false;
+    in-out property <bool> audio-hdmi-available: false;
+    in-out property <bool> audio-speaker-available: true;
+    in-out property <int> applications-volume: 100;
+    in-out property <int> system-sounds-volume: 60;
+    in-out property <bool> navigation-sounds-enabled: true;
+    in-out property <bool> power-sounds-enabled: true;
+    in-out property <int> home-music-volume: 60;
+    in-out property <int> display-audio-scroll-offset: 0;
+
+    /* System is a device-global Product Service surface. The same real page is
+     * rendered while the category rail owns focus and after entering it. */
+    in-out property <int> system-index: 0;
+    in-out property <int> system-scroll-offset: 0;
+    in-out property <string> system-version: root.i18n-strings[205];
+    in-out property <string> system-build: root.i18n-strings[205];
+    in-out property <string> system-profile: "auto";
+    in-out property <string> system-effective-profile: "auto";
+    in-out property <int> system-auto-battery-threshold: 0;
+    in-out property <int> system-screensaver-after-min: 0;
+    in-out property <int> system-sleep-after-min: 0;
+    in-out property <int> system-poweroff-after-min: 0;
+    in-out property <bool> system-rtc-wakeup: false;
+    in-out property <string> system-cpu-clock: root.i18n-strings[205];
+    in-out property <string> system-gpu-clock: root.i18n-strings[205];
+    in-out property <string> system-cpu-temperature: root.i18n-strings[205];
+    in-out property <string> system-gpu-temperature: root.i18n-strings[205];
+    in-out property <string> system-memory: root.i18n-strings[205];
+    in-out property <string> system-uptime: root.i18n-strings[205];
+    in-out property <string> system-device-model: root.i18n-strings[205];
+    in-out property <string> system-kernel: root.i18n-strings[205];
+    in-out property <string> system-network: root.i18n-strings[205];
+    in-out property <string> system-storage-mode: root.i18n-strings[211];
+    in-out property <string> system-storage-active: root.i18n-strings[211];
+    in-out property <string> system-storage-health: root.i18n-strings[211];
+    in-out property <string> system-tf2-state: root.i18n-strings[211];
+    in-out property <string> system-tf2-cid: "";
+    in-out property <string> system-storage-action-required: "NONE";
+    in-out property <string> system-backup-policy: root.i18n-strings[211];
+    in-out property <string> system-backup-due: root.i18n-strings[211];
+    in-out property <string> system-backup-reason: root.i18n-strings[211];
+    in-out property <string> system-storage-usage: root.i18n-strings[205];
+    in-out property <int> system-storage-index: 0;
+    in-out property <int> system-storage-scroll-offset: 0;
+    in-out property <int> system-info-index: 0;
+    in-out property <int> system-info-scroll-offset: 0;
+    in-out property <string> system-storage-job-state: "idle";
+    in-out property <string> system-storage-job-action: "none";
+    in-out property <int> system-storage-job-exit: 0;
+    in-out property <bool> system-storage-confirm: false;
+    in-out property <bool> system-reset-confirm: false;
+
+    /* Global lifecycle overlays. Business logic remains in nuubos-systemd. */
+    in-out property <bool> screensaver-active: false;
+    in-out property <int> screensaver-x-permille: 110;
+    in-out property <int> screensaver-y-permille: 170;
+    in-out property <bool> power-menu-open: false;
+    in-out property <int> power-menu-index: 0;
+    in-out property <bool> power-menu-confirm: false;
 
     /* Settings navigation depth:
      * 0 categories, 1 Connectivity, 2 Wi-Fi connect/scan,
@@ -867,9 +1034,46 @@ export component HomeWindow inherits Window {
      * 7 Bluetooth discovery, 8 known Bluetooth devices, 9 Bluetooth device detail,
      * 10 Controllers & Input, 11 Player Assignment, 12 controller list/picker,
      * 13 controller detail, 14 per-controller mapping, 15 input tester,
-     * 17 RGB Lighting. */
+     * 17 RGB Lighting, 18 Display & Audio,
+     * 19 System, 20 Storage, 21 System Information, 22 Restore Defaults,
+     * 23 General, 24 Profile, 25 Users, 26 User Detail. */
     in-out property <int> settings-view: 0;
+    /* Keep read-only/unavailable rows visually consistent with the rest of Settings.
+     * The bottom action bar, not row opacity, communicates whether Confirm/Select
+     * has an action for the currently focused row. */
+    property <bool> settings-select-hint-visible: root.settings-open && (
+        root.settings-choice-open ? true
+        : root.settings-view == 23 ? true
+        : root.settings-view == 24 ? true
+        : root.settings-view == 25 ? true
+        : root.settings-view == 26 ? true
+        : root.settings-view == 21 ? false
+        : root.settings-view == 20 ? (
+            root.system-storage-index == 3 ? root.system-storage-job-state != "running"
+            : root.system-storage-index == 4 ? (root.system-storage-job-state != "running"
+                && (root.system-tf2-state == "FOREIGN" || root.system-tf2-state == "OWNED"))
+            : root.system-storage-index == 5 ? (root.system-storage-job-state != "running"
+                && root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2")
+            : false)
+        : root.settings-view == 18 && root.display-audio-index == 0 ? root.display-brightness-available
+        : root.settings-view == 18 && root.display-audio-index == 2 ? root.audio-volume-supported
+        : root.settings-view == 4 && root.wifi-detail-index == 1 ? root.wifi-selected-security != root.i18n-strings[212]
+        : root.settings-view == 4 && root.wifi-detail-index >= 3 && root.wifi-detail-index <= 6 ? root.wifi-ip-mode == "manual"
+        : root.settings-view == 4 && root.wifi-detail-index == 8 ? root.wifi-selected-saved
+        : root.settings-view == 1 && root.connectivity-selected-index == 1 ? root.wifi-enabled
+        : root.settings-view == 1 && (root.connectivity-selected-index == 4 || root.connectivity-selected-index == 5) ? root.bluetooth-enabled
+        : root.settings-view == 10 && root.controllers-menu-index == 2 ? root.rumble-supported
+        : root.settings-view == 10 && root.controllers-menu-index == 3 ? root.lighting-supported
+        : root.settings-view == 17 && root.lighting-index == 2 ? root.lighting-color-capable
+        : true
+    );
     in-out property <int> connectivity-selected-index: 0;
+    /* Connectivity keeps the focused row inside the sectioned viewport.
+     * Category preview remains fixed at offset 0. */
+    property <int> connectivity-scroll-offset:
+        root.settings-view == 1
+            ? max(0, root.connectivity-selected-index - root.settings-sectioned-visible-rows + 1)
+            : 0;
     in-out property <int> wifi-menu-index: 0;
     in-out property <int> wifi-menu-scroll-offset: 0;
     in-out property <int> wifi-network-index: 0;
@@ -880,13 +1084,133 @@ export component HomeWindow inherits Window {
     in-out property <int> wifi-detail-scroll-offset: 0;
     in-out property <int> wifi-detail-return-view: 2;
 
+    /* UI foundation layout classes: 0=4:3/handheld, 1=square, 2=wide/TV.
+     * Geometry changes by class and by available size; this is not a single
+     * 640x480 raster scaled uniformly. */
+    property <int> layout-class: root.width * 4 >= root.height * 7 ? 2 : root.width * 10 <= root.height * 11 ? 1 : 0;
+    property <length> settings-rail-width:
+        root.layout-class == 2 ? max(220px, min(300px, root.width / 5))
+        : root.layout-class == 1 ? max(198px, min(260px, root.width * 0.245))
+        : max(198px, min(280px, root.width * 0.31));
+    property <length> settings-pane-x: root.settings-rail-width + 32px;
+    /* Page column: full pane on handhelds, capped on wide/TV outputs so
+     * titles and values stay close together and next to the rail. */
+    property <length> settings-pane-width: root.width - root.settings-pane-x;
+    property <length> settings-content-width: min(root.settings-pane-width - 44px, 860px);
+    property <length> settings-content-x: 22px;
+
+    /* Settings grid. One set of metrics for every page, rail and dropdown:
+     * rows grow with the logical height (42px at 480 lines, 60px cap), the
+     * pane header band is fixed, and every row is placed by srow-y(). Pixel
+     * density for HDMI/TV belongs to the compositor output scale, so these
+     * logical sizes stay readable at any physical resolution. */
+    property <length> settings-row-height: max(42px, min(60px, root.height * 0.0875));
+    property <length> settings-row-gap: 8px;
+    property <length> settings-row-step: root.settings-row-height + root.settings-row-gap;
+    property <length> settings-section-y: 62px;
+    property <length> settings-content-y: 88px;
+    property <length> settings-section-gap: 26px;
+    property <length> settings-notice-height: 16px;
+    property <length> settings-choice-list-y: 46px;
+    property <length> settings-pane-height: root.height - 102px;
+    property <length> settings-list-bottom: root.settings-pane-height - root.settings-notice-height - 6px;
+
     /* Responsive Settings viewport capacities. These bindings are derived from
      * the actual logical Window height, so HDMI/output resize immediately
-     * changes how many rows fit without carrying 640x480 scroll thresholds. */
+     * changes how many rows fit without carrying 640x480 scroll thresholds.
+     * Sectioned pages (General, Connectivity) reserve one inline header. */
     in-out property <int> settings-list-visible-rows:
-        max(1, floor(((root.height - 102px) - 92px - 40px) / 48px) + 1);
-    in-out property <int> wifi-detail-visible-rows:
-        max(1, floor(((root.height - 102px) - 104px) / 44px));
+        max(1, floor((root.settings-list-bottom - root.settings-content-y + root.settings-row-gap) / root.settings-row-step));
+    in-out property <int> settings-sectioned-visible-rows:
+        max(1, floor((root.settings-list-bottom - root.settings-content-y - root.settings-section-gap + root.settings-row-gap) / root.settings-row-step));
+    in-out property <int> wifi-detail-visible-rows: root.settings-list-visible-rows;
+
+    pure function srow-y(k: int, scroll: int, split: int) -> length {
+        root.settings-content-y + (k - scroll) * root.settings-row-step
+            + (split > 0 && scroll < split && k >= split ? root.settings-section-gap : 0px)
+    }
+    /* General has four sections: PROFILE (0-2, user), USERS (3-5), DATE &
+     * TIME (6-10) and KEYBOARD (11), the last three device-scoped. */
+    pure function general-row-y(k: int, scroll: int) -> length {
+        root.settings-content-y + (k - scroll) * root.settings-row-step
+            + ((scroll < 3 && k >= 3 ? 1 : 0) + (scroll < 6 && k >= 6 ? 1 : 0)
+               + (scroll < 11 && k >= 11 ? 1 : 0)) * root.settings-section-gap
+    }
+    pure function general-row-visible(k: int, scroll: int) -> bool {
+        k >= scroll && root.general-row-y(k, scroll) + root.settings-row-height <= root.settings-list-bottom
+    }
+    pure function srow-visible(k: int, scroll: int, rows: int) -> bool {
+        k >= scroll && k < scroll + rows
+    }
+    pure function signal-label(dbm: int) -> string {
+        dbm == 0 ? ""
+            : dbm >= -55 ? root.i18n-strings[200]
+            : dbm >= -67 ? root.i18n-strings[201]
+            : dbm >= -75 ? root.i18n-strings[202]
+            : root.i18n-strings[203]
+    }
+    pure function bluetooth-state-label(connected: bool, paired: bool, rssi: int) -> string {
+        connected ? root.i18n-strings[198]
+            : paired ? root.i18n-strings[199]
+            : root.signal-label(rssi)
+    }
+
+    /* Which category page is rendered (focused or merely highlighted). */
+    property <bool> page-general: root.settings-view == 23 || (root.settings-view == 0 && root.settings-selected-index == 0);
+    property <bool> page-connectivity: root.settings-view == 1 || (root.settings-view == 0 && root.settings-selected-index == 1);
+    property <bool> page-controllers: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
+    property <bool> page-display-audio: root.settings-view == 18 || (root.settings-view == 0 && root.settings-selected-index == 3);
+    property <bool> page-system: root.settings-view == 19 || (root.settings-view == 0 && root.settings-selected-index == 4);
+    property <bool> controllers-group: root.page-controllers || (root.settings-view >= 11 && root.settings-view <= 17);
+
+    property <string> settings-section-label:
+        root.page-general ? (root.general-scroll-offset >= 11 ? root.i18n-strings[336]
+            : root.general-scroll-offset >= 6 ? root.i18n-strings[335]
+            : root.general-scroll-offset >= 3 ? root.i18n-strings[334]
+            : root.i18n-strings[333])
+        /* General sub-pages keep the section they were opened from. */
+        : root.settings-view == 24 ? root.i18n-strings[333]
+        : root.settings-view == 25 || root.settings-view == 26 ? root.i18n-strings[334]
+        : root.page-connectivity ? (root.connectivity-scroll-offset >= 3 ? root.i18n-strings[160] : root.i18n-strings[156])
+        : root.settings-view >= 2 && root.settings-view <= 4 ? root.i18n-strings[156]
+        : root.settings-view >= 7 && root.settings-view <= 9 ? root.i18n-strings[160]
+        /* Controller Mapping: 17 button rows, then the sticks. */
+        : root.settings-view == 15 ? (root.controller-mapping-scroll-offset >= 17 ? root.i18n-strings[368] : root.i18n-strings[367])
+        : root.controllers-group ? root.i18n-strings[110]
+        : root.page-display-audio ? root.i18n-strings[131]
+        : root.page-system || (root.settings-view >= 20 && root.settings-view <= 22) ? root.i18n-strings[49]
+        : "";
+    /* Ownership chip. General and the user pages are split purely by
+     * ownership, so they show the USER/DEVICE chip alone. */
+    property <string> settings-section-scope:
+        root.page-general ? (root.general-scroll-offset >= 3 ? root.i18n-strings[313] : root.i18n-strings[312])
+        : root.settings-view == 24 ? root.i18n-strings[312]
+        : root.settings-view == 25 || root.settings-view == 26 ? root.i18n-strings[313]
+        : root.settings-section-label == "" ? ""
+        : root.controllers-group ? root.i18n-strings[312]
+        : root.i18n-strings[313];
+
+    property <string> settings-notice:
+        root.settings-view >= 2 && root.settings-view <= 4 ? root.wifi-notice
+        : root.settings-view >= 7 && root.settings-view <= 9 ? root.bluetooth-notice
+        : root.page-connectivity ? (root.wifi-notice != "" ? root.wifi-notice : root.bluetooth-notice)
+        : root.settings-view == 15 && root.controller-remap-waiting ? root.controller-remap-prompt
+        : "";
+
+    property <string> lighting-mode-label:
+        root.lighting-mode == "off" ? root.i18n-strings[54]
+        : root.lighting-mode == "static" ? root.i18n-strings[114]
+        : root.lighting-mode == "breathe" ? root.i18n-strings[115]
+        : root.lighting-mode == "rainbow" ? root.i18n-strings[116]
+        : root.lighting-mode == "pulse" ? root.i18n-strings[117]
+        : root.lighting-mode == "chase" ? root.i18n-strings[118]
+        : root.lighting-mode == "wave" ? root.i18n-strings[119]
+        : root.lighting-mode == "sparkle" ? root.i18n-strings[120]
+        : root.lighting-mode == "screen" ? root.i18n-strings[121]
+        : root.lighting-mode;
+    property <bool> lighting-color-capable: root.lighting-mode == "static"
+        || root.lighting-mode == "breathe" || root.lighting-mode == "pulse"
+        || root.lighting-mode == "chase" || root.lighting-mode == "wave";
     in-out property <int> wifi-ip-index: 0;
 
     in-out property <bool> wifi-enabled: false;
@@ -938,12 +1262,15 @@ export component HomeWindow inherits Window {
     callback system-keyboard-place-cursor(int);
     callback system-keyboard-accepted();
 
+    property <length> bluetooth-audio-topbar-reserve:
+        root.audio-bluetooth-available ? 30px : 0px;
+
     property <length> controllers-start-x:
-        root.controller-count >= 4 ? root.width - 253px
-        : root.controller-count == 3 ? root.width - 219px
-        : root.controller-count == 2 ? root.width - 185px
-        : root.controller-count == 1 ? root.width - 151px
-        : root.width - 113px;
+        root.controller-count >= 4 ? root.width - 253px - root.bluetooth-audio-topbar-reserve
+        : root.controller-count == 3 ? root.width - 219px - root.bluetooth-audio-topbar-reserve
+        : root.controller-count == 2 ? root.width - 185px - root.bluetooth-audio-topbar-reserve
+        : root.controller-count == 1 ? root.width - 151px - root.bluetooth-audio-topbar-reserve
+        : root.width - 113px - root.bluetooth-audio-topbar-reserve;
 
     title: "nuubOS";
     background: #0d0e10;
@@ -1016,16 +1343,31 @@ export component HomeWindow inherits Window {
                 height: 28px;
                 border-radius: 14px;
                 border-width: 1px;
-                border-color: #2c3036;
-                background: #00000000;
-            }
-            Image {
-                x: 122px;
-                y: 15px;
-                width: 20px;
-                height: 20px;
-                source: @image-url("assets/icons/user.svg");
-                image-fit: contain;
+                border-color: root.current-user-avatar-available ? #3a86ff : #2c3036;
+                background: #11151a;
+                clip: true;
+
+                /* Avatar arrives pre-cropped round (Rust round_avatar); inset it
+                 * inside the ring so the border stays visible. */
+                Image {
+                    x: parent.border-width;
+                    y: parent.border-width;
+                    width: parent.width - 2 * parent.border-width;
+                    height: parent.height - 2 * parent.border-width;
+                    source: root.current-user-avatar;
+                    image-fit: contain;
+                    visible: root.current-user-avatar-available;
+                }
+
+                Image {
+                    x: 4px;
+                    y: 4px;
+                    width: parent.width - 8px;
+                    height: parent.height - 8px;
+                    source: @image-url("assets/icons/user.svg");
+                    image-fit: contain;
+                    visible: !root.current-user-avatar-available;
+                }
             }
 
             /* Center: wall clock supplied by nuubos-statusd. */
@@ -1070,6 +1412,16 @@ export component HomeWindow inherits Window {
                 visible: root.controller-count >= 4;
             }
 
+            Image {
+                x: parent.width - 143px;
+                y: 14px;
+                width: 22px;
+                height: 22px;
+                source: @image-url("assets/icons/headphones.svg");
+                image-fit: contain;
+                visible: root.audio-bluetooth-available;
+            }
+
             WifiStatus {
                 x: parent.width - 113px;
                 y: 0px;
@@ -1081,18 +1433,19 @@ export component HomeWindow inherits Window {
                 y: 13px;
                 percent: root.battery-percent;
                 charging: root.battery-state == "charging";
+                battery-saver: root.system-effective-profile == "battery-saver";
             }
 
             Text {
-                x: parent.width - 48px;
+                x: parent.width - 56px;
                 y: 14px;
-                width: 40px;
+                width: 48px;
                 height: 24px;
                 horizontal-alignment: right;
                 vertical-alignment: center;
                 text: root.battery-label;
                 color: #e5e7eb;
-                font-size: 19px;
+                font-size: 18px;
                 font-weight: 700;
             }
         }
@@ -1126,7 +1479,7 @@ export component HomeWindow inherits Window {
                 Text {
                     x: 24px;
                     y: 24px;
-                    text: "Recently Played";
+                    text: root.i18n-strings[0];
                     color: #f5f6f8;
                     font-size: 27px;
                     font-weight: 700;
@@ -1135,7 +1488,7 @@ export component HomeWindow inherits Window {
                 Text {
                     x: 24px;
                     y: 68px;
-                    text: "nuubUI graphics foundation";
+                    text: root.i18n-strings[1];
                     color: #a8adb5;
                     font-size: 19px;
                 }
@@ -1143,7 +1496,7 @@ export component HomeWindow inherits Window {
                 Text {
                     x: 24px;
                     y: 100px;
-                    text: "Native layout • 640×480 • Wayland";
+                    text: root.i18n-strings[2];
                     color: #7f858e;
                     font-size: 16px;
                 }
@@ -1162,7 +1515,7 @@ export component HomeWindow inherits Window {
             Text {
                 x: 18px;
                 y: 14px;
-                text: "Settings";
+                text: root.i18n-strings[3];
                 color: #f5f6f8;
                 font-size: 29px;
                 font-weight: 700;
@@ -1171,61 +1524,28 @@ export component HomeWindow inherits Window {
             Rectangle {
                 x: 18px;
                 y: 54px;
-                width: 198px;
+                width: root.settings-rail-width;
                 height: parent.height - 70px;
                 background: #101114;
                 border-width: 1px;
                 border-color: #202329;
                 border-radius: 8px;
+                clip: true;
 
-                SettingsCategory {
+                for category[i] in [4, 5, 6, 7, 8]: SettingsCategory {
                     x: 8px;
-                    y: 8px;
+                    y: 8px + i * root.settings-row-step;
                     width: parent.width - 16px;
-                    label: "General";
-                    selected: root.settings-selected-index == 0;
-                }
-                SettingsCategory {
-                    x: 8px;
-                    y: 52px;
-                    width: parent.width - 16px;
-                    label: "Connectivity";
-                    selected: root.settings-selected-index == 1;
-                }
-                SettingsCategory {
-                    x: 8px;
-                    y: 96px;
-                    width: parent.width - 16px;
-                    label: "Controllers & Input";
-                    selected: root.settings-selected-index == 2;
-                }
-                SettingsCategory {
-                    x: 8px;
-                    y: 140px;
-                    width: parent.width - 16px;
-                    label: "Display & Audio";
-                    selected: root.settings-selected-index == 3;
-                }
-                SettingsCategory {
-                    x: 8px;
-                    y: 184px;
-                    width: parent.width - 16px;
-                    label: "Gaming";
-                    selected: root.settings-selected-index == 4;
-                }
-                SettingsCategory {
-                    x: 8px;
-                    y: 228px;
-                    width: parent.width - 16px;
-                    label: "System";
-                    selected: root.settings-selected-index == 5;
+                    height: root.settings-row-height;
+                    label: root.i18n-strings[category];
+                    selected: root.settings-selected-index == i;
                 }
             }
 
             Rectangle {
-                x: 230px;
+                x: root.settings-pane-x;
                 y: 0px;
-                width: parent.width - 230px;
+                width: parent.width - root.settings-pane-x;
                 height: parent.height;
                 background: #111214;
                 border-width: 1px;
@@ -1233,245 +1553,489 @@ export component HomeWindow inherits Window {
                 border-radius: 0px;
                 clip: true;
 
-                /* Category landing page. */
-                Text {
-                    x: 22px;
-                    y: 16px;
-                    width: parent.width - 44px;
-                    text: root.settings-view == 0
-                        ? (root.settings-selected-index == 0 ? "General"
-                            : root.settings-selected-index == 1 ? "Connectivity"
-                            : root.settings-selected-index == 2 ? "Controllers & Input"
-                            : root.settings-selected-index == 3 ? "Display & Audio"
-                            : root.settings-selected-index == 4 ? "Gaming"
-                            : "System")
-                        : root.settings-view == 1 ? "Connectivity"
-                        : root.settings-view == 2 ? "Connect to Wi-Fi"
-                        : root.settings-view == 3 ? "Saved Networks"
+                /* settings-view == 0 means the category rail owns focus.
+                 * The right pane is still the real page for the selected category;
+                 * entering a category changes interaction/focus, never content. */
+                MarqueeText {
+                    x: root.settings-content-x;
+                    y: 14px;
+                    width: root.settings-content-width;
+                    height: 36px;
+                    label: root.settings-view == 0
+                        ? (root.settings-selected-index == 0 ? root.i18n-strings[4]
+                            : root.settings-selected-index == 1 ? root.i18n-strings[5]
+                            : root.settings-selected-index == 2 ? root.i18n-strings[6]
+                            : root.settings-selected-index == 3 ? root.i18n-strings[7]
+                            : root.i18n-strings[8])
+                        : root.settings-view == 1 ? root.i18n-strings[5]
+                        : root.settings-view == 2 ? root.i18n-strings[9]
+                        : root.settings-view == 3 ? root.i18n-strings[10]
                         : root.settings-view == 4 ? root.wifi-selected-ssid
                         : root.settings-view == 6 ? root.keyboard-title
-                        : root.settings-view == 7 ? "Connect New Device"
-                        : root.settings-view == 8 ? "My Devices"
+                        : root.settings-view == 7 ? root.i18n-strings[11]
+                        : root.settings-view == 8 ? root.i18n-strings[12]
                         : root.settings-view == 9 ? root.bluetooth-selected-name
-                        : root.settings-view == 10 ? "Controllers & Input"
-                        : root.settings-view == 11 ? "Player Assignment"
-                        : root.settings-view == 12 ? "Controllers"
+                        : root.settings-view == 10 ? root.i18n-strings[6]
+                        : root.settings-view == 11 ? root.i18n-strings[13]
+                        : root.settings-view == 12 ? root.i18n-strings[14]
                         : root.settings-view == 13 ? root.controller-selected-name
-                        : root.settings-view == 14 ? "Input Tester"
-                        : root.settings-view == 15 ? "Controller Mapping"
-                        : root.settings-view == 16 ? "Internal Rumble"
-                        : root.settings-view == 17 ? "RGB Lighting"
-                        : "Settings";
-                    color: #f5f6f8;
-                    font-size: (root.settings-view == 4 && root.wifi-selected-ssid.character-count > 18)
-                        || (root.settings-view == 9 && root.bluetooth-selected-name.character-count > 18)
-                        || (root.settings-view == 13 && root.controller-selected-name.character-count > 18) ? 21px : 26px;
-                    font-weight: 700;
-                    overflow: elide;
+                        : root.settings-view == 14 ? root.i18n-strings[15]
+                        : root.settings-view == 15 ? root.i18n-strings[16]
+                        : root.settings-view == 16 ? root.i18n-strings[17]
+                        : root.settings-view == 17 ? root.i18n-strings[18]
+                        : root.settings-view == 18 ? root.i18n-strings[7]
+                        : root.settings-view == 19 ? root.i18n-strings[8]
+                        : root.settings-view == 20 ? root.i18n-strings[19]
+                        : root.settings-view == 21 ? root.i18n-strings[20]
+                        : root.settings-view == 22 ? root.i18n-strings[21]
+                        : root.settings-view == 23 ? root.i18n-strings[4]
+                        : root.settings-view == 24 ? root.i18n-strings[284]
+                        : root.settings-view == 25 ? root.i18n-strings[287]
+                        : root.settings-view == 26 ? root.profile-edit-name
+                        : root.i18n-strings[3];
+                    text-color: #f5f6f8;
+                    text-size: 26px;
+                    text-weight: 700;
                 }
 
-                Text {
-                    x: 22px;
-                    y: 52px;
-                    width: parent.width - 44px;
-                    text: root.settings-view == 0
-                        ? (root.settings-selected-index == 0 ? "Profiles, language and time"
-                            : root.settings-selected-index == 1 ? ""
-                            : root.settings-selected-index == 2 ? ""
-                            : root.settings-selected-index == 3 ? "Screen, HDMI, brightness and audio"
-                            : root.settings-selected-index == 4 ? "Gaming behaviour and performance"
-                            : "Power, storage and system maintenance")
-                        : root.settings-view == 1 ? ""
-                        : root.settings-view == 2 ? (root.wifi-networks.length == 0
-                            ? "Scanning nearby networks…"
-                            : root.wifi-scanning ? "Refreshing nearby networks…"
-                            : "Choose a network or add a hidden network")
-                        : root.settings-view == 3 ? "Saved device-global Wi-Fi networks"
-                        : root.settings-view == 4 ? root.wifi-selected-security
-                            + (root.wifi-selected-saved ? " • Saved" : "")
-                            + (root.wifi-selected-current ? " • Connected" : "")
-                        : root.settings-view == 6 ? (root.keyboard-secret ? "Password is hidden while typing" : "Controller or physical keyboard")
-                        : root.settings-view == 7 ? (root.bluetooth-scanning ? "Scanning nearby Bluetooth devices…" : "Choose a nearby Bluetooth device")
-                        : root.settings-view == 8 ? "Paired and connected Bluetooth devices"
-                        : root.settings-view == 9 ? root.bluetooth-selected-kind
-                            + (root.bluetooth-selected-paired ? " • Paired" : "")
-                            + (root.bluetooth-selected-connected ? " • Connected" : "")
-                        : root.settings-view == 10 ? ""
-                        : root.settings-view == 11 ? "Preferred slots are compacted when a controller is unavailable"
-                        : root.settings-view == 12 ? "Available built-in, USB and Bluetooth controllers"
-                        : root.settings-view == 13 ? root.controller-selected-transport
-                            + (root.controller-selected-effective-player > 0 ? " • Runtime P" + root.controller-selected-effective-player : "")
-                        : root.settings-view == 14 ? "All buttons and axes • Hotkey + Start to exit"
-                        : root.settings-view == 15 ? (root.controller-remap-waiting ? "Press the new button now…" : "Select an action to remap")
-                        : root.settings-view == 16 ? "User preference for the internal console rumble"
-                        : root.settings-view == 17 ? (root.lighting-active-effect != "" ? "System effect • " + root.lighting-active-effect : root.lighting-mode == "screen" ? "Screen Reactive • follows compositor color feed" : "User RGB baseline and system effects")
-                        : "Settings";
-                    color: #7f858e;
-                    font-size: 14px;
-                    font-weight: 500;
-                    overflow: elide;
+                /* One sticky section header for every page. It names the section
+                 * of the first visible row and its USER/DEVICE ownership, so
+                 * scope is always explicit (EPIC-004 US-SET-003). */
+                SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.settings-section-y;
+                    width: root.settings-content-width;
+                    label: root.settings-section-label;
+                    scope-label: root.settings-section-scope;
+                    visible: root.settings-section-label != "" || root.settings-section-scope != "";
                 }
 
-                /* Normal category placeholders. Connectivity is the first real Settings domain. */
-                Text {
-                    x: 22px;
-                    y: 88px;
-                    text: root.settings-selected-index == 1 ? "Connectivity" : "Sections";
-                    color: #8e949d;
-                    font-size: 15px;
-                    font-weight: 700;
-                    visible: root.settings-view == 0 && root.settings-selected-index != 1 && root.settings-selected-index != 2;
+                /* Inline header for Connectivity's second section while it is
+                 * below the top. */
+                SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.srow-y(3, root.connectivity-scroll-offset, 3) - root.settings-section-gap;
+                    width: root.settings-content-width;
+                    label: root.i18n-strings[160];
+                    scope-label: root.i18n-strings[313];
+                    visible: root.page-connectivity
+                        && root.connectivity-scroll-offset < 3
+                        && 3 < root.connectivity-scroll-offset + root.settings-sectioned-visible-rows;
                 }
 
-                SettingsTopic {
-                    x: 22px;
-                    y: 116px;
-                    width: parent.width - 44px;
-                    label: root.settings-selected-index == 0 ? "User & Profile"
-                        : root.settings-selected-index == 2 ? "Controllers"
-                        : root.settings-selected-index == 3 ? "Display & HDMI"
-                        : root.settings-selected-index == 4 ? "Performance Profiles"
-                        : "Battery & Power";
-                    visible-topic: root.settings-view == 0 && root.settings-selected-index != 1 && root.settings-selected-index != 2;
+                /* Inline headers for General's later sections. */
+                for section[i] in [
+                    { start: 3, label: root.i18n-strings[334] },
+                    { start: 6, label: root.i18n-strings[335] },
+                    { start: 11, label: root.i18n-strings[336] },
+                ]: SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.general-row-y(section.start, root.general-scroll-offset) - root.settings-section-gap;
+                    width: root.settings-content-width;
+                    label: section.label;
+                    scope-label: root.i18n-strings[313];
+                    visible: root.page-general
+                        && root.general-scroll-offset < section.start
+                        && root.general-row-visible(section.start, root.general-scroll-offset);
                 }
-                SettingsTopic {
-                    x: 22px;
-                    y: 166px;
-                    width: parent.width - 44px;
-                    label: root.settings-selected-index == 0 ? "Language & Region"
-                        : root.settings-selected-index == 2 ? "Controller Mapping"
-                        : root.settings-selected-index == 3 ? "Brightness"
-                        : root.settings-selected-index == 4 ? "Global Gaming Options"
-                        : "Storage";
-                    visible-topic: root.settings-view == 0 && root.settings-selected-index != 1 && root.settings-selected-index != 2;
+
+                /* ---------------------------------------------------------- General */
+                for row[k] in [
+                    { title: root.i18n-strings[192], value: root.current-user-name, enabled: true, nav: true, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[193], value: root.ui-language-name, enabled: true, nav: false, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[194], value: "nuubOS", enabled: true, nav: false, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[287], value: root.user-count + "", enabled: true, nav: true, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[276], value: root.user-login-mode == "default" ? root.i18n-strings[278] : root.i18n-strings[277], enabled: root.user-count > 1, nav: false, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[324], value: root.default-user-name == "" ? root.i18n-strings[173] : root.default-user-name, enabled: root.user-count > 1 && root.user-login-mode == "default", nav: false, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[280], value: root.timezone, enabled: true, nav: false, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[281], value: "", enabled: true, nav: false, toggle: true, on: root.automatic-time, detail: "" },
+                    { title: root.i18n-strings[326], value: root.manual-date-label, enabled: !root.automatic-time, nav: false, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[327], value: root.manual-time-label, enabled: !root.automatic-time, nav: false, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[282], value: root.last-time-sync-label, enabled: root.automatic-time, nav: false, toggle: false, on: false, detail: root.regional-notice },
+                    { title: root.i18n-strings[283], value: root.keyboard-layout-label, enabled: true, nav: false, toggle: false, on: false, detail: "" },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.general-row-y(k, root.general-scroll-offset);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    detail: row.detail;
+                    enabled: row.enabled;
+                    navigates: row.nav;
+                    toggle: row.toggle;
+                    toggle-on: row.on;
+                    selected: root.settings-view == 23 && root.general-index == k;
+                    visible: root.page-general
+                        && root.general-row-visible(k, root.general-scroll-offset);
                 }
-                SettingsTopic {
-                    x: 22px;
-                    y: 216px;
-                    width: parent.width - 44px;
-                    label: root.settings-selected-index == 0 ? "Date & Time"
-                        : root.settings-selected-index == 2 ? "Input Tester"
-                        : root.settings-selected-index == 3 ? "Audio"
-                        : root.settings-selected-index == 5 ? "System Information"
+
+                /* ------------------------------------------- Profile (own / other) */
+                SettingsSelectableRow {
+                    x: root.settings-content-x; y: root.srow-y(0, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
+                    title: root.i18n-strings[285];
+                    value: root.profile-edit-name;
+                    selected: (root.settings-view == 24 || root.settings-view == 26) && root.profile-index == 0;
+                    visible: root.settings-view == 24 || root.settings-view == 26;
+                }
+                SettingsSelectableRow {
+                    x: root.settings-content-x; y: root.srow-y(1, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
+                    title: root.i18n-strings[286];
+                    detail: root.i18n-strings[294];
+                    preview: root.profile-edit-avatar;
+                    show-preview: true;
+                    selected: (root.settings-view == 24 || root.settings-view == 26) && root.profile-index == 1;
+                    visible: root.settings-view == 24 || root.settings-view == 26;
+                }
+                SettingsActionButton {
+                    x: root.settings-content-x; y: root.srow-y(2, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
+                    label: root.user-delete-confirm ? root.i18n-strings[290] : root.i18n-strings[289];
+                    danger: true;
+                    selected: root.settings-view == 26 && root.profile-index == 2;
+                    enabled: root.profile-edit-user-id != root.active-user-id && root.user-count > 1;
+                    visible: root.settings-view == 26;
+                }
+                SettingsHint {
+                    x: root.settings-content-x; y: root.srow-y(3, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
+                    text: root.i18n-strings[305];
+                    visible: root.settings-view == 26;
+                }
+
+                /* ---------------------------------------------------- Manage Users */
+                for user[i] in root.users : SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(i, root.user-list-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: user.name;
+                    value: user.active ? root.i18n-strings[304] : user.default-user ? root.i18n-strings[303] : "";
+                    preview: user.avatar;
+                    show-preview: true;
+                    selected: root.settings-view == 25 && root.user-list-index == i;
+                    visible: root.settings-view == 25
+                        && root.srow-visible(i, root.user-list-scroll, root.settings-list-visible-rows);
+                }
+                SettingsActionButton {
+                    x: root.settings-content-x;
+                    y: root.srow-y(root.user-count, root.user-list-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    label: root.i18n-strings[288];
+                    selected: root.settings-view == 25 && root.user-list-index == root.user-count;
+                    visible: root.settings-view == 25
+                        && root.srow-visible(root.user-count, root.user-list-scroll, root.settings-list-visible-rows);
+                }
+
+                /* ----------------------------------------------------------- System */
+                for row[k] in [
+                    {
+                        title: root.i18n-strings[50],
+                        value: root.system-profile == "battery-saver" ? root.i18n-strings[51] : root.i18n-strings[52],
+                        detail: root.system-effective-profile != root.system-profile
+                            ? root.i18n-strings[214] + (root.system-effective-profile == "battery-saver" ? root.i18n-strings[51] : root.i18n-strings[52])
+                            : "",
+                        nav: false,
+                    },
+                    {
+                        title: root.i18n-strings[53],
+                        value: root.system-auto-battery-threshold <= 0 ? root.i18n-strings[54] : "≤ " + root.system-auto-battery-threshold + "%",
+                        detail: "", nav: false,
+                    },
+                    {
+                        title: root.i18n-strings[55],
+                        value: root.system-screensaver-after-min <= 0 ? root.i18n-strings[54] : root.system-screensaver-after-min + root.i18n-strings[215],
+                        detail: "", nav: false,
+                    },
+                    {
+                        title: root.i18n-strings[56],
+                        value: root.system-sleep-after-min <= 0 ? root.i18n-strings[54] : root.system-sleep-after-min + root.i18n-strings[215],
+                        detail: root.system-screensaver-after-min > 0 ? root.i18n-strings[57] : "",
+                        nav: false,
+                    },
+                    {
+                        title: root.i18n-strings[328],
+                        value: root.system-poweroff-after-min <= 0 ? root.i18n-strings[54] : root.system-poweroff-after-min + root.i18n-strings[215],
+                        detail: root.system-poweroff-after-min > 0 && root.system-sleep-after-min > 0 && !root.system-rtc-wakeup
+                            ? root.i18n-strings[59]
+                            : root.system-sleep-after-min > 0 ? root.i18n-strings[60]
+                            : root.system-screensaver-after-min > 0 ? root.i18n-strings[61]
+                            : "",
+                        nav: false,
+                    },
+                    { title: root.i18n-strings[19], value: root.system-storage-active + " • " + root.system-storage-health, detail: "", nav: true },
+                    { title: root.i18n-strings[20], value: "", detail: "", nav: true },
+                    { title: root.i18n-strings[21], value: "", detail: "", nav: true },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, root.system-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    detail: row.detail;
+                    navigates: row.nav;
+                    selected: root.settings-view == 19 && root.system-index == k;
+                    visible: root.page-system
+                        && root.srow-visible(k, root.system-scroll-offset, root.settings-list-visible-rows);
+                }
+
+                /* Storage page. Every row participates in controller navigation,
+                 * including read-only status rows. Confirm is intentionally a no-op
+                 * on informational rows. SYSTEM/STATE remain hidden. */
+                SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(0, root.system-storage-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.i18n-strings[62];
+                    value: root.system-storage-active + " • " + root.system-storage-mode;
+                    selected: root.settings-view == 20 && root.system-storage-index == 0;
+                    visible: root.settings-view == 20
+                        && root.srow-visible(0, root.system-storage-scroll-offset, root.settings-list-visible-rows);
+                }
+                SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(1, root.system-storage-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.i18n-strings[63];
+                    value: root.system-storage-usage;
+                    selected: root.settings-view == 20 && root.system-storage-index == 1;
+                    visible: root.settings-view == 20
+                        && root.srow-visible(1, root.system-storage-scroll-offset, root.settings-list-visible-rows);
+                }
+                SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(2, root.system-storage-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.i18n-strings[64];
+                    value: root.system-tf2-state == "ABSENT" ? root.i18n-strings[65]
+                        : root.system-tf2-state == "OWNED" ? root.i18n-strings[66]
+                        : root.system-tf2-state == "FOREIGN" ? root.i18n-strings[67]
+                        : root.system-tf2-state;
+                    detail: root.system-tf2-state == "FOREIGN" ? root.i18n-strings[68]
+                        : root.system-storage-action-required != "NONE" ? root.system-storage-action-required
                         : "";
-                    visible-topic: root.settings-view == 0 && (root.settings-selected-index == 0
-                        || root.settings-selected-index == 3
-                        || root.settings-selected-index == 5);
+                    selected: root.settings-view == 20 && root.system-storage-index == 2;
+                    visible: root.settings-view == 20
+                        && root.srow-visible(2, root.system-storage-scroll-offset, root.settings-list-visible-rows);
                 }
-                SettingsTopic {
-                    x: 22px;
-                    y: 266px;
-                    width: parent.width - 44px;
-                    label: root.settings-selected-index == 2 ? "Rumble & RGB"
-                        : root.settings-selected-index == 5 ? "Updates & Recovery" : "";
-                    visible-topic: root.settings-view == 0 && root.settings-selected-index == 5;
+                SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(3, root.system-storage-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.i18n-strings[69];
+                    value: root.system-backup-policy == "OFF" ? root.i18n-strings[54]
+                        : root.system-backup-policy == "DAILY" ? root.i18n-strings[70]
+                        : root.system-backup-policy == "WEEKLY" ? root.i18n-strings[71]
+                        : root.system-backup-policy == "MONTHLY" ? root.i18n-strings[72]
+                        : root.system-backup-policy;
+                    detail: root.system-storage-job-state == "succeeded" && root.system-storage-job-action == "backup" ? root.i18n-strings[73]
+                        : root.system-backup-due == "1" ? root.i18n-strings[74]
+                        : root.system-backup-reason == "CLOCK_UNAVAILABLE" ? root.i18n-strings[75]
+                        : root.system-backup-reason == "CLOCK_BEFORE_LAST_SUCCESS" ? root.i18n-strings[76]
+                        : "";
+                    enabled: root.system-storage-job-state != "running";
+                    selected: root.settings-view == 20 && root.system-storage-index == 3;
+                    visible: root.settings-view == 20
+                        && root.srow-visible(3, root.system-storage-scroll-offset, root.settings-list-visible-rows);
+                }
+                SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(4, root.system-storage-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2" ? root.i18n-strings[77]
+                        : root.system-tf2-state == "OWNED" ? root.i18n-strings[78]
+                        : root.i18n-strings[79];
+                    value: root.system-storage-job-state == "running" ? root.i18n-strings[80]
+                        : root.system-tf2-state == "ABSENT" ? root.i18n-strings[81]
+                        : root.system-tf2-state == "FOREIGN" && root.system-storage-confirm ? root.i18n-strings[82]
+                        : root.system-tf2-state == "FOREIGN" ? root.i18n-strings[83]
+                        : root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2" && root.system-storage-confirm ? root.i18n-strings[82]
+                        : root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2" ? root.i18n-strings[84]
+                        : root.system-tf2-state == "OWNED" ? root.i18n-strings[85]
+                        : root.i18n-strings[205];
+                    detail: root.system-tf2-state == "FOREIGN" && root.system-storage-confirm ? root.i18n-strings[86]
+                        : root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2" && root.system-storage-confirm ? root.i18n-strings[87]
+                        : "";
+                    enabled: root.system-storage-job-state != "running"
+                        && (root.system-tf2-state == "FOREIGN" || root.system-tf2-state == "OWNED");
+                    selected: root.settings-view == 20 && root.system-storage-index == 4;
+                    visible: root.settings-view == 20
+                        && root.srow-visible(4, root.system-storage-scroll-offset, root.settings-list-visible-rows);
+                }
+                SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(5, root.system-storage-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.i18n-strings[88];
+                    value: root.system-storage-job-state == "running" ? root.i18n-strings[80]
+                        : root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2" ? root.i18n-strings[217]
+                        : root.i18n-strings[89];
+                    detail: root.system-backup-due == "1" && root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2" ? root.i18n-strings[74] : "";
+                    enabled: root.system-storage-job-state != "running"
+                        && root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2";
+                    selected: root.settings-view == 20 && root.system-storage-index == 5;
+                    visible: root.settings-view == 20
+                        && root.srow-visible(5, root.system-storage-scroll-offset, root.settings-list-visible-rows);
+                }
+                SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(6, root.system-storage-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.i18n-strings[90];
+                    value: root.system-storage-job-state == "running" ? root.i18n-strings[91]
+                        : root.system-storage-job-state == "succeeded" ? root.i18n-strings[92]
+                        : root.system-storage-job-state == "failed" ? root.i18n-strings[218] + root.system-storage-job-exit + ")"
+                        : root.i18n-strings[94];
+                    detail: root.system-storage-job-action == "none" ? ""
+                        : root.system-storage-job-action == "adopt" ? root.i18n-strings[95]
+                        : root.system-storage-job-action == "move-back" ? root.i18n-strings[96]
+                        : root.system-storage-job-action == "backup" ? root.i18n-strings[97]
+                        : root.system-storage-job-action;
+                    selected: root.settings-view == 20 && root.system-storage-index == 6;
+                    visible: root.settings-view == 20
+                        && root.srow-visible(6, root.system-storage-scroll-offset, root.settings-list-visible-rows);
                 }
 
+                /* Live System Information. All rows are selectable for consistent
+                 * controller navigation, but Confirm intentionally performs no action. */
+                for row[k] in [
+                    { title: "nuubOS", value: root.system-version + " • " + root.system-build },
+                    { title: root.i18n-strings[98], value: root.system-device-model },
+                    { title: root.i18n-strings[99], value: root.system-kernel },
+                    { title: root.i18n-strings[100], value: root.battery-percent >= 0 ? root.battery-percent + "% • " + root.battery-state : root.i18n-strings[205] },
+                    { title: root.i18n-strings[101], value: root.system-cpu-clock + " • " + root.system-cpu-temperature },
+                    { title: root.i18n-strings[102], value: root.system-gpu-clock + " • " + root.system-gpu-temperature },
+                    { title: root.i18n-strings[103], value: root.system-network },
+                    { title: root.i18n-strings[19], value: root.system-storage-active + " • " + root.system-storage-usage },
+                    { title: root.i18n-strings[104], value: root.system-memory },
+                    { title: root.i18n-strings[105], value: root.system-uptime },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, root.system-info-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    title-fraction: 0.30;
+                    selected: root.settings-view == 21 && root.system-info-index == k;
+                    visible: root.settings-view == 21
+                        && root.srow-visible(k, root.system-info-scroll-offset, root.settings-list-visible-rows);
+                }
 
-                /* Controllers & Input is entirely active-user scoped. Keep the same
-                 * macro-section visible while the category is merely highlighted. */
-                Text {
-                    x: 22px;
-                    y: 66px;
-                    text: "CONTROLLERS & INPUT";
-                    color: #3a86ff;
-                    font-size: 13px;
-                    font-weight: 700;
-                    visible: root.settings-view == 10
-                        || (root.settings-view == 0 && root.settings-selected-index == 2);
+                /* Restore Defaults: explanation flows above the single action. */
+                Rectangle {
+                    x: root.settings-content-x;
+                    y: root.settings-content-y;
+                    width: root.settings-content-width;
+                    height: root.settings-list-bottom - root.settings-content-y;
+                    visible: root.settings-view == 22;
+
+                  VerticalLayout {
+                    spacing: root.settings-row-gap;
+                    alignment: start;
+
+                    Text {
+                        text: root.i18n-strings[106];
+                        color: #c8ccd2;
+                        font-size: 16px;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.i18n-strings[107];
+                        color: #8e949d;
+                        font-size: 14px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { height: root.settings-row-gap; }
+                    SettingsActionButton {
+                        height: root.settings-row-height;
+                        label: root.system-reset-confirm ? root.i18n-strings[108] : root.i18n-strings[109];
+                        selected: true;
+                        danger: true;
+                    }
+                  }
                 }
-                UserScopeBadge {
-                    x: 174px;
-                    y: 64px;
-                    visible: root.settings-view == 10
-                        || (root.settings-view == 0 && root.settings-selected-index == 2);
-                }
-                SettingsSelectableRow {
-                    x: 22px; y: 84px; width: parent.width - 44px;
-                    title: "Player Assignment";
-                    value: "P1–P4";
-                    selected: root.settings-view == 10 && root.controllers-menu-index == 0;
-                    visible: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
-                }
-                SettingsSelectableRow {
-                    x: 22px; y: 130px; width: parent.width - 44px;
-                    title: "Controllers";
-                    value: root.controllers.length + " available";
-                    selected: root.settings-view == 10 && root.controllers-menu-index == 1;
-                    visible: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
-                }
-                SettingsSelectableRow {
-                    x: 22px; y: 176px; width: parent.width - 44px;
-                    title: "Internal Rumble";
-                    value: root.rumble-supported ? (root.rumble-enabled ? "Enabled" : "Disabled") : "Unavailable";
-                    selected: root.settings-view == 10 && root.controllers-menu-index == 2;
-                    enabled: root.rumble-supported;
-                    visible: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
-                }
-                SettingsSelectableRow {
-                    x: 22px; y: 222px; width: parent.width - 44px;
-                    title: "RGB Lighting";
-                    value: root.lighting-supported ? (
-                        root.lighting-mode == "off" ? "Off"
-                        : root.lighting-mode == "static" ? "Static"
-                        : root.lighting-mode == "breathe" ? "Breathe"
-                        : root.lighting-mode == "rainbow" ? "Rainbow"
-                        : root.lighting-mode == "pulse" ? "Pulse"
-                        : root.lighting-mode == "chase" ? "Chase"
-                        : root.lighting-mode == "wave" ? "Wave"
-                        : root.lighting-mode == "sparkle" ? "Sparkle"
-                        : root.lighting-mode == "screen" ? "Screen Reactive"
-                        : root.lighting-mode
-                    ) : "Unavailable";
-                    selected: root.settings-view == 10 && root.controllers-menu-index == 3;
-                    enabled: root.lighting-supported;
-                    visible: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
+
+                /* ---------------------------------------------- Controllers & Input */
+                for row[k] in [
+                    { title: root.i18n-strings[13], value: root.i18n-strings[111], enabled: true },
+                    { title: root.i18n-strings[14], value: root.controllers.length + root.i18n-strings[219], enabled: true },
+                    {
+                        title: root.i18n-strings[17],
+                        value: root.rumble-supported ? (root.rumble-enabled ? root.i18n-strings[112] : root.i18n-strings[113]) : root.i18n-strings[205],
+                        enabled: root.rumble-supported,
+                    },
+                    {
+                        title: root.i18n-strings[18],
+                        value: root.lighting-supported ? root.lighting-mode-label : root.i18n-strings[205],
+                        enabled: root.lighting-supported,
+                    },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    enabled: row.enabled;
+                    navigates: row.enabled;
+                    selected: root.settings-view == 10 && root.controllers-menu-index == k;
+                    visible: root.page-controllers;
                 }
 
                 /* Preferred player assignment. */
                 for assignment[i] in root.player-assignments: SettingsSelectableRow {
-                    x: 22px;
-                    y: 92px + i * 48px;
-                    width: parent.width - 44px;
-                    title: "Player " + assignment.player;
-                    value: assignment.controller-name == "" ? "Automatic" : assignment.controller-name
-                        + (assignment.available ? "" : " • unavailable");
+                    x: root.settings-content-x;
+                    y: root.srow-y(i, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.i18n-strings[220] + assignment.player;
+                    value: assignment.controller-name == "" ? root.i18n-strings[122] : assignment.controller-name
+                        + (assignment.available ? "" : root.i18n-strings[221]);
                     selected: root.settings-view == 11 && root.player-assignment-index == i;
-                    visible: root.settings-view == 11;
+                    visible: root.settings-view == 11
+                        && root.srow-visible(i, 0, root.settings-list-visible-rows);
                 }
 
                 /* Available controller inventory. */
                 for controller[i] in root.controllers: SettingsSelectableRow {
-                    x: 22px;
-                    y: 92px + (i - root.controller-list-scroll-offset) * 48px;
-                    width: parent.width - 44px;
+                    x: root.settings-content-x;
+                    y: root.srow-y(i, root.controller-list-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
                     title: controller.name;
                     value: controller.effective-player > 0 ? "P" + controller.effective-player : controller.transport;
+                    navigates: true;
+                    emphasized: controller.connected;
                     selected: root.settings-view == 12 && root.controller-list-index == i;
                     visible: root.settings-view == 12
-                        && i >= root.controller-list-scroll-offset
-                        && i < root.controller-list-scroll-offset + root.settings-list-visible-rows;
+                        && root.srow-visible(i, root.controller-list-scroll-offset, root.settings-list-visible-rows);
                 }
 
-                SettingsSelectableRow {
-                    x: 22px; y: 92px; width: parent.width - 44px;
-                    title: "Controller Mapping";
-                    value: "";
-                    selected: root.settings-view == 13 && root.controller-detail-index == 0;
-                    visible: root.settings-view == 13;
-                }
-                SettingsSelectableRow {
-                    x: 22px; y: 140px; width: parent.width - 44px;
-                    title: "Input Tester";
-                    value: "";
-                    selected: root.settings-view == 13 && root.controller-detail-index == 1;
+                for row[k] in [root.i18n-strings[16], root.i18n-strings[15]]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row;
+                    navigates: true;
+                    selected: root.settings-view == 13 && root.controller-detail-index == k;
                     visible: root.settings-view == 13;
                 }
 
                 /* Per-controller Input Tester: one graphical controller plus
                  * one large mapped/physical label. */
-                ControllerTesterVisual {
-                    x: 22px; y: 76px; width: parent.width - 44px;
+                tester-visual := ControllerTesterVisual {
+                    x: root.settings-content-x;
+                    y: root.settings-content-y;
+                    width: root.settings-content-width;
                     visible: root.settings-view == 14;
                     face-south: root.tester-face-south;
                     face-east: root.tester-face-east;
@@ -1492,159 +2056,388 @@ export component HomeWindow inherits Window {
                     left-trigger: root.tester-left-trigger;
                     right-trigger: root.tester-right-trigger;
                 }
-                Text {
-                    x: 22px; y: 286px; width: parent.width - 44px; height: 48px;
-                    text: root.tester-action;
-                    color: #f5f6f8;
-                    font-size: 20px;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                MarqueeText {
+                    x: root.settings-content-x;
+                    y: tester-visual.y + tester-visual.height + root.settings-row-gap;
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    label: root.tester-action;
+                    text-color: #f5f6f8;
+                    text-size: 20px;
+                    text-weight: 700;
+                    align-center: true;
                     visible: root.settings-view == 14;
-                    overflow: elide;
                 }
 
-                /* Deadzone is a first-class per-controller mapping setting. */
-                SettingsSelectableRow {
-                    x: 22px;
-                    y: 92px - root.controller-mapping-scroll-offset * 44px;
-                    width: parent.width - 44px;
-                    title: "Left Stick Deadzone";
-                    value: root.controller-left-deadzone + "%";
-                    selected: root.settings-view == 15 && root.controller-mapping-index == 0;
-                    visible: root.settings-view == 15
-                        && 0 >= root.controller-mapping-scroll-offset
-                        && 0 < root.controller-mapping-scroll-offset + root.settings-list-visible-rows;
-                }
-                SettingsSelectableRow {
-                    x: 22px;
-                    y: 136px - root.controller-mapping-scroll-offset * 44px;
-                    width: parent.width - 44px;
-                    title: "Right Stick Deadzone";
-                    value: root.controller-right-deadzone + "%";
-                    selected: root.settings-view == 15 && root.controller-mapping-index == 1;
-                    visible: root.settings-view == 15
-                        && 1 >= root.controller-mapping-scroll-offset
-                        && 1 < root.controller-mapping-scroll-offset + root.settings-list-visible-rows;
-                }
+                /* Controller Mapping: buttons, stick axes with their deadzones and
+                 * Restore Default Mapping are rows of one service-ordered list. */
                 for mapping[i] in root.controller-mapping: SettingsSelectableRow {
-                    x: 22px;
-                    y: 92px + (i + 2 - root.controller-mapping-scroll-offset) * 44px;
-                    width: parent.width - 44px;
+                    x: root.settings-content-x;
+                    y: root.srow-y(i, root.controller-mapping-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
                     title: mapping.label;
-                    value: mapping.binding;
-                    selected: root.settings-view == 15 && root.controller-mapping-index == i + 2;
+                    /* The capture prompt itself is the page notice line. */
+                    value: root.controller-remap-waiting && root.controller-mapping-index == i ? "…"
+                        : mapping.kind == 2 ? (mapping.control == "left_deadzone" ? root.controller-left-deadzone : root.controller-right-deadzone) + "%"
+                        : mapping.kind == 3 && root.controller-mapping-reset-armed ? root.i18n-strings[366]
+                        : mapping.value;
+                    selected: root.settings-view == 15 && root.controller-mapping-index == i;
                     visible: root.settings-view == 15
-                        && i + 2 >= root.controller-mapping-scroll-offset
-                        && i + 2 < root.controller-mapping-scroll-offset + root.settings-list-visible-rows;
+                        && root.srow-visible(i, root.controller-mapping-scroll-offset, root.settings-list-visible-rows);
                 }
 
+                /* Internal rumble. */
                 SettingsSelectableRow {
-                    x: 22px; y: 92px; width: parent.width - 44px;
-                    title: "Enabled";
-                    value: root.rumble-enabled ? "On" : "Off";
+                    x: root.settings-content-x; y: root.srow-y(0, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
+                    title: root.i18n-strings[112];
+                    toggle: true;
+                    toggle-on: root.rumble-enabled;
                     selected: root.settings-view == 16 && root.rumble-index == 0;
                     visible: root.settings-view == 16;
                 }
                 SettingsSelectableRow {
-                    x: 22px; y: 140px; width: parent.width - 44px;
-                    title: "Test Rumble";
-                    value: "";
+                    x: root.settings-content-x; y: root.srow-y(1, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
+                    title: root.i18n-strings[125];
                     selected: root.settings-view == 16 && root.rumble-index == 1;
                     visible: root.settings-view == 16;
                 }
 
-                SettingsSelectableRow {
-                    x: 22px; y: 92px; width: parent.width - 44px;
-                    title: "Mode"; value:
-                        root.lighting-mode == "off" ? "Off"
-                        : root.lighting-mode == "static" ? "Static"
-                        : root.lighting-mode == "breathe" ? "Breathe"
-                        : root.lighting-mode == "rainbow" ? "Rainbow"
-                        : root.lighting-mode == "pulse" ? "Pulse"
-                        : root.lighting-mode == "chase" ? "Chase"
-                        : root.lighting-mode == "wave" ? "Wave"
-                        : root.lighting-mode == "sparkle" ? "Sparkle"
-                        : root.lighting-mode == "screen" ? "Screen Reactive"
-                        : root.lighting-mode;
-                    selected: root.settings-view == 17 && root.lighting-index == 0;
-                    visible: root.settings-view == 17;
+                /* RGB Lighting. */
+                for row[k] in [
+                    { title: root.i18n-strings[126], value: root.lighting-mode-label, enabled: true, toggle: false },
+                    { title: root.i18n-strings[127], value: root.lighting-brightness + "%", enabled: true, toggle: false },
+                    {
+                        title: root.i18n-strings[128],
+                        value: root.lighting-color-capable ? root.lighting-color-name : root.i18n-strings[122],
+                        enabled: root.lighting-color-capable,
+                        toggle: false,
+                    },
+                    { title: root.i18n-strings[129], value: "", enabled: true, toggle: true },
+                    { title: root.i18n-strings[130], value: "", enabled: true, toggle: false },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    enabled: row.enabled;
+                    toggle: row.toggle;
+                    toggle-on: root.lighting-system-effects;
+                    selected: root.settings-view == 17 && root.lighting-index == k;
+                    visible: root.settings-view == 17
+                        && root.srow-visible(k, 0, root.settings-list-visible-rows);
                 }
-                SettingsSelectableRow {
-                    x: 22px; y: 140px; width: parent.width - 44px;
-                    title: "Brightness"; value: root.lighting-brightness + "%";
-                    selected: root.settings-view == 17 && root.lighting-index == 1;
-                    visible: root.settings-view == 17;
+
+                /* --------------------------------------------------- Display & Audio */
+                for row[k] in [
+                    {
+                        title: root.i18n-strings[127],
+                        value: root.display-brightness-available ? root.display-brightness + "%" : root.i18n-strings[132],
+                        enabled: root.display-brightness-available, toggle: false, on: false, shown: true,
+                    },
+                    { title: root.i18n-strings[133], value: root.audio-output-label, enabled: true, toggle: false, on: false, shown: true },
+                    {
+                        title: root.i18n-strings[134],
+                        value: root.audio-volume-supported ? root.audio-volume + "%" : root.audio-selected == "hdmi" ? root.i18n-strings[223] : root.i18n-strings[205],
+                        enabled: root.audio-volume-supported, toggle: false, on: false, shown: true,
+                    },
+                    { title: root.i18n-strings[135], value: root.applications-volume + "%", enabled: true, toggle: false, on: false, shown: true },
+                    { title: root.i18n-strings[136], value: root.system-sounds-volume + "%", enabled: true, toggle: false, on: false, shown: true },
+                    { title: root.i18n-strings[137], value: "", enabled: true, toggle: true, on: root.navigation-sounds-enabled, shown: true },
+                    { title: root.i18n-strings[138], value: "", enabled: true, toggle: true, on: root.power-sounds-enabled, shown: true },
+                    { title: root.i18n-strings[139], value: root.home-music-volume + "%", enabled: true, toggle: false, on: false, shown: true },
+                    { title: root.i18n-strings[140], value: root.audio-test-tone-playing ? root.i18n-strings[141] : root.i18n-strings[142], enabled: true, toggle: false, on: false, shown: true },
+                    {
+                        title: root.i18n-strings[143],
+                        value: root.display-color-temperature + root.i18n-strings[224],
+                        enabled: true, toggle: false, on: false,
+                        shown: root.display-color-temperature-available,
+                    },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, root.display-audio-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    enabled: row.enabled;
+                    toggle: row.toggle;
+                    toggle-on: row.on;
+                    selected: root.settings-view == 18 && root.display-audio-index == k;
+                    visible: row.shown && root.page-display-audio
+                        && root.srow-visible(k, root.display-audio-scroll-offset, root.settings-list-visible-rows);
                 }
-                SettingsSelectableRow {
-                    x: 22px; y: 188px; width: parent.width - 44px;
-                    title: "Color";
-                    value: (root.lighting-mode == "static"
-                        || root.lighting-mode == "breathe"
-                        || root.lighting-mode == "pulse"
-                        || root.lighting-mode == "chase"
-                        || root.lighting-mode == "wave") ? root.lighting-color-name : "Automatic";
-                    selected: root.settings-view == 17 && root.lighting-index == 2;
-                    enabled: root.lighting-mode == "static"
-                        || root.lighting-mode == "breathe"
-                        || root.lighting-mode == "pulse"
-                        || root.lighting-mode == "chase"
-                        || root.lighting-mode == "wave";
-                    visible: root.settings-view == 17;
+
+                /* ------------------------------------------------------ Connectivity */
+                for row[k] in [
+                    { title: root.i18n-strings[157], value: "", toggle: true, on: root.wifi-enabled, enabled: true, nav: false },
+                    {
+                        title: root.i18n-strings[158],
+                        value: root.connectivity-wifi-active ? root.wifi-current-ssid : root.i18n-strings[159],
+                        toggle: false, on: false, enabled: root.wifi-enabled, nav: root.wifi-enabled,
+                    },
+                    {
+                        title: root.i18n-strings[10],
+                        value: root.wifi-saved-networks.length + root.i18n-strings[225],
+                        toggle: false, on: false, enabled: true, nav: true,
+                    },
+                    { title: root.i18n-strings[161], value: "", toggle: true, on: root.bluetooth-enabled, enabled: true, nav: false },
+                    { title: root.i18n-strings[11], value: "", toggle: false, on: false, enabled: root.bluetooth-enabled, nav: root.bluetooth-enabled },
+                    {
+                        title: root.i18n-strings[12],
+                        value: root.bluetooth-known-devices.length + root.i18n-strings[226],
+                        toggle: false, on: false, enabled: root.bluetooth-enabled, nav: root.bluetooth-enabled,
+                    },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, root.connectivity-scroll-offset, 3);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    toggle: row.toggle;
+                    toggle-on: row.on;
+                    enabled: row.enabled;
+                    navigates: row.nav;
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == k;
+                    visible: root.page-connectivity
+                        && root.srow-visible(k, root.connectivity-scroll-offset, root.settings-sectioned-visible-rows);
                 }
+
+                /* Connect page. Entering this view starts a product-service scan
+                 * session; results stay live until this page is left. */
                 SettingsSelectableRow {
-                    x: 22px; y: 236px; width: parent.width - 44px;
-                    title: "System Effects"; value: root.lighting-system-effects ? "On" : "Off";
-                    selected: root.settings-view == 17 && root.lighting-index == 3;
-                    visible: root.settings-view == 17;
+                    x: root.settings-content-x;
+                    y: root.srow-y(0, root.wifi-network-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.i18n-strings[162];
+                    navigates: true;
+                    selected: root.settings-view == 2 && root.wifi-network-index == 0;
+                    visible: root.settings-view == 2
+                        && root.srow-visible(0, root.wifi-network-scroll-offset, root.settings-list-visible-rows);
                 }
-                SettingsSelectableRow {
-                    x: 22px; y: 284px; width: parent.width - 44px;
-                    title: "Preview System Effects"; value: "";
-                    selected: root.settings-view == 17 && root.lighting-index == 4;
-                    visible: root.settings-view == 17;
+                for network[i] in root.wifi-networks: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(i + 1, root.wifi-network-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: network.ssid;
+                    detail: network.current ? root.i18n-strings[198]
+                        : network.saved ? network.security + root.i18n-strings[228]
+                        : network.security;
+                    value: root.signal-label(network.signal-dbm);
+                    emphasized: network.current;
+                    title-fraction: 0.62;
+                    selected: root.settings-view == 2 && root.wifi-network-index == i + 1;
+                    visible: root.settings-view == 2
+                        && root.srow-visible(i + 1, root.wifi-network-scroll-offset, root.settings-list-visible-rows);
+                }
+                SettingsHint {
+                    x: root.settings-content-x;
+                    y: root.srow-y(1, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    text: root.wifi-scanning ? root.i18n-strings[163] : root.i18n-strings[164];
+                    visible: root.settings-view == 2 && root.wifi-networks.length == 0;
+                }
+
+                /* Saved networks are a flat list. Selecting one opens the same
+                 * editor used by the current network. */
+                for network[i] in root.wifi-saved-networks: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(i, root.wifi-saved-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: network.ssid;
+                    detail: network.current ? root.i18n-strings[198] : network.security + root.i18n-strings[228];
+                    value: root.signal-label(network.signal-dbm);
+                    emphasized: network.current;
+                    navigates: true;
+                    title-fraction: 0.62;
+                    selected: root.settings-view == 3 && root.wifi-saved-index == i;
+                    visible: root.settings-view == 3
+                        && root.srow-visible(i, root.wifi-saved-scroll-offset, root.settings-list-visible-rows);
+                }
+                SettingsHint {
+                    x: root.settings-content-x;
+                    y: root.srow-y(0, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    text: root.i18n-strings[165];
+                    visible: root.settings-view == 3 && root.wifi-saved-networks.length == 0;
+                }
+
+                /* Network editor. Password and IP parameters live on one scrollable
+                 * list to avoid a stack of nested settings pages. */
+                for row[k] in [
+                    {
+                        title: root.wifi-selected-current ? root.i18n-strings[169] : root.i18n-strings[158],
+                        value: root.wifi-selected-current ? root.i18n-strings[198] : "",
+                        enabled: true,
+                    },
+                    {
+                        title: root.i18n-strings[172],
+                        value: root.wifi-selected-security == root.i18n-strings[212] ? root.i18n-strings[173] : root.i18n-strings[174],
+                        enabled: root.wifi-selected-security != root.i18n-strings[212],
+                    },
+                    { title: root.i18n-strings[175], value: root.wifi-ip-mode == "automatic" ? root.i18n-strings[122] : root.i18n-strings[176], enabled: true },
+                    { title: root.i18n-strings[177], value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-address : root.wifi-ip-address, enabled: root.wifi-ip-mode == "manual" },
+                    { title: root.i18n-strings[178], value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-netmask : root.wifi-ip-netmask, enabled: root.wifi-ip-mode == "manual" },
+                    { title: root.i18n-strings[179], value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-gateway : root.wifi-ip-gateway, enabled: root.wifi-ip-mode == "manual" },
+                    { title: root.i18n-strings[180], value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-dns : root.wifi-ip-dns, enabled: root.wifi-ip-mode == "manual" },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, root.wifi-detail-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    enabled: row.enabled;
+                    selected: root.settings-view == 4 && root.wifi-detail-index == k;
+                    visible: root.settings-view == 4
+                        && root.srow-visible(k, root.wifi-detail-scroll-offset, root.wifi-detail-visible-rows);
+                }
+                SettingsActionButton {
+                    x: root.settings-content-x;
+                    y: root.srow-y(7, root.wifi-detail-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    label: root.i18n-strings[181];
+                    selected: root.settings-view == 4 && root.wifi-detail-index == 7;
+                    visible: root.settings-view == 4
+                        && root.srow-visible(7, root.wifi-detail-scroll-offset, root.wifi-detail-visible-rows);
+                }
+                SettingsActionButton {
+                    x: root.settings-content-x;
+                    y: root.srow-y(8, root.wifi-detail-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    label: root.i18n-strings[182];
+                    danger: true;
+                    enabled: root.wifi-selected-saved;
+                    selected: root.settings-view == 4 && root.wifi-detail-index == 8;
+                    visible: root.settings-view == 4
+                        && root.srow-visible(8, root.wifi-detail-scroll-offset, root.wifi-detail-visible-rows);
+                }
+
+                /* Bluetooth discovery is active only while this page is open. */
+                for device[i] in root.bluetooth-devices: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(i, root.bluetooth-device-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: device.name;
+                    detail: device.kind;
+                    value: root.bluetooth-state-label(device.connected, device.paired, device.rssi);
+                    emphasized: device.connected;
+                    title-fraction: 0.62;
+                    selected: root.settings-view == 7 && root.bluetooth-device-index == i;
+                    visible: root.settings-view == 7
+                        && root.srow-visible(i, root.bluetooth-device-scroll-offset, root.settings-list-visible-rows);
+                }
+                SettingsHint {
+                    x: root.settings-content-x;
+                    y: root.srow-y(0, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    text: root.bluetooth-scanning ? root.i18n-strings[163] : root.i18n-strings[166];
+                    visible: root.settings-view == 7 && root.bluetooth-devices.length == 0;
+                }
+
+                /* Paired/connected Bluetooth devices. */
+                for device[i] in root.bluetooth-known-devices: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(i, root.bluetooth-known-scroll-offset, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: device.name;
+                    detail: device.kind;
+                    value: root.bluetooth-state-label(device.connected, device.paired, device.rssi);
+                    emphasized: device.connected;
+                    navigates: true;
+                    title-fraction: 0.62;
+                    selected: root.settings-view == 8 && root.bluetooth-known-index == i;
+                    visible: root.settings-view == 8
+                        && root.srow-visible(i, root.bluetooth-known-scroll-offset, root.settings-list-visible-rows);
+                }
+                SettingsHint {
+                    x: root.settings-content-x;
+                    y: root.srow-y(0, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    text: root.i18n-strings[167];
+                    visible: root.settings-view == 8 && root.bluetooth-known-devices.length == 0;
+                }
+
+                /* One device, one management surface. */
+                SettingsActionButton {
+                    x: root.settings-content-x;
+                    y: root.srow-y(0, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    label: !root.bluetooth-selected-paired ? root.i18n-strings[168]
+                        : root.bluetooth-selected-connected ? root.i18n-strings[169]
+                        : root.i18n-strings[158];
+                    selected: root.bluetooth-detail-index == 0;
+                    visible: root.settings-view == 9;
+                }
+                SettingsActionButton {
+                    x: root.settings-content-x;
+                    y: root.srow-y(1, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    label: root.bluetooth-selected-paired ? root.i18n-strings[170] : root.i18n-strings[171];
+                    selected: root.bluetooth-detail-index == 1;
+                    danger: root.bluetooth-selected-paired;
+                    visible: root.settings-view == 9;
                 }
 
                 /* Generic dropdown used by every discrete multi-value Settings
-                 * choice. Player Assignment, RGB Mode and RGB Color already use
-                 * this common component/state. */
+                 * choice. */
                 Rectangle {
-                    x: 16px;
-                    y: 66px;
-                    width: parent.width - 32px;
-                    height: 286px;
+                    x: root.settings-content-x - 6px;
+                    y: root.settings-section-y - 4px;
+                    width: root.settings-content-width + 12px;
+                    height: min(
+                        parent.height - self.y - 12px,
+                        root.settings-choice-list-y + min(root.settings-choice-options.length, root.settings-choice-visible-rows) * root.settings-row-step + 4px
+                    );
                     background: #17191d;
                     border-width: 1px;
                     border-color: #3a86ff;
                     border-radius: 8px;
+                    clip: true;
                     visible: root.settings-choice-open;
                     z: 95;
 
-                    Text {
-                        x: 16px; y: 12px; width: parent.width - 32px; height: 26px;
-                        text: root.settings-choice-title;
-                        color: #f5f6f8; font-size: 18px; font-weight: 700;
-                        overflow: elide;
+                    MarqueeText {
+                        x: 16px; y: 10px; width: parent.width - 32px; height: 28px;
+                        label: root.settings-choice-title;
+                        text-color: #f5f6f8; text-size: 18px; text-weight: 700;
+                        active: true;
                     }
                     for option[i] in root.settings-choice-options: SettingsSelectableRow {
                         x: 12px;
-                        y: 48px + (i - root.settings-choice-scroll) * 42px;
+                        y: root.settings-choice-list-y + (i - root.settings-choice-scroll) * root.settings-row-step;
                         width: parent.width - 24px;
+                        height: root.settings-row-height;
                         title: option.label;
-                        value: "";
                         selected: root.settings-choice-index == i;
                         visible: i >= root.settings-choice-scroll
-                            && i < root.settings-choice-scroll + 5;
+                            && i < root.settings-choice-scroll + root.settings-choice-visible-rows;
                     }
                 }
 
                 /* System Effect preview carousel. It overlays RGB Settings and can be
                  * interrupted immediately with Back. */
                 Rectangle {
-                    x: 14px;
-                    y: 62px;
-                    width: parent.width - 28px;
-                    height: 280px;
+                    x: root.settings-content-x - 8px;
+                    y: root.settings-section-y;
+                    width: root.settings-content-width + 16px;
+                    height: min(parent.height - self.y - 12px, 280px);
                     background: #17191d;
                     border-width: 1px;
                     border-color: #3a86ff;
@@ -1652,436 +2445,75 @@ export component HomeWindow inherits Window {
                     visible: root.settings-view == 17 && root.lighting-preview-open;
                     z: 90;
 
-                    Text {
-                        x: 18px; y: 14px; width: parent.width - 36px;
-                        text: "System Effect Preview";
-                        color: #f5f6f8; font-size: 20px; font-weight: 700;
-                        horizontal-alignment: center;
-                    }
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+                        alignment: center;
 
-                    Image {
-                        x: (parent.width - 56px) / 2;
-                        y: 56px; width: 56px; height: 56px;
-                        source: root.lighting-preview-index == 0
-                            ? @image-url("assets/icons/battery-empty.svg")
-                            : root.lighting-preview-index == 1
-                            ? @image-url("assets/icons/gamepad.svg")
-                            : root.lighting-preview-index == 2
-                            ? @image-url("assets/icons/wifi.svg")
-                            : @image-url("assets/icons/circle-notch.svg");
-                        image-fit: contain;
-                    }
-
-                    Text {
-                        x: 18px; y: 126px; width: parent.width - 36px;
-                        text: root.lighting-preview-index == 0 ? "Low Battery"
-                            : root.lighting-preview-index == 1 ? "Controller Connected"
-                            : root.lighting-preview-index == 2 ? "Wi-Fi Search"
-                            : root.lighting-preview-index == 3 ? "Boot"
-                            : "System Launch";
-                        color: #f5f6f8; font-size: 19px; font-weight: 700;
-                        horizontal-alignment: center;
-                    }
-                    Text {
-                        x: 24px; y: 162px; width: parent.width - 48px;
-                        text: root.lighting-preview-index == 0 ? "Temporary red warning pulse"
-                            : root.lighting-preview-index == 1 ? "Connection confirmation effect"
-                            : root.lighting-preview-index == 2 ? "Animated wireless search"
-                            : root.lighting-preview-index == 3 ? "nuubOS blue loading animation"
-                            : "Context color while launching a system";
-                        color: #8e949d; font-size: 14px;
-                        horizontal-alignment: center;
-                    }
-                    Text {
-                        x: 18px; y: 214px; width: parent.width - 36px;
-                        text: (root.lighting-preview-index + 1) + " / 5";
-                        color: #3a86ff; font-size: 14px; font-weight: 700;
-                        horizontal-alignment: center;
-                    }
-                    Text {
-                        x: 18px; y: 244px; width: parent.width - 36px;
-                        text: "Left / Right to browse   •   Back to stop";
-                        color: #7f858e; font-size: 13px;
-                        horizontal-alignment: center;
-                    }
-                }
-
-                /* Connectivity is already visible while the category is highlighted.
-                 * Confirm moves focus into the same two macro-sections instead of
-                 * opening another conceptual landing page. */
-                Text {
-                    x: 22px;
-                    y: 66px;
-                    text: "WI-FI";
-                    color: #3a86ff;
-                    font-size: 13px;
-                    font-weight: 700;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-                DeviceScopeBadge {
-                    x: 68px;
-                    y: 64px;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-                SettingsSelectableRow {
-                    x: 22px;
-                    y: 84px;
-                    width: parent.width - 44px;
-                    title: "Wi-Fi";
-                    value: "";
-                    selected: root.settings-view == 1 && root.connectivity-selected-index == 0;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-                WifiToggle {
-                    x: parent.width - 82px;
-                    y: 93px;
-                    checked: root.wifi-enabled;
-                    selected: root.settings-view == 1 && root.connectivity-selected-index == 0;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-                SettingsSelectableRow {
-                    x: 22px;
-                    y: 130px;
-                    width: parent.width - 44px;
-                    title: "Connect";
-                    value: root.connectivity-wifi-active ? root.wifi-current-ssid : "Not connected";
-                    selected: root.settings-view == 1 && root.connectivity-selected-index == 1;
-                    enabled: root.wifi-enabled;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-                SettingsSelectableRow {
-                    x: 22px;
-                    y: 176px;
-                    width: parent.width - 44px;
-                    title: "Saved Networks";
-                    value: root.wifi-saved-networks.length + " saved";
-                    selected: root.settings-view == 1 && root.connectivity-selected-index == 2;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-
-                Text {
-                    x: 22px;
-                    y: 222px;
-                    text: "BLUETOOTH";
-                    color: #3a86ff;
-                    font-size: 13px;
-                    font-weight: 700;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-                DeviceScopeBadge {
-                    x: 106px;
-                    y: 220px;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-                SettingsSelectableRow {
-                    x: 22px;
-                    y: 240px;
-                    width: parent.width - 44px;
-                    title: "Bluetooth";
-                    value: "";
-                    selected: root.settings-view == 1 && root.connectivity-selected-index == 3;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-                WifiToggle {
-                    x: parent.width - 82px;
-                    y: 249px;
-                    checked: root.bluetooth-enabled;
-                    selected: root.settings-view == 1 && root.connectivity-selected-index == 3;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-                SettingsSelectableRow {
-                    x: 22px;
-                    y: 284px;
-                    width: parent.width - 44px;
-                    title: "Connect New Device";
-                    value: "";
-                    selected: root.settings-view == 1 && root.connectivity-selected-index == 4;
-                    enabled: root.bluetooth-enabled;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-                SettingsSelectableRow {
-                    x: 22px;
-                    y: 328px;
-                    width: parent.width - 44px;
-                    title: "My Devices";
-                    value: root.bluetooth-known-devices.length + " devices";
-                    selected: root.settings-view == 1 && root.connectivity-selected-index == 5;
-                    enabled: root.bluetooth-enabled;
-                    visible: root.settings-view == 1
-                        || (root.settings-view == 0 && root.settings-selected-index == 1);
-                }
-
-                /* Connect page. Entering this view starts a product-service scan
-                 * session; results stay live until this page is left. */
-                SettingsSelectableRow {
-                    x: 22px;
-                    y: 92px - root.wifi-network-scroll-offset * 48px;
-                    width: parent.width - 44px;
-                    title: "Add Hidden Network";
-                    value: "+";
-                    selected: root.settings-view == 2 && root.wifi-network-index == 0;
-                    visible: root.settings-view == 2
-                        && 0 >= root.wifi-network-scroll-offset
-                        && 0 < root.wifi-network-scroll-offset + root.settings-list-visible-rows;
-                }
-                for network[i] in root.wifi-networks: WifiNetworkListRow {
-                    x: 22px;
-                    y: 92px + (i + 1 - root.wifi-network-scroll-offset) * 48px;
-                    width: parent.width - 44px;
-                    ssid: network.ssid;
-                    security: network.security;
-                    signal-dbm: network.signal-dbm;
-                    saved: network.saved;
-                    current: network.current;
-                    selected: root.settings-view == 2 && root.wifi-network-index == i + 1;
-                    visible: root.settings-view == 2
-                        && i + 1 >= root.wifi-network-scroll-offset
-                        && i + 1 < root.wifi-network-scroll-offset + root.settings-list-visible-rows;
-                }
-                Text {
-                    x: 22px;
-                    y: 206px;
-                    width: parent.width - 44px;
-                    horizontal-alignment: center;
-                    text: root.wifi-scanning ? "Scanning…" : "Searching for nearby networks…";
-                    color: #7f858e;
-                    font-size: 13px;
-                    visible: root.settings-view == 2 && root.wifi-networks.length == 0;
-                }
-
-                /* Saved networks are a flat list. Selecting one opens the same
-                 * editor used by the current network. */
-                for network[i] in root.wifi-saved-networks: WifiNetworkListRow {
-                    x: 22px;
-                    y: 92px + (i - root.wifi-saved-scroll-offset) * 48px;
-                    width: parent.width - 44px;
-                    ssid: network.ssid;
-                    security: network.security;
-                    signal-dbm: network.signal-dbm;
-                    saved: true;
-                    current: network.current;
-                    selected: root.settings-view == 3 && root.wifi-saved-index == i;
-                    visible: root.settings-view == 3
-                        && i >= root.wifi-saved-scroll-offset
-                        && i < root.wifi-saved-scroll-offset + root.settings-list-visible-rows;
-                }
-                Text {
-                    x: 22px;
-                    y: 150px;
-                    width: parent.width - 44px;
-                    horizontal-alignment: center;
-                    text: "No saved Wi-Fi networks";
-                    color: #7f858e;
-                    font-size: 13px;
-                    visible: root.settings-view == 3 && root.wifi-saved-networks.length == 0;
-                }
-
-
-                /* Bluetooth discovery is active only while this page is open. */
-                for device[i] in root.bluetooth-devices: BluetoothDeviceListRow {
-                    x: 22px;
-                    y: 92px + (i - root.bluetooth-device-scroll-offset) * 48px;
-                    width: parent.width - 44px;
-                    name: device.name;
-                    kind: device.kind;
-                    paired: device.paired;
-                    connected: device.connected;
-                    rssi: device.rssi;
-                    selected: root.settings-view == 7 && root.bluetooth-device-index == i;
-                    visible: root.settings-view == 7
-                        && i >= root.bluetooth-device-scroll-offset
-                        && i < root.bluetooth-device-scroll-offset + root.settings-list-visible-rows;
-                }
-                Text {
-                    x: 22px;
-                    y: 150px;
-                    width: parent.width - 44px;
-                    horizontal-alignment: center;
-                    text: root.bluetooth-scanning ? "Scanning…" : "No new Bluetooth devices found";
-                    color: #7f858e;
-                    font-size: 13px;
-                    visible: root.settings-view == 7 && root.bluetooth-devices.length == 0;
-                }
-
-                /* Paired/connected Bluetooth devices. */
-                for device[i] in root.bluetooth-known-devices: BluetoothDeviceListRow {
-                    x: 22px;
-                    y: 92px + (i - root.bluetooth-known-scroll-offset) * 48px;
-                    width: parent.width - 44px;
-                    name: device.name;
-                    kind: device.kind;
-                    paired: device.paired;
-                    connected: device.connected;
-                    rssi: device.rssi;
-                    selected: root.settings-view == 8 && root.bluetooth-known-index == i;
-                    visible: root.settings-view == 8
-                        && i >= root.bluetooth-known-scroll-offset
-                        && i < root.bluetooth-known-scroll-offset + root.settings-list-visible-rows;
-                }
-                Text {
-                    x: 22px;
-                    y: 150px;
-                    width: parent.width - 44px;
-                    horizontal-alignment: center;
-                    text: "No paired Bluetooth devices";
-                    color: #7f858e;
-                    font-size: 13px;
-                    visible: root.settings-view == 8 && root.bluetooth-known-devices.length == 0;
-                }
-
-                /* One device, one management surface. */
-                Rectangle {
-                    x: 22px;
-                    y: 92px;
-                    width: parent.width - 44px;
-                    height: 132px;
-                    background: #00000000;
-                    visible: root.settings-view == 9;
-
-                    SettingsActionButton {
-                        x: 0px;
-                        y: 0px;
-                        width: parent.width;
-                        label: !root.bluetooth-selected-paired ? "Pair & Connect"
-                            : root.bluetooth-selected-connected ? "Disconnect"
-                            : "Connect";
-                        selected: root.bluetooth-detail-index == 0;
-                    }
-
-                    SettingsActionButton {
-                        x: 0px;
-                        y: 56px;
-                        width: parent.width;
-                        label: root.bluetooth-selected-paired ? "Forget Device" : "Pair with PIN";
-                        selected: root.bluetooth-detail-index == 1;
-                        danger: root.bluetooth-selected-paired;
-                        enabled: true;
+                        Text {
+                            text: root.i18n-strings[144];
+                            color: #f5f6f8; font-size: 20px; font-weight: 700;
+                            horizontal-alignment: center;
+                        }
+                        HorizontalLayout {
+                            alignment: center;
+                            Image {
+                                width: 56px; height: 56px;
+                                source: root.lighting-preview-index == 0
+                                    ? @image-url("assets/icons/battery-empty.svg")
+                                    : root.lighting-preview-index == 1
+                                    ? @image-url("assets/icons/gamepad.svg")
+                                    : root.lighting-preview-index == 2
+                                    ? @image-url("assets/icons/wifi.svg")
+                                    : @image-url("assets/icons/circle-notch.svg");
+                                image-fit: contain;
+                            }
+                        }
+                        Text {
+                            text: root.lighting-preview-index == 0 ? root.i18n-strings[145]
+                                : root.lighting-preview-index == 1 ? root.i18n-strings[146]
+                                : root.lighting-preview-index == 2 ? root.i18n-strings[147]
+                                : root.lighting-preview-index == 3 ? root.i18n-strings[148]
+                                : root.i18n-strings[149];
+                            color: #f5f6f8; font-size: 19px; font-weight: 700;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.lighting-preview-index == 0 ? root.i18n-strings[150]
+                                : root.lighting-preview-index == 1 ? root.i18n-strings[151]
+                                : root.lighting-preview-index == 2 ? root.i18n-strings[152]
+                                : root.lighting-preview-index == 3 ? root.i18n-strings[153]
+                                : root.i18n-strings[154];
+                            color: #8e949d; font-size: 14px;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: (root.lighting-preview-index + 1) + " / 5";
+                            color: #3a86ff; font-size: 14px; font-weight: 700;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: root.i18n-strings[155];
+                            color: #7f858e; font-size: 13px;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
                     }
                 }
 
-                /* Network editor. Password and IP parameters live on one scrollable
-                 * surface to avoid a stack of nested settings pages. */
-                Rectangle {
-                    x: 22px;
-                    y: 82px;
-                    width: parent.width - 44px;
-                    height: parent.height - 104px;
-                    clip: true;
-                    background: #00000000;
-                    visible: root.settings-view == 4;
-
-                    SettingsSelectableRow {
-                        x: 0px;
-                        y: (0 - root.wifi-detail-scroll-offset) * 44px;
-                        width: parent.width;
-                        title: root.wifi-selected-current ? "Disconnect" : "Connect";
-                        value: root.wifi-selected-current ? "Connected" : "Connect";
-                        selected: root.wifi-detail-index == 0;
-                    }
-                    SettingsSelectableRow {
-                        x: 0px;
-                        y: (1 - root.wifi-detail-scroll-offset) * 44px;
-                        width: parent.width;
-                        title: "Password";
-                        value: root.wifi-selected-security == "Open" ? "None" : "Change";
-                        selected: root.wifi-detail-index == 1;
-                        enabled: root.wifi-selected-security != "Open";
-                    }
-                    SettingsSelectableRow {
-                        x: 0px;
-                        y: (2 - root.wifi-detail-scroll-offset) * 44px;
-                        width: parent.width;
-                        title: "IPv4";
-                        value: root.wifi-ip-mode == "automatic" ? "Automatic" : "Manual";
-                        selected: root.wifi-detail-index == 2;
-                    }
-                    SettingsSelectableRow {
-                        x: 0px;
-                        y: (3 - root.wifi-detail-scroll-offset) * 44px;
-                        width: parent.width;
-                        title: "Address";
-                        value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-address : root.wifi-ip-address;
-                        selected: root.wifi-detail-index == 3;
-                        enabled: root.wifi-ip-mode == "manual";
-                    }
-                    SettingsSelectableRow {
-                        x: 0px;
-                        y: (4 - root.wifi-detail-scroll-offset) * 44px;
-                        width: parent.width;
-                        title: "Subnet Mask";
-                        value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-netmask : root.wifi-ip-netmask;
-                        selected: root.wifi-detail-index == 4;
-                        enabled: root.wifi-ip-mode == "manual";
-                    }
-                    SettingsSelectableRow {
-                        x: 0px;
-                        y: (5 - root.wifi-detail-scroll-offset) * 44px;
-                        width: parent.width;
-                        title: "Gateway";
-                        value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-gateway : root.wifi-ip-gateway;
-                        selected: root.wifi-detail-index == 5;
-                        enabled: root.wifi-ip-mode == "manual";
-                    }
-                    SettingsSelectableRow {
-                        x: 0px;
-                        y: (6 - root.wifi-detail-scroll-offset) * 44px;
-                        width: parent.width;
-                        title: "DNS";
-                        value: root.wifi-ip-mode == "automatic" ? root.wifi-runtime-dns : root.wifi-ip-dns;
-                        selected: root.wifi-detail-index == 6;
-                        enabled: root.wifi-ip-mode == "manual";
-                    }
-                    SettingsActionButton {
-                        x: 0px;
-                        y: (7 - root.wifi-detail-scroll-offset) * 44px + 10px;
-                        width: parent.width;
-                        label: "Apply Changes";
-                        selected: root.wifi-detail-index == 7;
-                    }
-                    SettingsActionButton {
-                        x: 0px;
-                        y: (8 - root.wifi-detail-scroll-offset) * 44px + 14px;
-                        width: parent.width;
-                        label: "Forget Network";
-                        selected: root.wifi-detail-index == 8;
-                        danger: true;
-                        enabled: root.wifi-selected-saved;
-                    }
-                }
-
-                Text {
-                    x: 22px;
-                    y: parent.height - 22px;
-                    width: parent.width - 44px;
-                    text: root.bluetooth-notice;
-                    color: #d5a34c;
-                    font-size: 11px;
-                    horizontal-alignment: right;
-                    overflow: elide;
-                    visible: root.bluetooth-notice != "" && root.settings-view >= 7 && root.settings-view <= 9;
-                }
-
-                Text {
-                    x: 22px;
-                    y: parent.height - 22px;
-                    width: parent.width - 44px;
-                    text: root.wifi-notice;
-                    color: #d5a34c;
-                    font-size: 11px;
-                    horizontal-alignment: right;
-                    overflow: elide;
-                    visible: root.wifi-notice != "" && root.settings-view != 6;
+                /* One status line at the pane bottom, reserved by the row grid. */
+                MarqueeText {
+                    x: root.settings-content-x;
+                    y: parent.height - root.settings-notice-height - 4px;
+                    width: root.settings-content-width;
+                    height: root.settings-notice-height;
+                    label: root.settings-notice;
+                    text-color: #d5a34c;
+                    text-size: 11px;
+                    align-right: true;
+                    visible: root.settings-notice != "";
                 }
             }
         }
@@ -2126,106 +2558,361 @@ export component HomeWindow inherits Window {
                 background: #25282d;
             }
 
-            Text {
+            HorizontalLayout {
                 x: 18px;
-                y: 16px;
-                text: "Small System. Big Adventures.";
-                color: #7f858e;
-                font-size: 17px;
-                font-weight: 500;
-                visible: !root.settings-open;
-            }
+                y: 0;
+                width: parent.width - 36px;
+                height: parent.height;
+                spacing: 20px;
 
-            StartActionHint {
-                x: parent.width - 282px;
-                y: 13px;
-                visible: !root.settings-open;
-            }
-
-            Text {
-                x: parent.width - 224px;
-                y: 17px;
-                width: 72px;
-                text: "Settings";
-                color: #a8adb5;
-                font-size: 16px;
-                font-weight: 600;
-                visible: !root.settings-open;
-            }
-
-            NavigationHint {
-                x: 18px;
-                y: 13px;
-                visible: root.settings-open;
-            }
-
-            Text {
-                x: 54px;
-                y: 17px;
-                text: "Navigate";
-                color: #a8adb5;
-                font-size: 17px;
-                font-weight: 600;
-                visible: root.settings-open;
-            }
-
-            FaceButtonHint {
-                x: 148px;
-                y: 12px;
-                active-position: root.select-face-position;
-                visible: root.settings-open;
-            }
-
-            Text {
-                x: 182px;
-                y: 17px;
-                text: "Select";
-                color: #a8adb5;
-                font-size: 17px;
-                font-weight: 600;
-                visible: root.settings-open;
-            }
-
-            FaceButtonHint {
-                x: 270px;
-                y: 12px;
-                active-position: root.back-face-position;
-                visible: root.settings-open;
-            }
-
-            Text {
-                x: 304px;
-                y: 17px;
-                text: "Back";
-                color: #a8adb5;
-                font-size: 17px;
-                font-weight: 600;
-                visible: root.settings-open;
-            }
-
-            MenuActionHint {
-                x: parent.width - 102px;
-                y: 13px;
-            }
-
-            Text {
-                x: parent.width - 68px;
-                y: 17px;
-                width: 50px;
-                text: "Menu";
-                color: #a8adb5;
-                font-size: 16px;
-                font-weight: 600;
+                if !root.settings-open: Text {
+                    text: root.i18n-strings[183];
+                    color: #7f858e;
+                    font-size: 17px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.settings-open: ActionHint { kind: "nav"; label: root.i18n-strings[184]; }
+                if root.settings-select-hint-visible: ActionHint {
+                    kind: "face"; face-position: root.select-face-position; label: root.i18n-strings[185];
+                }
+                if root.settings-open: ActionHint {
+                    kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[186];
+                }
+                if root.settings-open: Rectangle { horizontal-stretch: 1; }
+                if !root.settings-open: ActionHint { kind: "start"; label: root.i18n-strings[3]; }
+                ActionHint { kind: "menu"; label: root.i18n-strings[187]; }
             }
         }
     }
 
-    /* Lifecycle curtain below is intentionally unchanged. */
+    Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #090b0f;
+        visible: root.user-picker-open;
+        z: 180;
+        clip: true;
+
+        /* Same nuubOS chrome as Home/Settings: matte top bar and the
+         * controller-agnostic action bar remain visible during user selection. */
+        Rectangle {
+            x: 0; y: 0; width: parent.width; height: 58px;
+            background: #0d0e10;
+            z: 2;
+            HorizontalLayout {
+                x: 20px; y: 10px; height: 32px;
+                spacing: 0px;
+                alignment: start;
+                Text { text: "nuub"; color: #f5f6f8; font-size: 25px; font-weight: 700; vertical-alignment: center; }
+                Text { text: "OS"; color: #3a86ff; font-size: 25px; font-weight: 700; vertical-alignment: center; }
+            }
+            Text {
+                x: 0; y: 13px; width: parent.width; height: 28px;
+                text: root.i18n-strings[291];
+                color: #f3f5f7;
+                font-size: 19px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            Rectangle { x: 16px; y: 57px; width: parent.width - 32px; height: 1px; background: #25282d; }
+        }
+
+        for user[i] in root.users : user-card := Rectangle {
+            property <bool> focused: root.user-picker-index == i;
+            property <length> card-width: root.layout-class == 2 ? 174px : 142px;
+            property <length> card-height: root.layout-class == 2 ? 224px : 194px;
+            property <length> card-gap: root.layout-class == 2 ? 196px : 160px;
+
+            x: parent.width / 2 - user-card.card-width / 2
+                + (i - root.user-picker-index) * user-card.card-gap;
+            y: 58px + (parent.height - 116px) / 2 - user-card.card-height / 2;
+            width: user-card.card-width;
+            height: user-card.card-height;
+            border-radius: 14px;
+            background: user-card.focused ? #151c27 : #101318;
+            border-width: user-card.focused ? 2px : 1px;
+            border-color: user-card.focused ? #3a86ff : #252b33;
+            visible: i >= root.user-picker-index - 2 && i <= root.user-picker-index + 2;
+
+            Rectangle {
+                x: (parent.width - (user-card.focused ? 112px : 88px)) / 2;
+                y: user-card.focused ? 24px : 36px;
+                width: user-card.focused ? 112px : 88px;
+                height: user-card.focused ? 112px : 88px;
+                border-radius: user-card.focused ? 56px : 44px;
+                border-width: user-card.focused ? 2px : 1px;
+                border-color: user-card.focused ? #5b9cff : #343a43;
+                background: #11151a;
+                clip: true;
+
+                Image {
+                    x: parent.border-width;
+                    y: parent.border-width;
+                    width: parent.width - 2 * parent.border-width;
+                    height: parent.height - 2 * parent.border-width;
+                    source: user.avatar;
+                    image-fit: contain;
+                }
+            }
+
+            MarqueeText {
+                x: 10px;
+                y: parent.height - 51px;
+                width: parent.width - 20px;
+                height: 30px;
+                label: user.name;
+                text-color: user-card.focused ? #ffffff : #a9afb8;
+                text-size: user-card.focused ? 20px : 16px;
+                text-weight: user-card.focused ? 700 : 600;
+                active: user-card.focused;
+                align-center: true;
+                
+                
+            }
+        }
+
+        Rectangle {
+            x: 0; y: parent.height - 58px; width: parent.width; height: 58px;
+            background: #0a0b0d;
+            z: 2;
+            Rectangle { x: 16px; y: 0; width: parent.width - 32px; height: 1px; background: #25282d; }
+            HorizontalLayout {
+                x: 18px; y: 0; width: parent.width - 36px; height: parent.height;
+                spacing: 20px;
+                alignment: start;
+                ActionHint { kind: "nav"; label: root.i18n-strings[184]; }
+                ActionHint { kind: "face"; face-position: root.select-face-position; label: root.i18n-strings[185]; }
+                if !root.user-picker-forced: ActionHint {
+                    kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[186];
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #05070bdc;
+        visible: root.avatar-picker-open;
+        z: 185;
+
+        Rectangle {
+            width: min(parent.width - 48px, 540px);
+            height: min(parent.height - 64px, 66px + 5 * root.settings-row-step + 34px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #0d1014;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: #28303a;
+
+            MarqueeText {
+                x: 22px; y: 10px;
+                width: parent.width - 44px; height: 32px;
+                label: root.i18n-strings[321];
+                text-color: #f3f5f7;
+                text-size: 19px;
+                text-weight: 700;
+                align-center: true;
+            }
+            Rectangle {
+                x: (parent.width - 86px) / 2;
+                y: 49px;
+                width: 86px; height: 3px;
+                background: #3a86ff;
+                border-radius: 2px;
+            }
+            for avatar[i] in root.avatar-choices : SettingsSelectableRow {
+                x: 22px;
+                y: 66px + (i - root.avatar-picker-scroll) * root.settings-row-step;
+                width: parent.width - 44px;
+                height: root.settings-row-height;
+                title: avatar.label;
+                preview: avatar.avatar;
+                show-preview: true;
+                selected: root.avatar-picker-index == i;
+                visible: i >= root.avatar-picker-scroll && i < root.avatar-picker-scroll + 5;
+            }
+            MarqueeText {
+                x: 22px;
+                y: parent.height - 28px;
+                width: parent.width - 44px;
+                label: root.i18n-strings[294] + " • /userdata/users/" + root.profile-edit-user-id + "/profile/avatars";
+                text-color: #737b86;
+                text-size: 10px;
+                align-center: true;
+                
+            }
+        }
+    }
+
+    /* Screensaver lifecycle state. The logo moves continuously using
+     * resolution-independent permille coordinates; the first input wakes it
+     * and is consumed instead of leaking into the underlying UI. */
+    Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #050608;
+        visible: root.screensaver-active && !root.power-menu-open;
+        z: 200;
+
+        logo := Rectangle {
+            width: 150px;
+            height: 46px;
+            x: (parent.width - self.width) * root.screensaver-x-permille / 1000;
+            y: (parent.height - self.height) * root.screensaver-y-permille / 1000;
+            background: #00000000;
+
+            Text {
+                x: 0px; y: 0px;
+                width: 98px; height: parent.height;
+                text: "nuub";
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                color: #e8ebef;
+                font-size: 28px;
+                font-weight: 700;
+            }
+            Text {
+                x: 98px; y: 0px;
+                width: 52px; height: parent.height;
+                text: "OS";
+                horizontal-alignment: left;
+                vertical-alignment: center;
+                color: #3a86ff;
+                font-size: 28px;
+                font-weight: 700;
+            }
+        }
+    }
+
+    /* Power OSD: compact nuubOS console styling. The UI only presents
+     * lifecycle actions; nuubos-systemd owns their behavior. */
+    Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #000000d4;
+        visible: root.power-menu-open;
+        z: 210;
+
+        Rectangle {
+            width: min(parent.width - 56px, 500px);
+            height: 256px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #0d1014;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: #252b33;
+
+            Text {
+                x: 0px; y: 15px;
+                width: parent.width; height: 30px;
+                text: root.i18n-strings[188];
+                color: #f3f5f7;
+                font-size: 16px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                x: (parent.width - 92px) / 2;
+                y: 49px;
+                width: 92px;
+                height: 3px;
+                background: #3a86ff;
+                border-radius: 2px;
+            }
+
+            Rectangle {
+                x: 24px; y: 64px;
+                width: parent.width - 48px; height: 92px;
+                background: root.power-menu-index == 0 ? #18283c : #15191f;
+                border-radius: 11px;
+                border-width: root.power-menu-index == 0 ? 2px : 1px;
+                border-color: root.power-menu-index == 0 ? #3a86ff : #2a3038;
+
+                Text {
+                    x: 18px; y: 0; width: parent.width - 36px; height: parent.height;
+                    text: root.i18n-strings[189];
+                    color: #f3f5f7;
+                    font-size: 25px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                x: 24px; y: 172px;
+                width: (parent.width - 56px) / 2; height: 60px;
+                background: root.power-menu-index == 1 ? #18283c : #15191f;
+                border-radius: 10px;
+                border-width: root.power-menu-index == 1 ? 2px : 1px;
+                border-color: root.power-menu-index == 1 ? #3a86ff : #2a3038;
+
+                Text {
+                    x: 12px; y: 0;
+                    width: root.power-menu-index == 1 && root.power-menu-confirm ? 72px : parent.width - 24px;
+                    height: parent.height;
+                    text: root.i18n-strings[190];
+                    color: #f3f5f7;
+                    font-size: 18px;
+                    font-weight: 700;
+                    horizontal-alignment: root.power-menu-index == 1 && root.power-menu-confirm ? left : center;
+                    vertical-alignment: center;
+                }
+                Text {
+                    x: 84px; y: 0; width: parent.width - 96px; height: parent.height;
+                    text: root.power-menu-index == 1 && root.power-menu-confirm ? root.i18n-strings[191] : "";
+                    color: #f2b84b;
+                    font-size: 10px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                x: 32px + (parent.width - 56px) / 2; y: 172px;
+                width: (parent.width - 56px) / 2; height: 60px;
+                background: root.power-menu-index == 2 ? #18283c : #15191f;
+                border-radius: 10px;
+                border-width: root.power-menu-index == 2 ? 2px : 1px;
+                border-color: root.power-menu-index == 2 ? #3a86ff : #2a3038;
+
+                Text {
+                    x: 12px; y: 0;
+                    width: root.power-menu-index == 2 && root.power-menu-confirm ? 84px : parent.width - 24px;
+                    height: parent.height;
+                    text: root.i18n-strings[58];
+                    color: #f3f5f7;
+                    font-size: 18px;
+                    font-weight: 700;
+                    horizontal-alignment: root.power-menu-index == 2 && root.power-menu-confirm ? left : center;
+                    vertical-alignment: center;
+                }
+                Text {
+                    x: 96px; y: 0; width: parent.width - 108px; height: parent.height;
+                    text: root.power-menu-index == 2 && root.power-menu-confirm ? root.i18n-strings[191] : "";
+                    color: #f2b84b;
+                    font-size: 10px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    /* Lifecycle curtain. The splash is rendered by Rust (src/splash.rs) at the
+     * exact physical output size, identical to the kernel and compositor
+     * frames; it is drawn 1:1, never rescaled. The curtain splits on the
+     * splash accent line. */
     Rectangle {
         x: 0;
-        y: -(parent.height * 0.485) * root.curtain-progress;
+        y: -(parent.height * root.splash-split) * root.curtain-progress;
         width: parent.width;
-        height: parent.height * 0.485;
+        height: parent.height * root.splash-split;
         clip: true;
         visible: root.curtain-progress < 0.999;
 
@@ -2234,67 +2921,57 @@ export component HomeWindow inherits Window {
             y: 0;
             width: root.width;
             height: root.height;
-            source: root.transition-mode == "reboot"
-                ? @image-url("assets/reboot-splash.png")
-                : root.transition-mode == "poweroff"
-                    ? @image-url("assets/poweroff-splash.png")
-                    : @image-url("assets/boot-splash.png");
+            source: root.splash-image;
             image-fit: fill;
-            image-rendering: pixelated;
         }
     }
 
     Rectangle {
         x: 0;
-        y: parent.height * 0.485
-            + (parent.height * 0.515) * root.curtain-progress;
+        y: parent.height * root.splash-split
+            + (parent.height * (1 - root.splash-split)) * root.curtain-progress;
         width: parent.width;
-        height: parent.height * 0.515;
+        height: parent.height * (1 - root.splash-split);
         clip: true;
         visible: root.curtain-progress < 0.999;
 
         Image {
             x: 0;
-            y: -(root.height * 0.485);
+            y: -(root.height * root.splash-split);
             width: root.width;
             height: root.height;
-            source: root.transition-mode == "reboot"
-                ? @image-url("assets/reboot-splash.png")
-                : root.transition-mode == "poweroff"
-                    ? @image-url("assets/poweroff-splash.png")
-                    : @image-url("assets/boot-splash.png");
+            source: root.splash-image;
             image-fit: fill;
-            image-rendering: pixelated;
         }
     }
 
     Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height * 0.485
-            - (parent.height * 0.485) * root.curtain-progress;
-        width: parent.width * (0.483 + 0.517 * root.line-progress);
-        height: 3px;
+        y: parent.height * root.splash-split
+            - (parent.height * root.splash-split) * root.curtain-progress;
+        width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
+        height: root.splash-line-height;
         background: #5b86d6;
         visible: root.curtain-progress < 0.999;
     }
 
     Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height * 0.485
-            + (parent.height * 0.515) * root.curtain-progress
+        y: parent.height * root.splash-split
+            + (parent.height * (1 - root.splash-split)) * root.curtain-progress
             - self.height;
-        width: parent.width * (0.483 + 0.517 * root.line-progress);
-        height: 3px;
+        width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
+        height: root.splash-line-height;
         background: #5b86d6;
         visible: root.curtain-progress < 0.999;
     }
 
     Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height * 0.485
-            - (parent.height * 0.485) * root.curtain-progress
+        y: parent.height * root.splash-split
+            - (parent.height * root.splash-split) * root.curtain-progress
             - 2px;
-        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
         height: 7px;
         background: #5b86d6;
         opacity: 0.06;
@@ -2303,10 +2980,10 @@ export component HomeWindow inherits Window {
 
     Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height * 0.485
-            + (parent.height * 0.515) * root.curtain-progress
+        y: parent.height * root.splash-split
+            + (parent.height * (1 - root.splash-split)) * root.curtain-progress
             - 5px;
-        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
         height: 7px;
         background: #5b86d6;
         opacity: 0.06;

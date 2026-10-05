@@ -2,6 +2,7 @@
 set -eu
 
 TARGET_DIR="$1"
+INITTAB="$TARGET_DIR/etc/inittab"
 
 #
 # nuubOS SYSTEM carries no persistent per-device/user state by policy.

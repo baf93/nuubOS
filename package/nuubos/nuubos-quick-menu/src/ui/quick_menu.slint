@@ -1,3 +1,51 @@
+
+component MarqueeText inherits Rectangle {
+    in property <string> label: "";
+    in property <color> text-color: #ffffff;
+    in property <length> text-size: 16px;
+    in property <int> text-weight: 400;
+    in property <bool> active: true;
+    in property <bool> align-right: false;
+    in property <bool> align-center: false;
+    /* Forward/back passes; a notification scrolls once and holds the end. */
+    in property <int> passes: 2;
+    out property <length> content-width: marquee-label.preferred-width;
+    /* Constant reading speed (~60 px/s): long text scrolls longer, never
+     * faster. Short overflows keep the minimum duration. */
+    property <length> overflow: max(0px, marquee-label.preferred-width - root.width);
+    out property <duration> scroll-duration: max(1250ms, root.overflow / 1px * 16ms);
+    /* Time until the end of the text has been shown (0 when it fits). */
+    out property <duration> scroll-time: root.overflow > 0px ? 320ms + root.scroll-duration * root.passes : 0ms;
+    /* Reading this evaluates the animated position (used to restart). */
+    out property <length> offset: marquee-label.x;
+
+    background: #00000000;
+    clip: true;
+
+    marquee-label := Text {
+        text: root.label;
+        color: root.text-color;
+        font-size: root.text-size;
+        font-weight: root.text-weight;
+        width: self.preferred-width;
+        height: parent.height;
+        vertical-alignment: center;
+        x: root.active && self.preferred-width > parent.width
+            ? parent.width - self.preferred-width
+            : root.align-right ? parent.width - self.preferred-width
+            : root.align-center ? (parent.width - self.preferred-width) / 2
+            : 0px;
+        animate x {
+            delay: 320ms;
+            duration: root.scroll-duration;
+            iteration-count: root.passes;
+            direction: alternate;
+            easing: linear;
+            enabled: root.active && self.preferred-width > parent.width;
+        }
+    }
+}
+
 component BatteryGlyph inherits Rectangle {
     in property <int> percent: -1;
     in property <bool> charging: false;
@@ -164,18 +212,290 @@ component MaterialSlider inherits Rectangle {
     }
 }
 
+/*
+ * Global notification card (EPIC-006 Toast / Live Notification). Passive:
+ * it never takes controller focus. Severity: 0 info, 1 success, 2 warning,
+ * 3 error. Icon ids are mapped from the event kind by Rust.
+ */
+component NotificationCard inherits Rectangle {
+    in property <int> icon: 0;
+    in property <int> severity: 0;
+    in property <string> title: "";
+    in property <string> detail: "";
+    in property <int> battery: -1;
+    /* Determinate progress 0..1; negative hides the bar (indeterminate Live
+     * Notifications stay static instead of animating continuously). */
+    in property <float> progress: -1;
+
+    property <color> accent: root.severity == 3 ? #ff6b78
+        : root.severity == 2 ? #f2b84b : #3a86ff;
+    property <length> trailing: root.battery >= 0 ? 82px : 0px;
+    /* Time needed to scroll the longest line once to its end. */
+    out property <duration> scroll-time: max(title-text.scroll-time, root.detail != "" ? detail-text.scroll-time : 0ms);
+    out property <length> marquee-offset: title-text.offset + detail-text.offset;
+
+    height: 72px;
+    background: #0d0e10;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: root.severity >= 2 ? root.accent : #3a3f48;
+
+    Rectangle {
+        x: 14px;
+        y: (parent.height - self.height) / 2;
+        width: 40px;
+        height: 40px;
+        border-radius: 20px;
+        background: root.severity == 3 ? #3d1c22 : root.severity == 2 ? #3a2f16 : #18283c;
+
+        Image {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 20px;
+            height: 20px;
+            image-fit: contain;
+            colorize: root.accent;
+            source: root.icon == 1 ? @image-url("assets/icons/music.svg")
+                : root.icon == 2 ? @image-url("assets/icons/gamepad.svg")
+                : root.icon == 3 ? @image-url("assets/icons/headphones.svg")
+                : root.icon == 4 ? @image-url("assets/icons/volume-high.svg")
+                : root.icon == 5 ? @image-url("assets/icons/battery-quarter.svg")
+                : root.icon == 6 ? @image-url("assets/icons/leaf.svg")
+                : root.icon == 7 ? @image-url("assets/icons/plug.svg")
+                : root.icon == 8 ? @image-url("assets/icons/wifi.svg")
+                : root.icon == 9 ? @image-url("assets/icons/hard-drive.svg")
+                : root.icon == 10 ? @image-url("assets/icons/circle-check.svg")
+                : root.icon == 11 ? @image-url("assets/icons/circle-xmark.svg")
+                : @image-url("assets/icons/triangle-exclamation.svg");
+        }
+    }
+
+    title-text := MarqueeText {
+        x: 66px; y: 11px; width: parent.width - 80px - root.trailing; height: 25px;
+        passes: 1;
+        label: root.title;
+        text-color: #f5f6f8;
+        text-size: 17px;
+        text-weight: 700;
+    }
+
+    detail-text := MarqueeText {
+        x: 66px; y: 36px; width: parent.width - 80px; height: 22px;
+        passes: 1;
+        label: root.detail;
+        text-color: #a8adb5;
+        text-size: 14px;
+        text-weight: 600;
+        visible: root.detail != "";
+    }
+
+    BatteryGlyph {
+        x: parent.width - 14px - 44px - self.width;
+        y: 12px;
+        percent: root.battery;
+        visible: root.battery >= 0;
+    }
+
+    Text {
+        x: parent.width - 14px - 42px; y: 12px; width: 42px; height: 24px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        text: root.battery + "%";
+        color: #e5e7eb;
+        font-size: 15px;
+        font-weight: 700;
+        visible: root.battery >= 0;
+    }
+
+    Rectangle {
+        x: 66px; y: parent.height - 11px; width: parent.width - 80px; height: 3px;
+        border-radius: 1.5px;
+        background: #2a2e34;
+        visible: root.progress >= 0;
+
+        Rectangle {
+            x: 0; y: 0; height: parent.height;
+            width: parent.width * max(0, min(1, root.progress));
+            border-radius: 1.5px;
+            background: root.accent;
+        }
+    }
+}
+
+/* Quick Menu rows share the Settings visual grammar (colors, radii,
+ * typography) so both surfaces read as one product. */
+component QmSectionHeader inherits Rectangle {
+    in property <string> label: "";
+    height: 20px;
+    background: #00000000;
+
+    Text {
+        x: 4px;
+        y: 0;
+        width: parent.width - 4px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.label;
+        color: #3a86ff;
+        font-size: 13px;
+        font-weight: 700;
+        overflow: elide;
+    }
+}
+
+component QmRow inherits Rectangle {
+    in property <string> title: "";
+    in property <string> value: "";
+    in property <bool> selected: false;
+    /* Optional trailing action icon (e.g. Skip Track). */
+    in property <image> icon;
+    in property <bool> show-icon: false;
+
+    border-radius: 6px;
+    background: root.selected ? #1b2940 : #15171b;
+    border-width: 1px;
+    border-color: root.selected ? #3a86ff : #24272d;
+
+    Image {
+        x: parent.width - 12px - self.width;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        source: root.icon;
+        image-fit: contain;
+        colorize: root.selected ? #cfe2ff : #8e949d;
+        visible: root.show-icon;
+    }
+
+    value-text := MarqueeText {
+        width: root.value == "" ? 0px : min(self.content-width + 4px, parent.width * 0.5);
+        x: parent.width - 12px - self.width - (root.show-icon ? 26px : 0px);
+        y: 0;
+        height: parent.height;
+        label: root.value;
+        text-color: root.selected ? #cfe2ff : #8e949d;
+        text-size: 14px;
+        text-weight: 600;
+        align-right: true;
+        active: root.selected;
+        visible: root.value != "";
+    }
+
+    MarqueeText {
+        x: 12px;
+        y: 0;
+        width: root.value == "" ? parent.width - 24px - (root.show-icon ? 26px : 0px) : max(0px, value-text.x - 22px);
+        height: parent.height;
+        label: root.title;
+        text-color: root.selected ? #f5f6f8 : #c8ccd2;
+        text-size: 18px;
+        text-weight: root.selected ? 700 : 600;
+        active: root.selected;
+    }
+}
+
+/* Title and value on the first line, slider on its own second line. */
+component QmSliderRow inherits Rectangle {
+    in property <string> title: "";
+    in property <string> value: "";
+    in property <float> fraction: 0.0;
+    in property <bool> show-slider: true;
+    in property <bool> selected: false;
+
+    property <length> line-height: root.show-slider ? root.height - 26px : root.height;
+
+    border-radius: 6px;
+    background: root.selected ? #1b2940 : #15171b;
+    border-width: 1px;
+    border-color: root.selected ? #3a86ff : #24272d;
+
+    value-text := MarqueeText {
+        width: root.value == "" ? 0px : min(self.content-width + 4px, parent.width * 0.58);
+        x: parent.width - 12px - self.width;
+        y: root.show-slider ? 4px : 0px;
+        height: root.line-height;
+        label: root.value;
+        text-color: root.selected ? #cfe2ff : #8e949d;
+        text-size: 14px;
+        text-weight: 600;
+        align-right: true;
+        active: root.selected;
+        visible: root.value != "";
+    }
+
+    MarqueeText {
+        x: 12px;
+        y: root.show-slider ? 4px : 0px;
+        width: root.value == "" ? parent.width - 24px : max(0px, value-text.x - 22px);
+        height: root.line-height;
+        label: root.title;
+        text-color: root.selected ? #f5f6f8 : #c8ccd2;
+        text-size: 18px;
+        text-weight: root.selected ? 700 : 600;
+        active: root.selected;
+    }
+
+    MaterialSlider {
+        x: 12px;
+        y: parent.height - 24px;
+        width: parent.width - 24px;
+        fraction: root.fraction;
+        visible: root.show-slider;
+    }
+}
+
 export component QuickMenuWindow inherits Window {
+    in-out property <[string]> i18n-strings: ["Recently Played", "nuubUI graphics foundation", "Native layout • 640×480 • Wayland", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P4", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost"];
     in-out property <int> selected-index: 0;
     in-out property <bool> brightness-visible: false;
+    in-out property <bool> switch-user-visible: false;
+    in-out property <bool> home-music-playing: false;
     in-out property <int> brightness-value: 60;
     in-out property <float> brightness-fraction: 0.6;
     in-out property <string> brightness-label: "60%";
     in-out property <int> battery-percent: -1;
     in-out property <string> battery-state: "unknown";
     in-out property <string> battery-label: "--%";
+    in-out property <string> performance-profile-label: root.i18n-strings[52];
+
+    in-out property <bool> menu-panel-visible: true;
+    in-out property <string> audio-output-label: root.i18n-strings[210];
+    in-out property <bool> audio-volume-visible: true;
+    in-out property <string> audio-volume-label: "100%";
+    in-out property <float> audio-volume-fraction: 1.0;
+    in-out property <string> system-sounds-label: "60%";
+    in-out property <float> system-sounds-fraction: 0.6;
+    in-out property <bool> audio-output-dropdown-open: false;
+    in-out property <int> audio-output-dropdown-index: 0;
+    in-out property <int> audio-output-dropdown-scroll: 0;
+    in-out property <int> audio-output-dropdown-visible-rows:
+        root.height <= 480px ? 4 : 5;
+    in-out property <[string]> audio-output-options: [];
+    in-out property <bool> volume-osd-visible: false;
+    in-out property <bool> volume-osd-supported: true;
+    in-out property <string> volume-osd-title: root.i18n-strings[240];
+    in-out property <string> volume-osd-detail: "100%";
+    in-out property <float> volume-osd-fraction: 1.0;
+
+    /* Global notifications. */
+    in-out property <bool> toast-visible: false;
+    in-out property <int> toast-icon: 0;
+    in-out property <int> toast-severity: 0;
+    in-out property <string> toast-title: "";
+    in-out property <string> toast-detail: "";
+    in-out property <int> toast-battery: -1;
+    in-out property <float> toast-progress: -1;
+    out property <duration> toast-scroll-time: toast-card.scroll-time;
+    out property <length> toast-marquee-offset: toast-card.marquee-offset;
+
+    /*
+     * Which layer surface this window is rendered into:
+     * 0 full-screen (Quick Menu, lifecycle), 1 volume OSD surface only.
+     */
+    in-out property <int> surface-mode: 0;
 
     in-out property <bool> context-section-visible: false;
-    in-out property <string> context-section-title: "CONTEXT";
+    in-out property <string> context-section-title: root.i18n-strings[231];
     in-out property <string> context-primary-label: "";
 
     /*
@@ -189,15 +509,71 @@ export component QuickMenuWindow inherits Window {
     in-out property <string> lifecycle-mode: "";
     in-out property <float> line-progress: 1.0;
     in-out property <float> curtain-progress: 1.0;
+    in-out property <image> splash-image;
+    in-out property <float> splash-split: 0.485;
+    in-out property <float> splash-line-fraction: 0.483;
+    in-out property <length> splash-line-height: 3px;
 
+    /* Quick Menu grid. Same visual grammar as Settings (row colors, section
+     * headers, metrics); geometry is derived from the configured surface
+     * size and owned here, so Rust never duplicates pixel positions. */
     property <length> panel-width:
-        root.width < 900px ? root.width * 0.54 : 400px;
-    property <length> display-section-y:
-        root.context-section-visible ? 152px : 82px;
-    property <length> system-section-y:
-        root.display-section-y + (root.brightness-visible ? 98px : 0px);
+        root.width < 900px ? max(300px, root.width * 0.54) : 400px;
+    property <length> row-height: max(42px, min(56px, root.height * 0.0875));
+    property <length> slider-row-height: root.row-height + 20px;
+    property <length> row-gap: 8px;
+    property <length> section-header: 26px;
+    property <length> section-gap: 10px;
+    property <length> header-height: 60px;
+    property <length> footer-height: 58px;
+    property <length> content-top: root.header-height + 12px;
 
-    title: "nuubOS Quick Menu";
+    property <length> context-y: root.content-top;
+    property <length> display-y: root.context-section-visible
+        ? root.context-y + root.section-header + root.row-height + root.section-gap
+        : root.content-top;
+    property <length> audio-row-y: root.display-y + root.section-header;
+    property <length> brightness-row-y: root.audio-row-y + root.slider-row-height + root.row-gap;
+    property <length> skip-row-y: root.brightness-visible
+        ? root.brightness-row-y + root.slider-row-height + root.row-gap
+        : root.brightness-row-y;
+    property <length> display-end: root.home-music-playing
+        ? root.skip-row-y + root.row-height
+        : root.skip-row-y - root.row-gap;
+    property <length> user-y: root.display-end + root.section-gap;
+    property <length> user-row-y: root.user-y + root.section-header;
+    property <length> system-y: root.switch-user-visible
+        ? root.user-row-y + root.row-height + root.section-gap
+        : root.user-y;
+    property <length> perf-row-y: root.system-y + root.section-header;
+    property <length> sleep-row-y: root.perf-row-y + root.row-height + root.row-gap;
+    property <length> restart-row-y: root.sleep-row-y + root.row-height + root.row-gap;
+    property <length> poweroff-row-y: root.restart-row-y + root.row-height + root.row-gap;
+
+    property <length> focus-top:
+        root.selected-index == 3 ? root.audio-row-y
+        : root.selected-index == 5 ? root.brightness-row-y
+        : root.selected-index == 7 ? root.skip-row-y
+        : root.selected-index == 6 ? root.user-row-y
+        : root.selected-index == 4 ? root.perf-row-y
+        : root.selected-index == 0 ? root.sleep-row-y
+        : root.selected-index == 1 ? root.restart-row-y
+        : root.poweroff-row-y;
+    property <length> focus-bottom: root.focus-top
+        + (root.selected-index == 3 || root.selected-index == 5 ? root.slider-row-height : root.row-height);
+    property <length> viewport-top: root.header-height + 6px;
+    property <length> viewport-bottom: root.height - root.footer-height - 8px;
+    /* Keep the focused row inside the viewport; section header of the first
+     * section stays visible when scrolled to the top. */
+    property <length> scroll: min(
+        max(0px, root.focus-bottom - root.viewport-bottom),
+        max(0px, root.focus-top - root.viewport-top - (root.focus-top == root.audio-row-y ? root.section-header : 0px)));
+
+    property <bool> selected-adjustable:
+        (root.selected-index == 3 && root.audio-volume-visible)
+        || (root.selected-index == 5 && root.brightness-visible);
+
+    title: root.i18n-strings[232];
     background: #00000000;
     default-font-family: "Cantarell";
 
@@ -207,6 +583,7 @@ export component QuickMenuWindow inherits Window {
         width: parent.width;
         height: parent.height;
         background: #0000007a;
+        visible: root.menu-panel-visible;
     }
 
     Rectangle {
@@ -215,6 +592,8 @@ export component QuickMenuWindow inherits Window {
         width: root.panel-width;
         height: parent.height;
         background: #0d0e10;
+        visible: root.menu-panel-visible;
+        clip: true;
 
         Rectangle {
             x: parent.width - 1px;
@@ -222,216 +601,152 @@ export component QuickMenuWindow inherits Window {
             width: 1px;
             height: parent.height;
             background: #2c3036;
+            z: 90;
         }
 
-        Text {
-            x: 20px;
-            y: 11px;
-            width: 180px;
-            height: 32px;
-            vertical-alignment: center;
-            text: "Quick Menu";
-            color: #f5f6f8;
-            font-size: 25px;
-            font-weight: 700;
+        /* Optional context block. Sections remain independent, so future
+         * adapters can show/hide them without changing the system shell. */
+        QmSectionHeader {
+            x: 16px; y: root.context-y - root.scroll; width: parent.width - 32px;
+            label: root.context-section-title;
+            visible: root.context-section-visible;
+        }
+        QmRow {
+            x: 16px; y: root.context-y + root.section-header - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.context-primary-label;
+            visible: root.context-section-visible;
         }
 
-        BatteryGlyph {
-            x: parent.width - 88px;
-            y: 15px;
-            percent: root.battery-percent;
-            charging: root.battery-state == "charging";
+        QmSectionHeader {
+            x: 16px; y: root.display-y - root.scroll; width: parent.width - 32px;
+            label: root.i18n-strings[234];
+        }
+        QmSliderRow {
+            x: 16px; y: root.audio-row-y - root.scroll;
+            width: parent.width - 32px; height: root.slider-row-height;
+            title: root.i18n-strings[235];
+            value: root.audio-output-label;
+            fraction: root.audio-volume-fraction;
+            show-slider: root.audio-volume-visible;
+            selected: root.selected-index == 3;
+        }
+        QmSliderRow {
+            x: 16px; y: root.brightness-row-y - root.scroll;
+            width: parent.width - 32px; height: root.slider-row-height;
+            title: root.i18n-strings[127];
+            value: root.brightness-label;
+            fraction: root.brightness-fraction;
+            selected: root.selected-index == 5;
+            visible: root.brightness-visible;
+        }
+        QmRow {
+            x: 16px; y: root.skip-row-y - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[329];
+            icon: @image-url("assets/icons/forward-step.svg");
+            show-icon: true;
+            selected: root.selected-index == 7;
+            visible: root.home-music-playing;
         }
 
-        Text {
-            x: parent.width - 50px;
-            y: 15px;
-            width: 34px;
-            height: 24px;
-            horizontal-alignment: right;
-            vertical-alignment: center;
-            text: root.battery-label;
-            color: #e5e7eb;
-            font-size: 18px;
-            font-weight: 700;
+        /* User/session actions are separated from device/system policy. */
+        QmSectionHeader {
+            x: 16px; y: root.user-y - root.scroll; width: parent.width - 32px;
+            label: root.i18n-strings[312];
+            visible: root.switch-user-visible;
+        }
+        QmRow {
+            x: 16px; y: root.user-row-y - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[292];
+            selected: root.selected-index == 6;
+            visible: root.switch-user-visible;
         }
 
-        Rectangle {
-            x: 20px;
-            y: 59px;
-            width: parent.width - 40px;
-            height: 1px;
-            background: #25282d;
+        QmSectionHeader {
+            x: 16px; y: root.system-y - root.scroll; width: parent.width - 32px;
+            label: root.i18n-strings[49];
+        }
+        QmRow {
+            x: 16px; y: root.perf-row-y - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[236];
+            value: root.performance-profile-label;
+            selected: root.selected-index == 4;
+        }
+        QmRow {
+            x: 16px; y: root.sleep-row-y - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[189];
+            selected: root.selected-index == 0;
+        }
+        QmRow {
+            x: 16px; y: root.restart-row-y - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[237];
+            selected: root.selected-index == 1;
+        }
+        QmRow {
+            x: 16px; y: root.poweroff-row-y - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[58];
+            selected: root.selected-index == 2;
         }
 
-        /*
-         * Optional context block.  Sections remain independent, so future
-         * adapters can show/hide them without changing the system shell.
-         */
+        /* Fixed header masks content while controller focus scrolls. */
         Rectangle {
             x: 0;
-            y: 76px;
+            y: 0;
             width: parent.width;
-            height: 66px;
-            background: #00000000;
-            visible: root.context-section-visible;
+            height: root.header-height;
+            background: #0d0e10;
+            z: 80;
+
+            MarqueeText {
+                x: 20px; y: 11px; width: parent.width - 130px; height: 32px;
+                label: root.i18n-strings[233]; text-color: #f5f6f8; text-size: 25px; text-weight: 700;
+            }
+
+            BatteryGlyph {
+                x: parent.width - 88px;
+                y: 15px;
+                percent: root.battery-percent;
+                charging: root.battery-state == "charging";
+            }
 
             Text {
-                x: 20px;
-                y: 0;
-                text: root.context-section-title;
-                color: #3a86ff;
-                font-size: 13px;
+                x: parent.width - 54px;
+                y: 15px;
+                width: 40px;
+                height: 24px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                text: root.battery-label;
+                color: #e5e7eb;
+                font-size: 18px;
                 font-weight: 700;
             }
 
             Rectangle {
-                x: 16px;
-                y: 20px;
-                width: parent.width - 32px;
-                height: 38px;
-                background: #121418;
-                border-width: 1px;
-                border-color: #24272c;
-                border-radius: 6px;
-
-                Text {
-                    x: 13px;
-                    vertical-alignment: center;
-                    text: root.context-primary-label;
-                    color: #d8dbe0;
-                    font-size: 17px;
-                    font-weight: 600;
-                }
+                x: 20px;
+                y: parent.height - 1px;
+                width: parent.width - 40px;
+                height: 1px;
+                background: #25282d;
             }
         }
 
-        Text {
-            x: 20px;
-            y: root.display-section-y;
-            text: "DISPLAY / AUDIO";
-            color: #3a86ff;
-            font-size: 13px;
-            font-weight: 700;
-            visible: root.brightness-visible;
-        }
-
+        /* Universal context-sensitive action bar. Hint pairs flow by their
+         * real text width so localized labels never collide. */
         Rectangle {
-            x: 16px;
-            y: root.display-section-y + 20px;
-            width: parent.width - 32px;
-            height: 58px;
-            background: root.selected-index == 3 ? #1a1d22 : #111214;
-            border-width: 1px;
-            border-color: root.selected-index == 3 ? #3a86ff : #1c1e22;
-            border-radius: 6px;
-            visible: root.brightness-visible;
-
-            Text {
-                x: 14px;
-                y: 9px;
-                text: "Brightness";
-                color: root.selected-index == 3 ? #ffffff : #d9dce1;
-                font-size: 17px;
-                font-weight: root.selected-index == 3 ? 700 : 600;
-            }
-
-            Text {
-                x: parent.width - 58px;
-                y: 9px;
-                width: 44px;
-                horizontal-alignment: right;
-                text: root.brightness-label;
-                color: root.selected-index == 3 ? #ffffff : #a8adb5;
-                font-size: 16px;
-                font-weight: 600;
-            }
-
-            MaterialSlider {
-                x: 14px;
-                y: 31px;
-                width: parent.width - 28px;
-                fraction: root.brightness-fraction;
-            }
-        }
-
-
-        Text {
-            x: 20px;
-            y: root.system-section-y;
-            text: "SYSTEM";
-            color: #3a86ff;
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        Rectangle {
-            x: 16px;
-            y: root.system-section-y + 20px;
-            width: parent.width - 32px;
-            height: 40px;
-            background: root.selected-index == 0 ? #1a1d22 : #111214;
-            border-width: 1px;
-            border-color: root.selected-index == 0 ? #3a86ff : #1c1e22;
-            border-radius: 6px;
-
-            Text {
-                x: 14px;
-                vertical-alignment: center;
-                text: "Sleep";
-                color: root.selected-index == 0 ? #ffffff : #d9dce1;
-                font-size: 18px;
-                font-weight: root.selected-index == 0 ? 700 : 600;
-            }
-        }
-
-        Rectangle {
-            x: 16px;
-            y: root.system-section-y + 66px;
-            width: parent.width - 32px;
-            height: 40px;
-            background: root.selected-index == 1 ? #1a1d22 : #111214;
-            border-width: 1px;
-            border-color: root.selected-index == 1 ? #3a86ff : #1c1e22;
-            border-radius: 6px;
-
-            Text {
-                x: 14px;
-                vertical-alignment: center;
-                text: "Reboot";
-                color: root.selected-index == 1 ? #ffffff : #d9dce1;
-                font-size: 18px;
-                font-weight: root.selected-index == 1 ? 700 : 600;
-            }
-        }
-
-        Rectangle {
-            x: 16px;
-            y: root.system-section-y + 112px;
-            width: parent.width - 32px;
-            height: 40px;
-            background: root.selected-index == 2 ? #1a1d22 : #111214;
-            border-width: 1px;
-            border-color: root.selected-index == 2 ? #3a86ff : #1c1e22;
-            border-radius: 6px;
-
-            Text {
-                x: 14px;
-                vertical-alignment: center;
-                text: "Power Off";
-                color: root.selected-index == 2 ? #ffffff : #d9dce1;
-                font-size: 18px;
-                font-weight: root.selected-index == 2 ? 700 : 600;
-            }
-        }
-
-        /* Universal context-sensitive action bar. */
-        Rectangle {
+            z: 80;
             x: 0;
-            y: parent.height - 58px;
+            y: parent.height - root.footer-height;
             width: parent.width;
-            height: 58px;
+            height: root.footer-height;
             background: #0a0b0d;
+            clip: true;
 
             Rectangle {
                 x: 16px;
@@ -441,80 +756,162 @@ export component QuickMenuWindow inherits Window {
                 background: #25282d;
             }
 
-            /* Primary slot: Select for actions, Adjust for horizontal sliders. */
-            FaceButtonHint {
-                x: 18px;
-                y: 15px;
-                active-position: root.confirm-face-position;
-                visible: !(root.brightness-visible && root.selected-index == 3);
-            }
+            HorizontalLayout {
+                x: 16px;
+                y: 0;
+                width: parent.width - 32px;
+                height: parent.height;
+                spacing: 8px;
+                alignment: start;
 
-            Text {
-                x: 52px;
-                y: 20px;
-                text: "Select";
-                color: #b8bdc5;
-                font-size: 15px;
-                font-weight: 600;
-                visible: !(root.brightness-visible && root.selected-index == 3);
-            }
-
-            HorizontalAdjustHint {
-                x: 18px;
-                y: 16px;
-                visible: root.brightness-visible && root.selected-index == 3;
-            }
-
-            Text {
-                x: 54px;
-                y: 20px;
-                text: "Adjust";
-                color: #b8bdc5;
-                font-size: 15px;
-                font-weight: 600;
-                visible: root.brightness-visible && root.selected-index == 3;
-            }
-
-            FaceButtonHint {
-                x: 126px;
-                y: 15px;
-                active-position: root.back-face-position;
-            }
-
-            Text {
-                x: 160px;
-                y: 20px;
-                text: "Back";
-                color: #a8adb5;
-                font-size: 15px;
-                font-weight: 600;
-            }
-
-            MenuActionHint {
-                x: 226px;
-                y: 16px;
-            }
-
-            Text {
-                x: 260px;
-                y: 20px;
-                text: "Close";
-                color: #8e949d;
-                font-size: 15px;
-                font-weight: 600;
+                if !root.selected-adjustable: VerticalLayout {
+                    alignment: center;
+                    FaceButtonHint { active-position: root.confirm-face-position; }
+                }
+                if root.selected-adjustable: VerticalLayout {
+                    alignment: center;
+                    HorizontalAdjustHint { }
+                }
+                Text {
+                    vertical-alignment: center;
+                    text: root.selected-adjustable ? root.i18n-strings[238] : root.i18n-strings[185];
+                    color: #b8bdc5; font-size: 15px; font-weight: 600;
+                }
+                Rectangle { width: 6px; }
+                VerticalLayout {
+                    alignment: center;
+                    FaceButtonHint { active-position: root.back-face-position; }
+                }
+                Text {
+                    vertical-alignment: center;
+                    text: root.i18n-strings[186];
+                    color: #a8adb5; font-size: 15px; font-weight: 600;
+                }
+                Rectangle { width: 6px; }
+                VerticalLayout {
+                    alignment: center;
+                    MenuActionHint { }
+                }
+                Text {
+                    vertical-alignment: center;
+                    text: root.i18n-strings[239];
+                    color: #8e949d; font-size: 15px; font-weight: 600;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
             }
         }
     }
 
+    /* Audio output dropdown, anchored below the Audio row. */
+    Rectangle {
+        x: 16px;
+        y: root.audio-row-y + root.slider-row-height + 4px - root.scroll;
+        width: root.panel-width - 32px;
+        height: 12px + min(root.audio-output-options.length, root.audio-output-dropdown-visible-rows) * (root.row-height + root.row-gap) - root.row-gap;
+        background: #17191d;
+        border-width: 1px;
+        border-color: #3a86ff;
+        border-radius: 8px;
+        clip: true;
+        visible: root.menu-panel-visible && root.audio-output-dropdown-open;
+        z: 70;
+
+        for option[i] in root.audio-output-options: QmRow {
+            x: 6px;
+            y: 6px + (i - root.audio-output-dropdown-scroll) * (root.row-height + root.row-gap);
+            width: parent.width - 12px;
+            height: root.row-height;
+            title: option;
+            selected: root.audio-output-dropdown-index == i;
+            visible: i >= root.audio-output-dropdown-scroll
+                && i < root.audio-output-dropdown-scroll + root.audio-output-dropdown-visible-rows;
+        }
+    }
+
+    /* System-wide volume OSD. The same layer-shell surface is used without
+     * controller capture when Quick Menu itself is closed. */
+    /* OSD-only mode uses a surface sized to the card itself. */
+    property <bool> osd-compact: root.surface-mode == 1;
+    Rectangle {
+        x: (parent.width - 360px) / 2;
+        y: root.osd-compact ? (parent.height - self.height) / 2 : parent.height - 142px;
+        width: 360px;
+        height: 82px;
+        background: #0d0e10;
+        border-width: 1px;
+        border-color: #3a3f48;
+        border-radius: 10px;
+        visible: root.volume-osd-visible;
+        z: 80;
+
+        MarqueeText {
+            x: 18px; y: 12px; width: parent.width - 36px; height: 25px;
+            label: root.volume-osd-title;
+            text-color: #f5f6f8;
+            text-size: 20px;
+            text-weight: 700;
+            
+        }
+
+        MarqueeText {
+            x: 18px; y: 42px; width: parent.width - 36px; height: 22px;
+            label: root.volume-osd-detail;
+            text-color: root.volume-osd-supported ? #a8adb5 : #d4d7dc;
+            text-size: root.volume-osd-supported ? 15px : 14px;
+            text-weight: 600;
+            visible: !root.volume-osd-supported;
+            
+        }
+
+        MaterialSlider {
+            x: 18px; y: 48px; width: parent.width - 36px;
+            fraction: root.volume-osd-fraction;
+            visible: root.volume-osd-supported;
+        }
+
+        Text {
+            x: parent.width - 68px; y: 11px; width: 50px; height: 25px;
+            text: root.volume-osd-supported ? root.volume-osd-detail : "";
+            color: #f5f6f8;
+            font-size: 18px;
+            font-weight: 700;
+            horizontal-alignment: right;
+        }
+    }
+
     /*
-     * Existing qualified P0.1 lifecycle animation, kept above fullscreen
+     * Copy of the notification card drawn inside the open Quick Menu, at
+     * exactly the position of the persistent notification surface
+     * (NotificationWindow, anchored top-right with the same 14 px offset).
+     * Opening or closing the menu therefore never changes the card's pixels,
+     * whichever surface ends up on top.
+     */
+    toast-card := NotificationCard {
+        x: root.width - 14px - self.width;
+        y: 14px;
+        width: 400px;
+        icon: root.toast-icon;
+        severity: root.toast-severity;
+        title: root.toast-title;
+        detail: root.toast-detail;
+        battery: root.toast-battery;
+        progress: root.toast-progress;
+        visible: root.toast-visible && root.menu-panel-visible && !root.lifecycle-active;
+        z: 90;
+    }
+
+    /*
+     * Lifecycle animation. The splash image is rendered by Rust (src/splash.rs)
+     * at the exact physical surface size, identical to the kernel/compositor
+     * frames, and drawn 1:1. Existing qualified P0.1 lifecycle animation, kept above fullscreen
      * clients by the Quick Menu's layer-shell Overlay surface.
      */
     Rectangle {
         x: 0;
-        y: -(parent.height * 0.485) * root.curtain-progress;
+        y: -(parent.height * root.splash-split) * root.curtain-progress;
         width: parent.width;
-        height: parent.height * 0.485;
+        height: parent.height * root.splash-split;
         clip: true;
         visible: root.lifecycle-active;
 
@@ -523,63 +920,57 @@ export component QuickMenuWindow inherits Window {
             y: 0;
             width: root.width;
             height: root.height;
-            source: root.lifecycle-mode == "reboot"
-                ? @image-url("assets/reboot-splash.png")
-                : @image-url("assets/poweroff-splash.png");
+            source: root.splash-image;
             image-fit: fill;
-            image-rendering: pixelated;
         }
     }
 
     Rectangle {
         x: 0;
-        y: parent.height * 0.485
-            + (parent.height * 0.515) * root.curtain-progress;
+        y: parent.height * root.splash-split
+            + (parent.height * (1 - root.splash-split)) * root.curtain-progress;
         width: parent.width;
-        height: parent.height * 0.515;
+        height: parent.height * (1 - root.splash-split);
         clip: true;
         visible: root.lifecycle-active;
 
         Image {
             x: 0;
-            y: -(root.height * 0.485);
+            y: -(root.height * root.splash-split);
             width: root.width;
             height: root.height;
-            source: root.lifecycle-mode == "reboot"
-                ? @image-url("assets/reboot-splash.png")
-                : @image-url("assets/poweroff-splash.png");
+            source: root.splash-image;
             image-fit: fill;
-            image-rendering: pixelated;
         }
     }
 
     Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height * 0.485
-            - (parent.height * 0.485) * root.curtain-progress;
-        width: parent.width * (0.483 + 0.517 * root.line-progress);
-        height: 3px;
+        y: parent.height * root.splash-split
+            - (parent.height * root.splash-split) * root.curtain-progress;
+        width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
+        height: root.splash-line-height;
         background: #5b86d6;
         visible: root.lifecycle-active;
     }
 
     Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height * 0.485
-            + (parent.height * 0.515) * root.curtain-progress
+        y: parent.height * root.splash-split
+            + (parent.height * (1 - root.splash-split)) * root.curtain-progress
             - self.height;
-        width: parent.width * (0.483 + 0.517 * root.line-progress);
-        height: 3px;
+        width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
+        height: root.splash-line-height;
         background: #5b86d6;
         visible: root.lifecycle-active;
     }
 
     Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height * 0.485
-            - (parent.height * 0.485) * root.curtain-progress
+        y: parent.height * root.splash-split
+            - (parent.height * root.splash-split) * root.curtain-progress
             - 2px;
-        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
         height: 7px;
         background: #5b86d6;
         opacity: 0.06;
@@ -588,13 +979,45 @@ export component QuickMenuWindow inherits Window {
 
     Rectangle {
         x: (parent.width - self.width) / 2;
-        y: parent.height * 0.485
-            + (parent.height * 0.515) * root.curtain-progress
+        y: parent.height * root.splash-split
+            + (parent.height * (1 - root.splash-split)) * root.curtain-progress
             - 5px;
-        width: parent.width * (0.483 + 0.517 * root.line-progress);
+        width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
         height: 7px;
         background: #5b86d6;
         opacity: 0.06;
         visible: root.lifecycle-active;
+    }
+}
+
+/*
+ * Global notification surface: a passive top-right layer surface of its own
+ * (416x88 logical: the 400x72 card plus an 8 px inset), independent of the
+ * Quick Menu so opening/closing the menu never remaps it.
+ */
+export component NotificationWindow inherits Window {
+    in-out property <int> toast-icon: 0;
+    in-out property <int> toast-severity: 0;
+    in-out property <string> toast-title: "";
+    in-out property <string> toast-detail: "";
+    in-out property <int> toast-battery: -1;
+    in-out property <float> toast-progress: -1;
+    out property <duration> toast-scroll-time: toast-card.scroll-time;
+    out property <length> toast-marquee-offset: toast-card.marquee-offset;
+
+    title: "nuubOS Notification";
+    background: #00000000;
+    default-font-family: "Cantarell";
+
+    toast-card := NotificationCard {
+        x: 8px;
+        y: 8px;
+        width: root.width - 16px;
+        icon: root.toast-icon;
+        severity: root.toast-severity;
+        title: root.toast-title;
+        detail: root.toast-detail;
+        battery: root.toast-battery;
+        progress: root.toast-progress;
     }
 }

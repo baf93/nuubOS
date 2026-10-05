@@ -1,0 +1,18 @@
+#!/bin/sh
+DAEMON=/usr/sbin/nuubos-localizationd
+PIDFILE=/run/nuubos/localizationd.pid
+case "$1" in
+    start)
+        mkdir -p /run/nuubos
+        start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON"
+        ;;
+    stop)
+        start-stop-daemon -K -p "$PIDFILE" -x "$DAEMON" 2>/dev/null || true
+        rm -f "$PIDFILE" /run/nuubos/localizationd.sock
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    *) echo "Usage: $0 {start|stop|restart}"; ;;
+esac

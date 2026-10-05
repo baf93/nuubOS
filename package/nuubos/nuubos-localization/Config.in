@@ -1,0 +1,4 @@
+config BR2_PACKAGE_NUUBOS_LOCALIZATION
+	bool "nuubos-localization"
+	help
+	  Event-driven per-user localization preference service for nuubUI.

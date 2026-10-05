@@ -1,0 +1,6 @@
+config BR2_PACKAGE_NUUBOS_REGIONAL
+	bool "nuubOS regional settings service"
+	select BR2_PACKAGE_KBD
+	select BR2_TARGET_TZ_INFO
+	help
+	  Device-global timezone, automatic time synchronization and keyboard layout.

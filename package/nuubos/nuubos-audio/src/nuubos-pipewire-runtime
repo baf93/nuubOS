@@ -1,0 +1,107 @@
+#!/bin/sh
+
+RUNTIME=/run/nuubos/pipewire
+PW_PID="$RUNTIME/pipewire.pid"
+WP_PID="$RUNTIME/wireplumber.pid"
+PW_LOG=/run/nuubos/pipewire.log
+WP_LOG=/run/nuubos/wireplumber.log
+
+start_daemon()
+{
+    pidfile="$1"
+    logfile="$2"
+    shift 2
+    start-stop-daemon -S -q -b -m -p "$pidfile" -x /usr/bin/env -- "$@" >>"$logfile" 2>&1
+}
+
+stop_pidfile()
+{
+    pidfile="$1"
+    if [ -f "$pidfile" ]; then
+        start-stop-daemon -K -q -p "$pidfile" 2>/dev/null || true
+        rm -f "$pidfile"
+    fi
+}
+
+start_runtime()
+{
+    mkdir -p "$RUNTIME"
+    chmod 0755 "$RUNTIME"
+    : > "$PW_LOG"
+    : > "$WP_LOG"
+
+    if [ ! -x /usr/bin/pipewire ] || [ ! -x /usr/bin/wireplumber ] || [ ! -x /usr/bin/wpctl ]; then
+        echo "PipeWire/WirePlumber runtime missing" >&2
+        return 1
+    fi
+
+    stop_pidfile "$WP_PID"
+    stop_pidfile "$PW_PID"
+
+    start_daemon "$PW_PID" "$PW_LOG" \
+        XDG_RUNTIME_DIR="$RUNTIME" \
+        PIPEWIRE_RUNTIME_DIR="$RUNTIME" \
+        /usr/bin/pipewire
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "cannot start PipeWire" >&2
+        return "$rc"
+    fi
+
+    i=0
+    while [ ! -S "$RUNTIME/pipewire-0" ] && [ "$i" -lt 40 ]; do
+        sleep 0.05
+        i=$((i + 1))
+    done
+    if [ ! -S "$RUNTIME/pipewire-0" ]; then
+        echo "PipeWire socket not created" >&2
+        stop_pidfile "$PW_PID"
+        return 1
+    fi
+
+    start_daemon "$WP_PID" "$WP_LOG" \
+        XDG_RUNTIME_DIR="$RUNTIME" \
+        PIPEWIRE_RUNTIME_DIR="$RUNTIME" \
+        /usr/bin/wireplumber --profile=main-embedded
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "cannot start WirePlumber" >&2
+        stop_pidfile "$PW_PID"
+        return "$rc"
+    fi
+
+    i=0
+    while [ "$i" -lt 40 ]; do
+        XDG_RUNTIME_DIR="$RUNTIME" PIPEWIRE_RUNTIME_DIR="$RUNTIME" \
+            wpctl status >/dev/null 2>&1 && return 0
+        sleep 0.05
+        i=$((i + 1))
+    done
+
+    echo "WirePlumber did not become ready" >&2
+    return 1
+}
+
+case "${1:-}" in
+    start) start_runtime ;;
+    stop)
+        stop_pidfile "$WP_PID"
+        stop_pidfile "$PW_PID"
+        rm -rf "$RUNTIME"
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    status)
+        echo "===== PROCESSES ====="
+        ps w | grep -E '[p]ipewire|[w]ireplumber' || true
+        echo
+        echo "===== GRAPH ====="
+        XDG_RUNTIME_DIR="$RUNTIME" PIPEWIRE_RUNTIME_DIR="$RUNTIME" wpctl status 2>&1 || true
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}" >&2
+        exit 2
+        ;;
+esac

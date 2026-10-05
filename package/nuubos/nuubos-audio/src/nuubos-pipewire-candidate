@@ -1,0 +1,91 @@
+#!/bin/sh
+
+RUNTIME=/run/nuubos/pipewire-candidate
+PW_PID="$RUNTIME/pipewire.pid"
+WP_PID="$RUNTIME/wireplumber.pid"
+BLUEALSA_WAS_RUNNING="$RUNTIME/bluealsa-was-running"
+
+start_daemon() {
+    pidfile="$1"
+    shift
+    start-stop-daemon -S -q -b -m -p "$pidfile" -x /usr/bin/env -- "$@"
+}
+
+stop_pidfile() {
+    pidfile="$1"
+    if [ -f "$pidfile" ]; then
+        start-stop-daemon -K -q -p "$pidfile" 2>/dev/null || true
+        rm -f "$pidfile"
+    fi
+}
+
+stop_bluealsa() {
+    rm -f "$BLUEALSA_WAS_RUNNING"
+    if pidof bluealsa >/dev/null 2>&1; then
+        touch "$BLUEALSA_WAS_RUNNING"
+        killall bluealsa 2>/dev/null || true
+        sleep 1
+    fi
+}
+
+restore_bluealsa() {
+    if [ ! -f "$BLUEALSA_WAS_RUNNING" ]; then
+        return 0
+    fi
+
+    for script in /etc/init.d/*bluealsa* /etc/init.d/*bluez-alsa*; do
+        if [ -x "$script" ]; then
+            "$script" start >/dev/null 2>&1 || true
+            rm -f "$BLUEALSA_WAS_RUNNING"
+            return 0
+        fi
+    done
+
+    if [ -x /usr/bin/bluealsa ]; then
+        /usr/bin/bluealsa -p a2dp-source >/tmp/bluealsa.log 2>&1 &
+    fi
+    rm -f "$BLUEALSA_WAS_RUNNING"
+}
+
+case "${1:-}" in
+    start)
+        mkdir -p "$RUNTIME"
+        chmod 0700 "$RUNTIME"
+        stop_bluealsa
+        start_daemon "$PW_PID" XDG_RUNTIME_DIR="$RUNTIME" PIPEWIRE_RUNTIME_DIR="$RUNTIME" /usr/bin/pipewire
+        i=0
+        while [ ! -S "$RUNTIME/pipewire-0" ] && [ "$i" -lt 20 ]; do
+            sleep 0.1
+            i=$((i + 1))
+        done
+        if [ ! -S "$RUNTIME/pipewire-0" ]; then
+            echo "[FAIL] PipeWire socket not created"
+            "$0" stop
+            exit 1
+        fi
+        start_daemon "$WP_PID" XDG_RUNTIME_DIR="$RUNTIME" PIPEWIRE_RUNTIME_DIR="$RUNTIME" /usr/bin/wireplumber --profile=main-embedded
+        sleep 1
+        XDG_RUNTIME_DIR="$RUNTIME" PIPEWIRE_RUNTIME_DIR="$RUNTIME" wpctl status
+        ;;
+    stop)
+        stop_pidfile "$WP_PID"
+        stop_pidfile "$PW_PID"
+        restore_bluealsa
+        rm -rf "$RUNTIME"
+        ;;
+    status)
+        echo "===== candidate processes ====="
+        ps | grep -E '[p]ipewire|[w]ireplumber|[b]luealsa'
+        echo
+        echo "===== graph ====="
+        XDG_RUNTIME_DIR="$RUNTIME" PIPEWIRE_RUNTIME_DIR="$RUNTIME" wpctl status 2>&1 || true
+        ;;
+    env)
+        echo "export XDG_RUNTIME_DIR=$RUNTIME"
+        echo "export PIPEWIRE_RUNTIME_DIR=$RUNTIME"
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|status|env}"
+        exit 1
+        ;;
+esac

@@ -55,12 +55,18 @@ static struct binding bindings[] = {
 	{ "menu_right", 547 },
 	{ "menu_confirm", 305 },
 	{ "menu_back", 304 },
+	/*
+	 * Physical console power is a device-global semantic action.  It is
+	 * deliberately not owned by Settings or Quick Menu and is delivered to
+	 * Home so the system-wide Power OSD can arbitrate the lifecycle request.
+	 */
+	{ "power", KEY_POWER },
 };
 
 struct nav_axis {
 	bool present;
 	bool horizontal;
-	bool discrete;
+	bool inverted;
 	int code;
 	int minimum;
 	int maximum;
@@ -70,18 +76,17 @@ struct nav_axis {
 	int direction;
 };
 
-struct tester_axis {
+/*
+ * A navigation action driven by an axis: a D-pad hat (default when the pad
+ * has no D-pad keys) or a per-controller mapping to a half axis / trigger.
+ * dir follows the nuubos-controllersd mapping format: +1/-1 half axis above/
+ * below centre, +2/-2 full travel from the minimum/maximum.
+ */
+struct abs_binding {
 	bool present;
-	bool unipolar;
 	int code;
-	int minimum;
-	int maximum;
-	int center;
-};
-
-static const int tester_axis_codes[] = {
-	ABS_X, ABS_Y, ABS_RX, ABS_RY, ABS_Z, ABS_RZ,
-	ABS_GAS, ABS_BRAKE, ABS_HAT0X, ABS_HAT0Y,
+	int dir;
+	bool pressed;
 };
 
 struct input_dev {
@@ -90,20 +95,23 @@ struct input_dev {
 	char path[512];
 	char name[128];
 	char controller_id[160];
+	bool accelerometer;
+	/* Key bound to each action, -1 when the action is unassigned or bound
+	 * to an axis on this controller. */
 	int mapped_codes[sizeof(bindings) / sizeof(bindings[0])];
+	struct abs_binding abs_bindings[sizeof(bindings) / sizeof(bindings[0])];
 	int left_deadzone_percent;
 	int right_deadzone_percent;
+	unsigned long abs_bits[NBITS(ABS_MAX + 1)];
+	struct input_absinfo absinfo[ABS_MAX + 1];
 
 	/*
 	 * Navigation is described exclusively through Linux input semantics,
-	 * never controller names.  ABS_X/ABS_Y cover the left stick while
-	 * ABS_HAT0X/ABS_HAT0Y cover the D-pad used by common Bluetooth pads.
+	 * never controller names: the left stick axes come from the active
+	 * user's controller mapping (default ABS_X/ABS_Y).
 	 */
 	struct nav_axis abs_x;
 	struct nav_axis abs_y;
-	struct nav_axis hat_x;
-	struct nav_axis hat_y;
-	struct tester_axis tester_axes[sizeof(tester_axis_codes) / sizeof(tester_axis_codes[0])];
 };
 
 enum client_role {
@@ -141,13 +149,7 @@ static char repeat_action[32];
 static long long repeat_next_ms;
 static char raw_capture_controller[160];
 
-static bool configure_nav_axis(struct input_dev *input,
-			       struct nav_axis *axis,
-			       int code,
-			       bool horizontal,
-			       bool discrete);
-static void configure_tester_axes(struct input_dev *input);
-static int normalize_tester_abs(const struct input_dev *input, int code, int value);
+static void configure_input_mapping(struct input_dev *input);
 
 static void log_message(const char *fmt, ...)
 {
@@ -285,15 +287,71 @@ static void compute_controller_id(int fd, const char *name,
 		 id.bustype, id.vendor, id.product, safe_name);
 }
 
-static void load_controller_mapping(struct input_dev *input)
+/* Same source format as nuubos-controllersd, which owns the mapping. */
+static bool parse_mapping_source(const char *text, bool *is_key,
+				 int *code, int *dir)
+{
+	char d;
+	char tail;
+
+	if (strcmp(text, "none") == 0) {
+		*is_key = false;
+		*code = -1;
+		*dir = 0;
+		return true;
+	}
+	if (sscanf(text, "abs:%d:%c%c", code, &d, &tail) == 2 &&
+	    *code >= 0 && *code <= ABS_MAX) {
+		*dir = d == '+' ? 1 : d == '-' ? -1 : d == '>' ? 2 : d == '<' ? -2 : 0;
+		*is_key = false;
+		return *dir != 0;
+	}
+	if ((sscanf(text, "key:%d%c", code, &tail) == 1 ||
+	     sscanf(text, "%d%c", code, &tail) == 1) &&
+	    *code >= 0 && *code <= KEY_MAX) {
+		*is_key = true;
+		*dir = 0;
+		return true;
+	}
+	return false;
+}
+
+static void set_abs_binding(struct abs_binding *binding, int code, int dir)
+{
+	binding->present = code >= 0;
+	binding->code = code;
+	binding->dir = dir;
+	binding->pressed = false;
+}
+
+static void load_controller_mapping(struct input_dev *input,
+				    int stick_code[2], int stick_dir[2])
 {
 	char path[512];
 	FILE *fp;
 	char line[MAX_LINE];
 	size_t i;
 
-	for (i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++)
+	for (i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++) {
+		const char *name = bindings[i].name;
+
 		input->mapped_codes[i] = bindings[i].code;
+		/* Pads without D-pad keys report the D-pad on hat 0. */
+		if (strcmp(name, "menu_up") == 0)
+			set_abs_binding(&input->abs_bindings[i], ABS_HAT0Y, -1);
+		else if (strcmp(name, "menu_down") == 0)
+			set_abs_binding(&input->abs_bindings[i], ABS_HAT0Y, 1);
+		else if (strcmp(name, "menu_left") == 0)
+			set_abs_binding(&input->abs_bindings[i], ABS_HAT0X, -1);
+		else if (strcmp(name, "menu_right") == 0)
+			set_abs_binding(&input->abs_bindings[i], ABS_HAT0X, 1);
+		else
+			set_abs_binding(&input->abs_bindings[i], -1, 0);
+	}
+	stick_code[0] = ABS_X;
+	stick_code[1] = ABS_Y;
+	stick_dir[0] = 1;
+	stick_dir[1] = 1;
 	input->left_deadzone_percent = 20;
 	input->right_deadzone_percent = 20;
 
@@ -304,7 +362,10 @@ static void load_controller_mapping(struct input_dev *input)
 
 	while (fgets(line, sizeof(line), fp)) {
 		char name[64];
+		char value[64];
+		bool is_key;
 		int code;
+		int dir;
 
 		if (sscanf(line, "LEFT_DEADZONE=%d", &code) == 1) {
 			if (code >= 0 && code <= 50)
@@ -316,15 +377,28 @@ static void load_controller_mapping(struct input_dev *input)
 				input->right_deadzone_percent = code;
 			continue;
 		}
-		if (sscanf(line, "%63[^=]=%d", name, &code) != 2)
+		if (sscanf(line, "%63[^=]=%63s", name, value) != 2 ||
+		    !parse_mapping_source(value, &is_key, &code, &dir))
 			continue;
 
+		if (strcmp(name, "left_x") == 0 || strcmp(name, "left_y") == 0) {
+			int axis = name[5] == 'x' ? 0 : 1;
+
+			if (is_key || dir == 2 || dir == -2)
+				continue;
+			stick_code[axis] = code;
+			stick_dir[axis] = dir;
+			continue;
+		}
+
+		/* An explicit binding replaces both default sources. */
 		for (i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++) {
-			if (strcmp(name, bindings[i].name) == 0 &&
-			    code >= 0 && code <= KEY_MAX) {
-				input->mapped_codes[i] = code;
-				break;
-			}
+			if (strcmp(name, bindings[i].name) != 0)
+				continue;
+			input->mapped_codes[i] = is_key ? code : -1;
+			set_abs_binding(&input->abs_bindings[i],
+					is_key ? -1 : code, dir);
+			break;
 		}
 	}
 
@@ -335,18 +409,8 @@ static void reload_controller_mappings(void)
 {
 	size_t i;
 
-	for (i = 0; i < input_count; i++) {
-		load_controller_mapping(&inputs[i]);
-		(void)configure_nav_axis(&inputs[i], &inputs[i].abs_x,
-					 ABS_X, true, false);
-		(void)configure_nav_axis(&inputs[i], &inputs[i].abs_y,
-					 ABS_Y, false, false);
-		(void)configure_nav_axis(&inputs[i], &inputs[i].hat_x,
-					 ABS_HAT0X, true, true);
-		(void)configure_nav_axis(&inputs[i], &inputs[i].hat_y,
-					 ABS_HAT0Y, false, true);
-		configure_tester_axes(&inputs[i]);
-	}
+	for (i = 0; i < input_count; i++)
+		configure_input_mapping(&inputs[i]);
 }
 
 static bool suppress_start_marker_present(void)
@@ -491,6 +555,7 @@ static void load_bindings(void)
 	bindings[5].code = 547;
 	bindings[6].code = 305;
 	bindings[7].code = 304;
+	bindings[8].code = KEY_POWER;
 
 	load_config_file(DEFAULT_CONFIG);
 	load_config_file(STATE_CONFIG);
@@ -630,186 +695,156 @@ static bool input_has_mapped_key(const struct input_dev *input)
 	return false;
 }
 
-static const char *axis_name(int code)
-{
-	switch (code) {
-	case ABS_X:
-		return "ABS_X";
-	case ABS_Y:
-		return "ABS_Y";
-	case ABS_HAT0X:
-		return "ABS_HAT0X";
-	case ABS_HAT0Y:
-		return "ABS_HAT0Y";
-	default:
-		return "ABS_UNKNOWN";
-	}
-}
-
 static bool configure_nav_axis(struct input_dev *input,
 			       struct nav_axis *axis,
 			       int code,
-			       bool horizontal,
-			       bool discrete)
+			       int dir,
+			       bool horizontal)
 {
-	unsigned long bits[NBITS(ABS_MAX + 1)];
-	struct input_absinfo info;
+	const struct input_absinfo *info;
 	int range;
 	int flat;
 
 	memset(axis, 0, sizeof(*axis));
 	axis->code = code;
 	axis->horizontal = horizontal;
-	axis->discrete = discrete;
+	axis->inverted = dir < 0;
 
-	memset(bits, 0, sizeof(bits));
-
-	if (ioctl(input->fd, EVIOCGBIT(EV_ABS, sizeof(bits)), bits) < 0)
+	if (code < 0 || code > ABS_MAX ||
+	    !bit_is_set(input->abs_bits, (unsigned int)code))
 		return false;
 
-	if (!bit_is_set(bits, (unsigned int)code))
-		return false;
-
-	memset(&info, 0, sizeof(info));
-
-	if (ioctl(input->fd, EVIOCGABS(code), &info) < 0)
-		return false;
-
-	range = info.maximum - info.minimum;
+	info = &input->absinfo[code];
+	range = info->maximum - info->minimum;
 	if (range <= 0)
 		return false;
 
 	axis->present = true;
-	axis->minimum = info.minimum;
-	axis->maximum = info.maximum;
-	axis->center = info.minimum + range / 2;
+	axis->minimum = info->minimum;
+	axis->maximum = info->maximum;
+	axis->center = info->minimum + range / 2;
 	axis->direction = 0;
 
-	if (discrete) {
-		/*
-		 * Linux D-pad hats are normally -1/0/+1. Keep them discrete
-		 * rather than applying analog hysteresis, which would collapse
-		 * with such a small range.
-		 */
-		axis->enter_delta = 0;
-		axis->release_delta = 0;
-	} else {
-		flat = info.flat;
-		if (flat < 0)
-			flat = 0;
+	flat = info->flat;
+	if (flat < 0)
+		flat = 0;
 
-		/*
-		 * The active user's per-controller left-stick deadzone is used for
-		 * Settings navigation as well. Keep a smaller release threshold for
-		 * hysteresis so the stick does not chatter near the boundary.
-		 */
-		axis->enter_delta = (range * input->left_deadzone_percent) / 100;
-		if (axis->enter_delta < flat * 2)
-			axis->enter_delta = flat * 2;
+	/*
+	 * The active user's per-controller left-stick deadzone is used for
+	 * Settings navigation as well. Keep a smaller release threshold for
+	 * hysteresis so the stick does not chatter near the boundary.
+	 */
+	axis->enter_delta = (range * input->left_deadzone_percent) / 100;
+	if (axis->enter_delta < flat * 2)
+		axis->enter_delta = flat * 2;
 
-		axis->release_delta = axis->enter_delta / 2;
-		if (axis->release_delta < flat)
-			axis->release_delta = flat;
-	}
+	axis->release_delta = axis->enter_delta / 2;
+	if (axis->release_delta < flat)
+		axis->release_delta = flat;
 
 	log_message(
-		"nav-axis path=%s name=%s axis=%s min=%d max=%d center=%d enter=%d release=%d discrete=%d",
+		"nav-axis path=%s name=%s code=%d inverted=%d min=%d max=%d center=%d enter=%d release=%d",
 		input->path,
 		input->name,
-		axis_name(code),
+		code,
+		axis->inverted ? 1 : 0,
 		axis->minimum,
 		axis->maximum,
 		axis->center,
 		axis->enter_delta,
-		axis->release_delta,
-		discrete ? 1 : 0);
+		axis->release_delta);
 
 	return true;
 }
 
-static bool tester_axis_unipolar(int code)
+/* Every axis is reported normalized to -100..100 around the device centre
+ * from its EVIOCGABS metadata, so no client guesses ranges. */
+static int normalize_abs(const struct input_dev *input, int code, int value)
 {
-	return code == ABS_Z || code == ABS_RZ ||
-	       code == ABS_GAS || code == ABS_BRAKE;
+	const struct input_absinfo *info;
+	long long numerator;
+	long long denominator;
+	long long normalized;
+	int center;
+
+	if (code < 0 || code > ABS_MAX ||
+	    !bit_is_set(input->abs_bits, (unsigned int)code))
+		return value;
+
+	info = &input->absinfo[code];
+	if (info->maximum <= info->minimum)
+		return 0;
+
+	center = info->minimum + (info->maximum - info->minimum) / 2;
+	numerator = (long long)value - center;
+	denominator = value >= center
+		? (long long)info->maximum - center
+		: (long long)center - info->minimum;
+	if (denominator <= 0)
+		return 0;
+	normalized = numerator * 100LL / denominator;
+	if (normalized < -100)
+		normalized = -100;
+	if (normalized > 100)
+		normalized = 100;
+	return (int)normalized;
 }
 
-static void configure_tester_axes(struct input_dev *input)
+static void load_absinfo(struct input_dev *input)
 {
-	size_t i;
+	unsigned long props[NBITS(INPUT_PROP_MAX + 1)];
+	unsigned int code;
 
-	for (i = 0; i < sizeof(tester_axis_codes) / sizeof(tester_axis_codes[0]); i++) {
-		struct input_absinfo info;
-		struct tester_axis *axis = &input->tester_axes[i];
+	memset(props, 0, sizeof(props));
+	if (ioctl(input->fd, EVIOCGPROP(sizeof(props)), props) >= 0)
+		input->accelerometer = bit_is_set(props, INPUT_PROP_ACCELEROMETER);
 
-		memset(axis, 0, sizeof(*axis));
-		axis->code = tester_axis_codes[i];
-		axis->unipolar = tester_axis_unipolar(axis->code);
+	/* Motion sensors share a pad's id but are never mappable controls. */
+	memset(input->abs_bits, 0, sizeof(input->abs_bits));
+	if (input->accelerometer ||
+	    ioctl(input->fd, EVIOCGBIT(EV_ABS, sizeof(input->abs_bits)),
+		  input->abs_bits) < 0)
+		return;
 
-		memset(&info, 0, sizeof(info));
-		if (ioctl(input->fd, EVIOCGABS(axis->code), &info) < 0)
-			continue;
-		if (info.maximum <= info.minimum)
-			continue;
-
-		axis->present = true;
-		axis->minimum = info.minimum;
-		axis->maximum = info.maximum;
-		axis->center = info.minimum + (info.maximum - info.minimum) / 2;
+	for (code = 0; code <= ABS_MAX; code++) {
+		if (bit_is_set(input->abs_bits, code) &&
+		    ioctl(input->fd, EVIOCGABS(code), &input->absinfo[code]) < 0)
+			input->abs_bits[code / BITS_PER_LONG] &=
+				~(1UL << (code % BITS_PER_LONG));
 	}
 }
 
-static int normalize_tester_abs(const struct input_dev *input, int code, int value)
+static void configure_input_mapping(struct input_dev *input)
+{
+	int stick_code[2];
+	int stick_dir[2];
+
+	load_controller_mapping(input, stick_code, stick_dir);
+	(void)configure_nav_axis(input, &input->abs_x,
+				 stick_code[0], stick_dir[0], true);
+	(void)configure_nav_axis(input, &input->abs_y,
+				 stick_code[1], stick_dir[1], false);
+}
+
+static bool input_has_abs_binding(const struct input_dev *input)
 {
 	size_t i;
 
-	for (i = 0; i < sizeof(input->tester_axes) / sizeof(input->tester_axes[0]); i++) {
-		const struct tester_axis *axis = &input->tester_axes[i];
-		long long numerator;
-		long long denominator;
-		long long normalized;
+	for (i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++) {
+		const struct abs_binding *binding = &input->abs_bindings[i];
 
-		if (!axis->present || axis->code != code)
-			continue;
-
-		if (axis->unipolar) {
-			numerator = (long long)value - axis->minimum;
-			denominator = (long long)axis->maximum - axis->minimum;
-			if (denominator <= 0)
-				return 0;
-			normalized = numerator * 100LL / denominator;
-			if (normalized < 0)
-				normalized = 0;
-			if (normalized > 100)
-				normalized = 100;
-			return (int)normalized;
-		}
-
-		if (value >= axis->center) {
-			numerator = (long long)value - axis->center;
-			denominator = (long long)axis->maximum - axis->center;
-		} else {
-			numerator = (long long)value - axis->center;
-			denominator = (long long)axis->center - axis->minimum;
-		}
-		if (denominator <= 0)
-			return 0;
-		normalized = numerator * 100LL / denominator;
-		if (normalized < -100)
-			normalized = -100;
-		if (normalized > 100)
-			normalized = 100;
-		return (int)normalized;
+		if (binding->present &&
+		    bit_is_set(input->abs_bits, (unsigned int)binding->code))
+			return true;
 	}
-
-	return value;
+	return false;
 }
 
 static bool input_has_navigation_axis(const struct input_dev *input)
 {
 	return input->abs_x.present ||
 	       input->abs_y.present ||
-	       input->hat_x.present ||
-	       input->hat_y.present;
+	       input_has_abs_binding(input);
 }
 
 static bool input_has_menu_capability(const struct input_dev *input)
@@ -978,31 +1013,18 @@ static void rescan_inputs(void)
 		compute_controller_id(fd, name,
 				      inputs[input_count].controller_id,
 				      sizeof(inputs[input_count].controller_id));
-		load_controller_mapping(&inputs[input_count]);
-
-		(void)configure_nav_axis(&inputs[input_count],
-					 &inputs[input_count].abs_x,
-					 ABS_X, true, false);
-		(void)configure_nav_axis(&inputs[input_count],
-					 &inputs[input_count].abs_y,
-					 ABS_Y, false, false);
-		(void)configure_nav_axis(&inputs[input_count],
-					 &inputs[input_count].hat_x,
-					 ABS_HAT0X, true, true);
-		(void)configure_nav_axis(&inputs[input_count],
-					 &inputs[input_count].hat_y,
-					 ABS_HAT0Y, false, true);
-		configure_tester_axes(&inputs[input_count]);
+		load_absinfo(&inputs[input_count]);
+		configure_input_mapping(&inputs[input_count]);
 
 		log_message(
-			 "input-open index=%zu path=%s name=%s id=%s key-capability=%d abs-x=%d abs-y=%d hat-x=%d hat-y=%d",
+			 "input-open index=%zu path=%s name=%s id=%s key-capability=%d stick-x=%d stick-y=%d abs-bindings=%d accelerometer=%d",
 			input_count, path, name,
 			inputs[input_count].controller_id,
 			input_has_mapped_key(&inputs[input_count]) ? 1 : 0,
 			inputs[input_count].abs_x.present ? 1 : 0,
 			inputs[input_count].abs_y.present ? 1 : 0,
-			inputs[input_count].hat_x.present ? 1 : 0,
-			inputs[input_count].hat_y.present ? 1 : 0);
+			input_has_abs_binding(&inputs[input_count]) ? 1 : 0,
+			inputs[input_count].accelerometer ? 1 : 0);
 
 		input_count++;
 	}
@@ -1133,10 +1155,10 @@ static void broadcast_raw_event(const struct input_dev *input,
 	size_t i;
 	int value = event->value;
 
-	/* Input Tester consumes device-normalized EV_ABS values. The input
-	 * service owns EVIOCGABS metadata so the UI never guesses range/center. */
+	/* Input Tester and remapping consume device-normalized EV_ABS values;
+	 * the input service owns the EVIOCGABS metadata. */
 	if (event->type == EV_ABS)
-		value = normalize_tester_abs(input, event->code, event->value);
+		value = normalize_abs(input, event->code, event->value);
 
 	snprintf(message, sizeof(message),
 		 "RAW %s %u %u %d\n",
@@ -1256,7 +1278,8 @@ static void status_reply(int fd)
 		 "menu_left=%d\n"
 		 "menu_right=%d\n"
 		 "menu_confirm=%d\n"
-		 "menu_back=%d\n",
+		 "menu_back=%d\n"
+		 "power=%d\n",
 		 menu_open ? 1 : 0,
 		 settings_open ? 1 : 0,
 		 input_count,
@@ -1275,9 +1298,45 @@ static void status_reply(int fd)
 		 binding_by_name("menu_left")->code,
 		 binding_by_name("menu_right")->code,
 		 binding_by_name("menu_confirm")->code,
-		 binding_by_name("menu_back")->code);
+		 binding_by_name("menu_back")->code,
+		 binding_by_name("power")->code);
 
 	(void)write_all(fd, reply);
+}
+
+/*
+ * Current normalized value of every axis of one controller, followed by
+ * RAWREADY: remapping uses it to tell a centred stick from a trigger resting
+ * at one extreme before it interprets the next RAW events.
+ */
+static void send_raw_baseline(struct client *client, const char *controller_id)
+{
+	char message[256];
+	size_t i;
+	unsigned int code;
+
+	for (i = 0; i < input_count; i++) {
+		struct input_dev *input = &inputs[i];
+
+		if (input->accelerometer ||
+		    strcmp(input->controller_id, controller_id) != 0)
+			continue;
+
+		for (code = 0; code <= ABS_MAX; code++) {
+			struct input_absinfo info;
+
+			if (!bit_is_set(input->abs_bits, code) ||
+			    ioctl(input->fd, EVIOCGABS(code), &info) < 0)
+				continue;
+			snprintf(message, sizeof(message), "RAWBASE %s %u %d\n",
+				 controller_id, code,
+				 normalize_abs(input, (int)code, info.value));
+			(void)write_all(client->fd, message);
+		}
+	}
+
+	snprintf(message, sizeof(message), "RAWREADY %s\n", controller_id);
+	(void)write_all(client->fd, message);
 }
 
 static void handle_command(struct client *client, const char *line)
@@ -1356,8 +1415,30 @@ static void handle_command(struct client *client, const char *line)
 			else
 				raw_capture_controller[0] = '\0';
 			(void)write_all(client->fd, "OK\n");
+			if (enabled)
+				send_raw_baseline(client, controller_id);
 			return;
 		}
+	}
+
+	if (strcmp(line, "BIND RESET") == 0) {
+		/* Reset System Settings: drop the persistent overrides and
+		 * fall back to the image defaults. */
+		if (unlink(STATE_CONFIG) != 0 && errno != ENOENT) {
+			(void)write_all(client->fd,
+					"ERR persist failed\n");
+			return;
+		}
+
+		load_bindings();
+
+		if (menu_open) {
+			set_menu_grab(false);
+			set_menu_grab(true);
+		}
+
+		(void)write_all(client->fd, "OK\n");
+		return;
 	}
 
 	if (sscanf(line, "BIND GET %63s", action) == 1) {
@@ -1529,30 +1610,25 @@ static void process_nav_axis(struct input_dev *input,
 	previous = axis->direction;
 	next = previous;
 
-	if (axis->discrete) {
-		if (value < axis->center)
-			next = -1;
-		else if (value > axis->center)
-			next = 1;
-		else
-			next = 0;
-	} else {
-		enter_low = axis->center - axis->enter_delta;
-		enter_high = axis->center + axis->enter_delta;
-		release_low = axis->center - axis->release_delta;
-		release_high = axis->center + axis->release_delta;
+	/* An inverted axis is mirrored around its centre. */
+	if (axis->inverted)
+		value = 2 * axis->center - value;
 
-		if (value <= enter_low)
-			next = -1;
-		else if (value >= enter_high)
-			next = 1;
-		else if (previous < 0 && value < release_low)
-			next = -1;
-		else if (previous > 0 && value > release_high)
-			next = 1;
-		else
-			next = 0;
-	}
+	enter_low = axis->center - axis->enter_delta;
+	enter_high = axis->center + axis->enter_delta;
+	release_low = axis->center - axis->release_delta;
+	release_high = axis->center + axis->release_delta;
+
+	if (value <= enter_low)
+		next = -1;
+	else if (value >= enter_high)
+		next = 1;
+	else if (previous < 0 && value < release_low)
+		next = -1;
+	else if (previous > 0 && value > release_high)
+		next = 1;
+	else
+		next = 0;
 
 	if (next == previous)
 		return;
@@ -1560,9 +1636,9 @@ static void process_nav_axis(struct input_dev *input,
 	axis->direction = next;
 
 	log_message(
-		"nav-axis-event device=%s axis=%s value=%d previous=%d next=%d quick-menu=%d settings=%d",
+		"nav-axis-event device=%s code=%d value=%d previous=%d next=%d quick-menu=%d settings=%d",
 		input->name,
-		axis_name(axis->code),
+		axis->code,
 		value,
 		previous,
 		next,
@@ -1603,24 +1679,77 @@ static void process_nav_axis(struct input_dev *input,
 	emit_action_state(action, "pressed");
 }
 
-static bool process_navigation_abs(struct input_dev *input,
+/*
+ * Thresholds on the binding's travel (0..100): a hat reports 0 or 100, an
+ * analog half axis or trigger needs a deliberate press and releases with
+ * hysteresis so it does not chatter.
+ */
+#define ABS_BINDING_PRESS 50
+#define ABS_BINDING_RELEASE 30
+
+static void process_abs_binding(struct input_dev *input, size_t index,
+				int normalized)
+{
+	struct abs_binding *binding = &input->abs_bindings[index];
+	const char *action = bindings[index].name;
+	int travel;
+	bool pressed;
+
+	switch (binding->dir) {
+	case 1:
+		travel = normalized;
+		break;
+	case -1:
+		travel = -normalized;
+		break;
+	case 2:
+		travel = (normalized + 100) / 2;
+		break;
+	default:
+		travel = (100 - normalized) / 2;
+		break;
+	}
+
+	pressed = binding->pressed ? travel >= ABS_BINDING_RELEASE
+				   : travel >= ABS_BINDING_PRESS;
+	if (pressed == binding->pressed)
+		return;
+	binding->pressed = pressed;
+
+	log_message(
+		"abs-action device=%s code=%d value=%d action=%s pressed=%d quick-menu=%d settings=%d",
+		input->name, binding->code, normalized, action, pressed ? 1 : 0,
+		menu_open ? 1 : 0, settings_open ? 1 : 0);
+
+	snprintf(last_action, sizeof(last_action), "%s", action);
+	snprintf(last_device, sizeof(last_device), "%s", input->name);
+	last_code = binding->code;
+	last_value = normalized;
+
+	if (pressed) {
+		mapped_press_count++;
+		emit_action_state(action, "pressed");
+	} else {
+		emit_action_state(action, "released");
+	}
+}
+
+static void process_navigation_abs(struct input_dev *input,
 				   const struct input_event *event)
 {
-	switch (event->code) {
-	case ABS_X:
+	int normalized;
+	size_t i;
+
+	if (input->abs_x.present && event->code == input->abs_x.code)
 		process_nav_axis(input, &input->abs_x, event->value);
-		return true;
-	case ABS_Y:
+	if (input->abs_y.present && event->code == input->abs_y.code)
 		process_nav_axis(input, &input->abs_y, event->value);
-		return true;
-	case ABS_HAT0X:
-		process_nav_axis(input, &input->hat_x, event->value);
-		return true;
-	case ABS_HAT0Y:
-		process_nav_axis(input, &input->hat_y, event->value);
-		return true;
-	default:
-		return false;
+
+	normalized = normalize_abs(input, event->code, event->value);
+	for (i = 0; i < sizeof(bindings) / sizeof(bindings[0]); i++) {
+		if (input->abs_bindings[i].present &&
+		    input->abs_bindings[i].code == event->code)
+			process_abs_binding(input, i, normalized);
 	}
 }
 
@@ -1640,6 +1769,9 @@ static void process_input(struct input_dev *input)
 	for (i = 0; i < count; i++) {
 		const char *action;
 
+		if (input->accelerometer)
+			continue;
+
 		if (events[i].type == EV_KEY || events[i].type == EV_ABS)
 			broadcast_raw_event(input, &events[i]);
 
@@ -1654,8 +1786,8 @@ static void process_input(struct input_dev *input)
 			continue;
 
 		if (events[i].type == EV_ABS) {
-			if (process_navigation_abs(input, &events[i]))
-				continue;
+			process_navigation_abs(input, &events[i]);
+			continue;
 		}
 
 		if (events[i].type != EV_KEY)
@@ -1687,6 +1819,34 @@ static void process_input(struct input_dev *input)
 			if (events[i].value == 0)
 				clear_suppress_start_marker("physical-start-release");
 
+			continue;
+		}
+
+		/*
+		 * Physical volume keys are product/system actions, not remappable
+		 * controller bindings. Keep them globally available even when neither
+		 * Settings nor Quick Menu owns controller capture.
+		 */
+		if (events[i].code == KEY_VOLUMEUP ||
+		    events[i].code == KEY_VOLUMEDOWN) {
+			action = events[i].code == KEY_VOLUMEUP
+				? "volume_up" : "volume_down";
+
+			snprintf(last_action, sizeof(last_action), "%s", action);
+
+			log_message(
+				"volume-key device=%s code=%d value=%d action=%s",
+				input->name,
+				events[i].code,
+				events[i].value,
+				action);
+
+			if (events[i].value == 1 || events[i].value == 2) {
+				mapped_press_count++;
+				broadcast_action_state(action, "pressed");
+			} else if (events[i].value == 0) {
+				broadcast_action_state(action, "released");
+			}
 			continue;
 		}
 

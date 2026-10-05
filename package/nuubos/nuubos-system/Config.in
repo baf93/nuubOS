@@ -1,0 +1,6 @@
+config BR2_PACKAGE_NUUBOS_SYSTEM
+	bool "nuubos-system"
+	select BR2_PACKAGE_NUUBOS_NOTIFY
+	depends on BR2_USE_MMU
+	help
+	  Product-level System/Power policy and telemetry service for nuubOS.

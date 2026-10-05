@@ -1,0 +1,62 @@
+#!/bin/sh
+
+ACTION="${1:-}"
+STATE=/state/config/nuubos-lifecycle-lighting-restore
+DEST=org.nuubOS.Lighting
+PATH_OBJ=/org/nuubOS/Lighting
+IFACE=org.nuubOS.Lighting1
+
+get_state() {
+    dbus-send --system --print-reply --reply-timeout=1000 \
+        --dest="$DEST" "$PATH_OBJ" "$IFACE.GetState" 2>/dev/null
+}
+
+set_brightness() {
+    dbus-send --system --print-reply --reply-timeout=1000 \
+        --dest="$DEST" "$PATH_OBJ" "$IFACE.SetBrightness" "int32:$1" >/dev/null 2>&1
+}
+
+restore() {
+    [ -f "$STATE" ] || return 0
+    brightness="$(sed -n 's/^brightness=\([0-9][0-9]*\)$/\1/p' "$STATE" | head -1)"
+    case "$brightness" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    if set_brightness "$brightness"; then
+        rm -f "$STATE"
+        return 0
+    fi
+    return 1
+}
+
+case "$ACTION" in
+    wake)
+        # Also recovers a stale suppression after an interrupted suspend/power loss.
+        restore
+        ;;
+    sleep)
+        command -v dbus-send >/dev/null 2>&1 || exit 1
+        # Never stack suppressions. Restore a stale value first.
+        restore >/dev/null 2>&1 || true
+        snapshot="$(get_state)" || exit 1
+        supported="$(printf '%s\n' "$snapshot" | awk '$1=="boolean" {print $2; exit}')"
+        brightness="$(printf '%s\n' "$snapshot" | awk '$1=="int32" {print $2; exit}')"
+        [ "$supported" = "true" ] || exit 0
+        case "$brightness" in
+            ''|*[!0-9]*) exit 1 ;;
+        esac
+        [ "$brightness" -gt 0 ] || exit 0
+        tmp="$STATE.tmp.$$"
+        umask 077
+        printf 'brightness=%s\n' "$brightness" > "$tmp" || exit 1
+        mv "$tmp" "$STATE" || { rm -f "$tmp"; exit 1; }
+        if ! set_brightness 0; then
+            rm -f "$STATE"
+            exit 1
+        fi
+        ;;
+    *)
+        echo "nuubOS lifecycle lighting: invalid action '$ACTION'" >&2
+        exit 2
+        ;;
+esac

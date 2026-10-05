@@ -22,6 +22,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <nuubos/notify.h>
+
 #define RUNTIME_DIR "/run/nuubos"
 #define STATE_FILE RUNTIME_DIR "/statusd.state"
 #define SOCKET_FILE RUNTIME_DIR "/statusd.sock"
@@ -41,8 +43,18 @@ struct topbar_state {
     int controller_battery[MAX_CONTROLLERS];
 };
 
+/* Console battery alerts (EPIC-006, owner: Battery & Charging). Re-armed
+ * only after charging or recovering above the re-arm level, so gauge jitter
+ * around a threshold cannot repeat the warning. */
+#define BATTERY_LOW_PERCENT 15
+#define BATTERY_CRITICAL_PERCENT 5
+#define BATTERY_REARM_PERCENT 20
+
 static int subscribers[MAX_SUBSCRIBERS];
 static bool running = true;
+static int battery_alert_level;     /* 0 none, 1 low sent, 2 critical sent */
+static bool charge_session;         /* charger seen since last discharge */
+static bool full_notified;
 
 static void trim(char *s)
 {
@@ -129,9 +141,19 @@ static bool read_key_value(const char *path, const char *key,
 static void refresh_time(struct topbar_state *state)
 {
     const time_t valid_after = (time_t)1577836800; /* 2020-01-01 UTC */
-    time_t now = time(NULL);
+    struct timespec ts;
+    time_t now;
     struct tm tm_now;
 
+    /* Not time(): glibc serves it from the coarse clock, which still reads
+     * the previous second when the minute timer fires. */
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
+        ts.tv_sec = 0;
+    now = ts.tv_sec;
+
+    /* glibc localtime_r() keeps the zone loaded at first use; tzset()
+     * re-reads /etc/localtime only when it changed. */
+    tzset();
     if (now < valid_after || localtime_r(&now, &tm_now) == NULL ||
         strftime(state->time_hhmm, sizeof(state->time_hhmm), "%H:%M", &tm_now) == 0) {
         snprintf(state->time_hhmm, sizeof(state->time_hhmm), "--:--");
@@ -213,14 +235,49 @@ static bool read_int_file(const char *path, int *value)
     return true;
 }
 
+static int battery_candidate_score(const char *base)
+{
+    char path[448];
+    char scope[64];
+    int score = 0;
+
+    snprintf(path, sizeof(path), "%s/scope", base);
+    if (read_first_line(path, scope, sizeof(scope))) {
+        if (strcasecmp(scope, "Device") == 0)
+            return -1000;
+        if (strcasecmp(scope, "System") == 0)
+            score += 100;
+    }
+
+    snprintf(path, sizeof(path), "%s/status", base);
+    if (access(path, R_OK) == 0)
+        score += 20;
+    snprintf(path, sizeof(path), "%s/voltage_now", base);
+    if (access(path, R_OK) == 0)
+        score += 10;
+    snprintf(path, sizeof(path), "%s/current_now", base);
+    if (access(path, R_OK) == 0)
+        score += 10;
+    snprintf(path, sizeof(path), "%s/health", base);
+    if (access(path, R_OK) == 0)
+        score += 5;
+    snprintf(path, sizeof(path), "%s/present", base);
+    if (access(path, R_OK) == 0)
+        score += 5;
+
+    return score;
+}
+
 static void refresh_battery(struct topbar_state *state)
 {
     DIR *dir;
     struct dirent *entry;
     char base[384];
+    char best_base[384] = "";
     char path[448];
     char type[64];
     char status[64];
+    int best_score = -1001;
     int percent = -1;
 
     state->battery_percent = -1;
@@ -231,6 +288,8 @@ static void refresh_battery(struct topbar_state *state)
         return;
 
     while ((entry = readdir(dir)) != NULL) {
+        int score;
+
         if (entry->d_name[0] == '.')
             continue;
 
@@ -239,29 +298,42 @@ static void refresh_battery(struct topbar_state *state)
         if (!read_first_line(path, type, sizeof(type)) || strcmp(type, "Battery") != 0)
             continue;
 
-        snprintf(path, sizeof(path), "%s/capacity", base);
-        if (!read_int_file(path, &percent))
-            percent = -1;
-
-        snprintf(path, sizeof(path), "%s/status", base);
-        if (!read_first_line(path, status, sizeof(status)))
-            snprintf(status, sizeof(status), "Unknown");
-
-        state->battery_percent = percent;
-        if (strcasecmp(status, "Charging") == 0)
-            snprintf(state->battery_state, sizeof(state->battery_state), "charging");
-        else if (strcasecmp(status, "Full") == 0)
-            snprintf(state->battery_state, sizeof(state->battery_state), "full");
-        else if (strcasecmp(status, "Discharging") == 0)
-            snprintf(state->battery_state, sizeof(state->battery_state), "discharging");
-        else if (strcasecmp(status, "Not charging") == 0)
-            snprintf(state->battery_state, sizeof(state->battery_state), "not-charging");
-        else
-            snprintf(state->battery_state, sizeof(state->battery_state), "unknown");
-        break;
+        /*
+         * Accessory/HID batteries are device-scoped and must never replace the
+         * console battery in the top bar. Prefer System scope when available;
+         * otherwise score battery telemetry richness rather than relying on a
+         * hard-coded power_supply node name.
+         */
+        score = battery_candidate_score(base);
+        if (score > best_score) {
+            best_score = score;
+            copy_text(best_base, sizeof(best_base), base);
+        }
     }
-
     closedir(dir);
+
+    if (best_base[0] == '\0' || best_score < 0)
+        return;
+
+    snprintf(path, sizeof(path), "%s/capacity", best_base);
+    if (!read_int_file(path, &percent))
+        percent = -1;
+
+    snprintf(path, sizeof(path), "%s/status", best_base);
+    if (!read_first_line(path, status, sizeof(status)))
+        snprintf(status, sizeof(status), "Unknown");
+
+    state->battery_percent = percent;
+    if (strcasecmp(status, "Charging") == 0)
+        snprintf(state->battery_state, sizeof(state->battery_state), "charging");
+    else if (strcasecmp(status, "Full") == 0)
+        snprintf(state->battery_state, sizeof(state->battery_state), "full");
+    else if (strcasecmp(status, "Discharging") == 0)
+        snprintf(state->battery_state, sizeof(state->battery_state), "discharging");
+    else if (strcasecmp(status, "Not charging") == 0)
+        snprintf(state->battery_state, sizeof(state->battery_state), "not-charging");
+    else
+        snprintf(state->battery_state, sizeof(state->battery_state), "unknown");
 }
 
 static bool valid_bt_address(const char *addr)
@@ -453,11 +525,71 @@ static void notify_subscribers(void)
     }
 }
 
+static void post_battery(const char *event, int percent)
+{
+    struct nuubos_notify n;
+
+    /* One id for every console battery event: plugging the charger in
+     * replaces a visible low-battery warning instead of stacking. */
+    nuubos_notify_begin(&n, "POST", "battery", event);
+    if (percent >= 0)
+        nuubos_notify_int(&n, "percent", percent);
+    (void)nuubos_notify_send(&n);
+}
+
+static void notify_battery(const struct topbar_state *prev,
+                           const struct topbar_state *next)
+{
+    bool external = strcmp(next->battery_state, "charging") == 0 ||
+                    strcmp(next->battery_state, "full") == 0;
+    int percent = next->battery_percent;
+
+    if (prev->battery_percent == -999) {
+        /* First evaluation after start: adopt the state silently. */
+        charge_session = external;
+        full_notified = strcmp(next->battery_state, "full") == 0;
+        return;
+    }
+
+    if (strcmp(next->battery_state, "discharging") == 0) {
+        charge_session = false;
+        full_notified = false;
+    }
+
+    if (external) {
+        battery_alert_level = 0;
+        if (!charge_session) {
+            charge_session = true;
+            post_battery("battery.charging", percent);
+        }
+        if (strcmp(next->battery_state, "full") == 0 && !full_notified) {
+            full_notified = true;
+            post_battery("battery.full", -1);
+        }
+        return;
+    }
+
+    if (percent < 0)
+        return;
+    if (percent > BATTERY_REARM_PERCENT) {
+        battery_alert_level = 0;
+    } else if (percent <= BATTERY_CRITICAL_PERCENT && battery_alert_level < 2) {
+        battery_alert_level = 2;
+        post_battery("battery.critical", percent);
+    } else if (percent <= BATTERY_LOW_PERCENT && battery_alert_level < 1) {
+        battery_alert_level = 1;
+        post_battery("battery.low", percent);
+    }
+}
+
 static void commit_if_changed(struct topbar_state *current,
                               const struct topbar_state *next)
 {
     if (state_equal(current, next))
         return;
+    if (current->battery_percent != next->battery_percent ||
+        strcmp(current->battery_state, next->battery_state) != 0)
+        notify_battery(current, next);
     *current = *next;
     if (publish_state(current))
         notify_subscribers();
@@ -516,11 +648,17 @@ static void accept_subscribers(int listen_fd)
     }
 }
 
+static int localtime_watch = -1;
+
 static int make_inotify(void)
 {
     int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (fd < 0)
         return -1;
+
+    /* regionald replaces /etc/localtime atomically (rename) on a zone change. */
+    localtime_watch = inotify_add_watch(fd, "/etc",
+        IN_CREATE | IN_MOVED_TO | IN_CLOSE_WRITE | IN_ONLYDIR);
 
     (void)inotify_add_watch(fd, USER_DIR,
         IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM |
@@ -554,20 +692,29 @@ static int make_uevent_socket(void)
     return fd;
 }
 
-static int make_timer(void)
+/*
+ * Minute tick for the top-bar clock, aligned to the wall-clock minute so
+ * HH:MM changes on time. A clock step (manual set, network sync, RTC) cancels
+ * the timer, which is then refreshed and re-armed. Battery is event-driven.
+ */
+static int arm_minute_timer(int fd)
 {
-    int fd;
     struct itimerspec spec;
-
-    /* Minute tick for the top-bar clock. Battery updates are event-driven. */
-    fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-    if (fd < 0)
-        return -1;
+    time_t now = time(NULL);
 
     memset(&spec, 0, sizeof(spec));
-    spec.it_value.tv_sec = 60;
+    spec.it_value.tv_sec = now - (now % 60) + 60;
     spec.it_interval.tv_sec = 60;
-    if (timerfd_settime(fd, 0, &spec, NULL) < 0) {
+    return timerfd_settime(fd, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET,
+                           &spec, NULL);
+}
+
+static int make_timer(void)
+{
+    int fd = timerfd_create(CLOCK_REALTIME, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    if (arm_minute_timer(fd) < 0) {
         close(fd);
         return -1;
     }
@@ -674,11 +821,28 @@ int main(void)
             if (map[i] == -1) {
                 accept_subscribers(listen_fd);
             } else if (map[i] == -2) {
-                char buf[4096];
-                while (read(inotify_fd, buf, sizeof(buf)) > 0) { }
+                char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+                ssize_t n;
+                bool zone = false;
+                bool other = false;
+                while ((n = read(inotify_fd, buf, sizeof(buf))) > 0) {
+                    size_t off = 0;
+                    while (off + sizeof(struct inotify_event) <= (size_t)n) {
+                        const struct inotify_event *ev = (const struct inotify_event *)(buf + off);
+                        if (ev->wd != localtime_watch)
+                            other = true;
+                        else if (ev->len > 0 && strcmp(ev->name, "localtime") == 0)
+                            zone = true;
+                        off += sizeof(*ev) + ev->len;
+                    }
+                }
                 next = current;
-                refresh_user(&next);
-                refresh_controllers(&next);
+                if (other) {
+                    refresh_user(&next);
+                    refresh_controllers(&next);
+                }
+                if (zone)
+                    refresh_time(&next);
                 commit_if_changed(&current, &next);
             } else if (map[i] == -3) {
                 char buf[8192];
@@ -705,7 +869,9 @@ int main(void)
                 ssize_t timer_read;
 
                 timer_read = read(timer_fd, &expirations, sizeof(expirations));
-                if (timer_read < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+                if (timer_read < 0 && errno == ECANCELED)
+                    (void)arm_minute_timer(timer_fd);
+                else if (timer_read < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
                     continue;
                 next = current;
                 refresh_time(&next);

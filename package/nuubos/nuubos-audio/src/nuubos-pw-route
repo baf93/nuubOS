@@ -1,0 +1,119 @@
+#!/bin/sh
+
+RUNTIME=/run/nuubos/pipewire
+export XDG_RUNTIME_DIR="$RUNTIME"
+export PIPEWIRE_RUNTIME_DIR="$RUNTIME"
+
+sink_ids()
+{
+    wpctl status -n 2>/dev/null | awk '
+        /Sinks:/ { inside=1; next }
+        /Sources:/ { inside=0 }
+        inside && match($0, /[0-9][0-9]*\./) {
+            id=substr($0, RSTART, RLENGTH - 1)
+            print id
+        }
+    '
+}
+
+inspect_lower()
+{
+    wpctl inspect "$1" 2>/dev/null | tr '[:upper:]' '[:lower:]'
+}
+
+classify_sink()
+{
+    text="$(inspect_lower "$1")"
+    case "$text" in
+        *bluez_output*|*bluetooth*) echo bluetooth ;;
+        *hdmi*|*displayport*|*display\ port*|*iec958*) echo hdmi ;;
+        *nuubos_analog*|*codec*|*analog*|*sun4i*|*sun50i*|*h700*) echo analog ;;
+        *) echo other ;;
+    esac
+}
+
+find_sink()
+{
+    want="$1"
+    fallback=""
+    for id in $(sink_ids); do
+        kind="$(classify_sink "$id")"
+        if [ "$kind" = "$want" ]; then
+            echo "$id"
+            return 0
+        fi
+        if [ "$want" = "analog" ] && [ -z "$fallback" ] && \
+           [ "$kind" != "bluetooth" ] && [ "$kind" != "hdmi" ]; then
+            fallback="$id"
+        fi
+    done
+
+    if [ "$want" = "analog" ] && [ -n "$fallback" ]; then
+        echo "$fallback"
+        return 0
+    fi
+
+    return 1
+}
+
+select_sink()
+{
+    requested="$1"
+    case "$requested" in
+        speaker|headphones|analog) kind=analog ;;
+        hdmi) kind=hdmi ;;
+        bluetooth) kind=bluetooth ;;
+        *) echo "unsupported output: $requested" >&2; return 2 ;;
+    esac
+
+    id="$(find_sink "$kind")"
+    if [ -z "$id" ]; then
+        echo "no PipeWire sink for $requested" >&2
+        return 3
+    fi
+
+    wpctl set-default "$id" >/dev/null 2>&1 || return 4
+
+    # Product Audio owns analog master gain. Route selection may unmute the
+    # analog sink but must never force it to 100%, otherwise an already-playing
+    # application can produce a transient loudness jump before audiod reapplies
+    # policy. HDMI remains unity because the TV / receiver owns media volume.
+    if [ "$kind" = "analog" ]; then
+        wpctl set-mute "$id" 0 >/dev/null 2>&1 || true
+    elif [ "$kind" = "hdmi" ]; then
+        wpctl set-mute "$id" 0 >/dev/null 2>&1 || true
+        wpctl set-volume "$id" 1.0 >/dev/null 2>&1 || true
+    fi
+
+    echo "$id"
+    return 0
+}
+
+
+case "${1:-}" in
+    select)
+        select_sink "${2:-}"
+        ;;
+    find)
+        case "${2:-}" in
+            speaker|headphones|analog) find_sink analog ;;
+            hdmi) find_sink hdmi ;;
+            bluetooth) find_sink bluetooth ;;
+            *) exit 2 ;;
+        esac
+        ;;
+    status)
+        echo "===== PIPEWIRE SINKS ====="
+        for id in $(sink_ids); do
+            echo "id=$id kind=$(classify_sink "$id")"
+            wpctl inspect "$id" 2>/dev/null | grep -E 'node.name|node.description|device.description|device.nick|api.alsa|media.class' || true
+        done
+        echo
+        echo "===== DEFAULT ====="
+        wpctl inspect @DEFAULT_AUDIO_SINK@ 2>&1 || true
+        ;;
+    *)
+        echo "Usage: $0 {select OUTPUT|find OUTPUT|status}" >&2
+        exit 2
+        ;;
+esac

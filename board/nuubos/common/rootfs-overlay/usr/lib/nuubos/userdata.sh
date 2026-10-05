@@ -11,6 +11,10 @@ nuubos_userdata_prepare_users()
 
         NUUBOS_USERDATA_USER_ID="${NUUBOS_USERDATA_STATE_USER##*/}"
 
+        # "default" holds per-user settings written while no user is active
+        # (services fall back to it); it is not a user and has no USERDATA.
+        [ "$NUUBOS_USERDATA_USER_ID" = default ] && continue
+
         [ -f "$NUUBOS_USERDATA_STATE_USER/profile.conf" ] || return 1
 
         grep -qx \

@@ -1,0 +1,4 @@
+config BR2_PACKAGE_NUUBOS_USERS
+	bool "nuubOS user/profile service"
+	help
+	  Local console profile/session service: users, active user, boot policy and avatars.

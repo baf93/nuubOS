@@ -17,11 +17,19 @@ static void usage(const char *argv0)
 		"  %s status\n"
 		"  %s route\n"
 "  %s output\n"
-		"  %s output auto|bluetooth|headphones|hdmi|speaker\n"
+		"  %s output auto|bluetooth|analog|hdmi\n"
 		"  %s volume\n"
 		"  %s volume speaker|headphones|bluetooth|hdmi\n"
-		"  %s volume speaker|headphones|bluetooth 0..100\n",
-		argv0, argv0, argv0, argv0, argv0, argv0, argv0);
+		"  %s volume speaker|headphones|bluetooth 0..100\n"
+		"  %s volume adjust -100..100\n"
+		"  %s system-volume [0..100|adjust DELTA]\n"
+		"  %s home-music-volume [0..100|adjust DELTA]\n"
+		"  %s music start|stop|next\n"
+		"  %s sfx move|confirm|back\n"
+		"  %s test-sound start|stop|status\n"
+		"  %s reset-defaults\n",
+		argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0,
+		argv0, argv0, argv0, argv0, argv0, argv0);
 }
 
 static int connect_daemon(void)
@@ -66,9 +74,53 @@ int main(int argc, char **argv)
 	} else if (argc == 3 && strcmp(argv[1], "volume") == 0) {
 		snprintf(command, sizeof(command),
 			 "VOLUME GET %s", argv[2]);
+	} else if (argc == 4 && strcmp(argv[1], "volume") == 0 &&
+		   strcmp(argv[2], "adjust") == 0) {
+		snprintf(command, sizeof(command),
+			 "VOLUME ADJUST %s", argv[3]);
 	} else if (argc == 4 && strcmp(argv[1], "volume") == 0) {
 		snprintf(command, sizeof(command),
 			 "VOLUME SET %s %s", argv[2], argv[3]);
+	} else if (argc == 2 && strcmp(argv[1], "system-volume") == 0) {
+		snprintf(command, sizeof(command), "SYSTEM VOLUME GET");
+	} else if (argc == 3 && strcmp(argv[1], "system-volume") == 0) {
+		snprintf(command, sizeof(command), "SYSTEM VOLUME SET %s", argv[2]);
+	} else if (argc == 4 && strcmp(argv[1], "system-volume") == 0 &&
+		   strcmp(argv[2], "adjust") == 0) {
+		snprintf(command, sizeof(command), "SYSTEM VOLUME ADJUST %s", argv[3]);
+	} else if (argc == 2 && strcmp(argv[1], "home-music-volume") == 0) {
+		snprintf(command, sizeof(command), "MUSIC VOLUME GET");
+	} else if (argc == 3 && strcmp(argv[1], "home-music-volume") == 0) {
+		snprintf(command, sizeof(command), "MUSIC VOLUME SET %s", argv[2]);
+	} else if (argc == 4 && strcmp(argv[1], "home-music-volume") == 0 &&
+		   strcmp(argv[2], "adjust") == 0) {
+		snprintf(command, sizeof(command), "MUSIC VOLUME ADJUST %s", argv[3]);
+	} else if (argc == 3 && strcmp(argv[1], "music") == 0) {
+		if (strcmp(argv[2], "start") == 0)
+			snprintf(command, sizeof(command), "MUSIC START");
+		else if (strcmp(argv[2], "stop") == 0)
+			snprintf(command, sizeof(command), "MUSIC STOP");
+		else if (strcmp(argv[2], "next") == 0)
+			snprintf(command, sizeof(command), "MUSIC NEXT");
+		else {
+			usage(argv[0]);
+			return 2;
+		}
+	} else if (argc == 3 && strcmp(argv[1], "sfx") == 0) {
+		snprintf(command, sizeof(command), "SFX PLAY %s", argv[2]);
+	} else if (argc == 3 && strcmp(argv[1], "test-sound") == 0) {
+		if (strcmp(argv[2], "start") == 0)
+			snprintf(command, sizeof(command), "TEST START");
+		else if (strcmp(argv[2], "stop") == 0)
+			snprintf(command, sizeof(command), "TEST STOP");
+		else if (strcmp(argv[2], "status") == 0)
+			snprintf(command, sizeof(command), "TEST STATUS");
+		else {
+			usage(argv[0]);
+			return 2;
+		}
+	} else if (argc == 2 && strcmp(argv[1], "reset-defaults") == 0) {
+		snprintf(command, sizeof(command), "RESET DEFAULTS");
 	} else {
 		usage(argv[0]);
 		return 2;

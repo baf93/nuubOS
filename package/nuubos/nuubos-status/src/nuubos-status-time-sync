@@ -23,6 +23,24 @@ clock_valid()
     [ "$NOW" -ge "$VALID_AFTER" ]
 }
 
+automatic_time_enabled()
+{
+    CFG=/state/config/regional.conf
+    [ -r "$CFG" ] || return 0
+    VALUE="$(sed -n 's/^AUTOMATIC_TIME=//p' "$CFG" | tail -1)"
+    [ "$VALUE" != "0" ]
+}
+
+last_sync_recent()
+{
+    FILE=/state/time/last-sync
+    [ -r "$FILE" ] || return 1
+    LAST="$(sed -n 's/^LAST_NTP_SYNC=//p' "$FILE" | tail -1)"
+    NOW="$(date +%s 2>/dev/null)"
+    case "$LAST:$NOW" in *[!0-9:]*|:*) return 1 ;; esac
+    [ $((NOW - LAST)) -lt 21600 ]
+}
+
 wifi_connected()
 {
     command -v wpa_cli >/dev/null 2>&1 || return 1
@@ -40,7 +58,9 @@ signal_statusd()
 
 mkdir -p /run/nuubos
 
-if clock_valid; then
+automatic_time_enabled || exit 0
+
+if clock_valid && last_sync_recent; then
     signal_statusd
     exit 0
 fi

@@ -4,33 +4,66 @@ DAEMON=/usr/sbin/nuubos-audiod
 PIDFILE=/run/nuubos-audiod.pid
 SOCKET=/run/nuubos/audiod.sock
 
+wait_ready()
+{
+	i=0
+
+	while [ "$i" -lt 10 ]; do
+		if [ -S "$SOCKET" ]; then
+			return 0
+		fi
+
+		if [ -f "$PIDFILE" ]; then
+			PID="$(cat "$PIDFILE" 2>/dev/null)"
+			if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
+				break
+			fi
+		fi
+
+		sleep 1
+		i=$((i + 1))
+	done
+
+	return 1
+}
+
 case "${1:-}" in
 	start)
 		"$DAEMON" --supported || exit 0
 		mkdir -p /run/nuubos
 
-		start-stop-daemon \
-			-S -q -b -m \
-			-p "$PIDFILE" \
-			-x "$DAEMON"
-		;;
-	stop)
-		start-stop-daemon \
-			-K -q \
-			-p "$PIDFILE" \
-			-x "$DAEMON" \
-			2>/dev/null || true
+		start-stop-daemon 			-S -q -b -m 			-p "$PIDFILE" 			-x "$DAEMON"
+		RC=$?
+
+		if [ "$RC" -ne 0 ]; then
+			echo "nuubos-audiod: start-stop-daemon failed rc=$RC" >&2
+			exit "$RC"
+		fi
+
+		if wait_ready; then
+			exit 0
+		fi
+
+		echo "nuubos-audiod: failed to become ready: $SOCKET was not created" >&2
+
+		start-stop-daemon 			-K -q 			-p "$PIDFILE" 			-x "$DAEMON" 			2>/dev/null || true
 
 		rm -f "$PIDFILE" "$SOCKET"
+		exit 1
+		;;
+	stop)
+		start-stop-daemon 			-K -q 			-p "$PIDFILE" 			-x "$DAEMON" 			2>/dev/null || true
+
+		rm -f "$PIDFILE" "$SOCKET"
+		exit 0
 		;;
 	restart|reload)
 		"$0" stop
 		"$0" start
+		exit $?
 		;;
 	*)
 		echo "Usage: $0 {start|stop|restart}"
 		exit 1
 		;;
 esac
-
-exit 0

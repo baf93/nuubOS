@@ -1,0 +1,22 @@
+#!/bin/sh
+
+ACTION="${1:-}"
+HOOK_DIR=/usr/lib/nuubos/lifecycle-hooks/pre-power.d
+STATUS=0
+
+case "$ACTION" in
+    sleep|restart|poweroff) ;;
+    *) echo "nuubOS lifecycle: invalid pre-power action '$ACTION'" >&2; exit 2 ;;
+esac
+
+# Central extension point for emulator/application adapters. A supported emulator
+# installs an executable hook here; every Sleep/Restart/Power Off caller reaches
+# this exact path through nuubos-systemd before the lifecycle transition.
+if [ -d "$HOOK_DIR" ]; then
+    for hook in "$HOOK_DIR"/*; do
+        [ -x "$hook" ] || continue
+        "$hook" "$ACTION" || STATUS=1
+    done
+fi
+
+exit "$STATUS"

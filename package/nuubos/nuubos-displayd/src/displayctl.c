@@ -27,8 +27,9 @@ static void usage(const char *argv0)
 		"  %s brightness 0..100\n"
 		"  %s brightness-live 0..100\n"
 		"  %s hdmi\n"
-		"  %s restore\n",
-		argv0, argv0, argv0, argv0, argv0);
+		"  %s restore\n"
+		"  %s reset\n",
+		argv0, argv0, argv0, argv0, argv0, argv0);
 }
 
 static int parse_percent(const char *text, unsigned int *value)
@@ -514,6 +515,36 @@ static int command_restore(void)
 	return 0;
 }
 
+/*
+ * Reset System Settings: persist the product default brightness and apply it
+ * to a variable backlight. On/off-only hardware only gets the persistent
+ * value; the kernel keeps a blanked panel dark while HDMI is active.
+ */
+static int command_reset(void)
+{
+	char path[512];
+	unsigned long max;
+
+	if (update_config(DEFAULT_BRIGHTNESS) != 0) {
+		fprintf(stderr,
+			"nuubos-displayctl: cannot persist brightness: %s\n",
+			strerror(errno));
+		return 1;
+	}
+
+	if (find_variable_backlight(path, sizeof(path), &max) != 0)
+		return 0;
+
+	if (backlight_set(DEFAULT_BRIGHTNESS) != 0) {
+		fprintf(stderr,
+			"nuubos-displayctl: cannot apply brightness: %s\n",
+			strerror(errno));
+		return 1;
+	}
+
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc == 2 && strcmp(argv[1], "brightness") == 0)
@@ -530,6 +561,9 @@ int main(int argc, char **argv)
 
 	if (argc == 2 && strcmp(argv[1], "restore") == 0)
 		return command_restore();
+
+	if (argc == 2 && strcmp(argv[1], "reset") == 0)
+		return command_reset();
 
 	usage(argv[0]);
 	return 2;

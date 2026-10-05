@@ -1,0 +1,9 @@
+config BR2_PACKAGE_NUUBOS_HOME_MUSIC
+	bool "nuubOS default Home Music"
+	help
+	  Default relaxing jazz/lounge Home Music played when the active
+	  user has no MP3 files in their own music folder.
+
+	  Tracks by Kevin MacLeod (incompetech.com), licensed under
+	  Creative Commons: By Attribution 4.0. Files are redistributed
+	  unmodified; see ATTRIBUTION.txt.

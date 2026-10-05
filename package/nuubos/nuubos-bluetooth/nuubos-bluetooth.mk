@@ -4,12 +4,12 @@
 #
 ################################################################################
 
-NUUBOS_BLUETOOTH_VERSION = 0.1.0
+NUUBOS_BLUETOOTH_VERSION = 0.3.1
 NUUBOS_BLUETOOTH_SITE = $(BR2_EXTERNAL_NUUBOS_PATH)/package/nuubos/nuubos-bluetooth/src
 NUUBOS_BLUETOOTH_SITE_METHOD = local
 NUUBOS_BLUETOOTH_LICENSE = MIT
 NUUBOS_BLUETOOTH_LICENSE_FILES = LICENSE
-NUUBOS_BLUETOOTH_DEPENDENCIES = dbus bluez5_utils
+NUUBOS_BLUETOOTH_DEPENDENCIES = dbus bluez5_utils nuubos-notify
 
 NUUBOS_BLUETOOTH_DBUS_CFLAGS = \
 	-I$(STAGING_DIR)/usr/include/dbus-1.0 \

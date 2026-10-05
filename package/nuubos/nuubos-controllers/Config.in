@@ -1,5 +1,6 @@
 config BR2_PACKAGE_NUUBOS_CONTROLLERS
 	bool "nuubOS Controllers product service"
+	select BR2_PACKAGE_NUUBOS_NOTIFY
 	depends on BR2_PACKAGE_DBUS
 	select BR2_PACKAGE_NUUBOS_INPUT
 	help

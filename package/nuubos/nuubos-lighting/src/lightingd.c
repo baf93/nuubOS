@@ -345,6 +345,16 @@ static int scale_channel(int value, int percent)
 	return scaled;
 }
 
+/* Modes rendered frame by frame here; static/breathe/rainbow run in rgbd. */
+static bool frame_mode_active(void)
+{
+	return strcmp(state.mode, "pulse") == 0 ||
+	       strcmp(state.mode, "chase") == 0 ||
+	       strcmp(state.mode, "wave") == 0 ||
+	       strcmp(state.mode, "sparkle") == 0 ||
+	       strcmp(state.mode, "screen") == 0;
+}
+
 static int send_baseline_frame(void)
 {
 	char command[4096];
@@ -357,11 +367,7 @@ static int send_baseline_frame(void)
 	if (!state.supported || state.led_count <= 0)
 		return 0;
 
-	if (strcmp(state.mode, "pulse") != 0 &&
-	    strcmp(state.mode, "chase") != 0 &&
-	    strcmp(state.mode, "wave") != 0 &&
-	    strcmp(state.mode, "sparkle") != 0 &&
-	    strcmp(state.mode, "screen") != 0)
+	if (!frame_mode_active())
 		return 0;
 
 	used += (size_t)snprintf(command + used, sizeof(command) - used, "FRAME");
@@ -922,20 +928,22 @@ static DBusObjectPathVTable object_vtable = {
 	.message_function = handle_message,
 };
 
-static int make_timer(void)
+/* The frame timer runs only while something animates; idle costs no wakeups. */
+static void sync_frame_timer(int fd, bool *armed)
 {
 	struct itimerspec spec;
-	int fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-	if (fd < 0)
-		return -1;
+	bool want = state.supported && state.led_count > 0 &&
+		    (state.effect != EFFECT_NONE || frame_mode_active());
+
+	if (fd < 0 || want == *armed)
+		return;
 	memset(&spec, 0, sizeof(spec));
-	spec.it_value.tv_nsec = 100000000;
-	spec.it_interval.tv_nsec = 100000000;
-	if (timerfd_settime(fd, 0, &spec, NULL) < 0) {
-		close(fd);
-		return -1;
+	if (want) {
+		spec.it_value.tv_nsec = 100000000;
+		spec.it_interval.tv_nsec = 100000000;
 	}
-	return fd;
+	if (timerfd_settime(fd, 0, &spec, NULL) == 0)
+		*armed = want;
 }
 
 int main(void)
@@ -948,6 +956,7 @@ int main(void)
 	int runtime_watch = -1;
 	int user_watch = -1;
 	int timer_fd = -1;
+	bool timer_armed = false;
 
 	signal(SIGTERM, signal_handler);
 	signal(SIGINT, signal_handler);
@@ -998,7 +1007,7 @@ int main(void)
 			IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM |
 			IN_CLOSE_WRITE | IN_ATTRIB);
 	}
-	timer_fd = make_timer();
+	timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
 	status_fd = connect_status();
 	process_battery_change();
 
@@ -1012,6 +1021,7 @@ int main(void)
 		int rc;
 		nfds_t i;
 
+		sync_frame_timer(timer_fd, &timer_armed);
 		if (dbus_fd >= 0) {
 			fds[count].fd = dbus_fd; fds[count].events = POLLIN; kinds[count++] = 1;
 		}

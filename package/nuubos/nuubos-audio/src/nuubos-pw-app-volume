@@ -1,0 +1,38 @@
+#!/bin/sh
+
+RUNTIME=/run/nuubos/pipewire
+export XDG_RUNTIME_DIR="$RUNTIME"
+export PIPEWIRE_RUNTIME_DIR="$RUNTIME"
+
+VOL="${1:-100}"
+case "$VOL" in
+  ''|*[!0-9]*) exit 2 ;;
+esac
+[ "$VOL" -ge 0 ] 2>/dev/null || exit 2
+[ "$VOL" -le 100 ] 2>/dev/null || exit 2
+
+FRACTION="$(awk -v v="$VOL" 'BEGIN { printf "%.4f", v / 100.0 }')"
+
+# New application streams inherit the global Applications gain. Product Audio
+# streams are exempted by 93-nuubos-stream-policy.conf.
+/usr/bin/wpctl settings node.stream.restore-props false >/dev/null 2>&1 || true
+/usr/bin/wpctl settings node.stream.default-playback-volume "$FRACTION" >/dev/null 2>&1 || exit 1
+
+# Best-effort immediate alignment for playback streams that already exist.
+# Keep nuubOS-owned Product Audio at unity; its System Sounds/Home Music gain is
+# applied by nuubos-audiod before samples enter PipeWire.
+IDS="$(/usr/bin/wpctl status -n 2>/dev/null \
+  | sed -n '/Streams:/,/^Video/p' \
+  | sed -n 's/^[^0-9]*\([0-9][0-9]*\)\..*/\1/p')"
+
+for ID in $IDS; do
+  INFO="$(/usr/bin/wpctl inspect "$ID" 2>/dev/null)"
+  echo "$INFO" | grep -F 'media.class = "Stream/Output/Audio"' >/dev/null 2>&1 || continue
+  if echo "$INFO" | grep -E 'application.process.binary = "nuubos-audio-wav-player"|application.name = "nuubOS Product Audio"' >/dev/null 2>&1; then
+    /usr/bin/wpctl set-volume "$ID" 100% >/dev/null 2>&1 || true
+  else
+    /usr/bin/wpctl set-volume "$ID" "${VOL}%" >/dev/null 2>&1 || true
+  fi
+done
+
+exit 0

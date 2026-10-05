@@ -1,6 +1,11 @@
 #!/bin/sh
 
 PIDFILE=/run/nuubos/wifid.pid
+EVENT_FILE=/run/nuubos/wifi-last-event
+EVENT="${2:-}"
+
+mkdir -p /run/nuubos
+printf '%s\n' "$EVENT" > "$EVENT_FILE" 2>/dev/null || true
 
 [ -r "$PIDFILE" ] || exit 0
 PID="$(cat "$PIDFILE" 2>/dev/null)"
@@ -10,5 +15,16 @@ PID="$(cat "$PIDFILE" 2>/dev/null)"
 CMD="$(tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p')"
 [ "$CMD" = "/usr/sbin/nuubos-wifid" ] || exit 0
 
-kill -USR1 "$PID" 2>/dev/null || true
+case "$EVENT" in
+    *CTRL-EVENT-SCAN-RESULTS*)
+        kill -USR2 "$PID" 2>/dev/null || true
+        ;;
+    *CTRL-EVENT-SCAN-FAILED*)
+        kill -USR2 "$PID" 2>/dev/null || true
+        ;;
+    *)
+        kill -USR1 "$PID" 2>/dev/null || true
+        ;;
+esac
+
 exit 0

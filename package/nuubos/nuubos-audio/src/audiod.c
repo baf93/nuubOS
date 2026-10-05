@@ -6,6 +6,7 @@
 #include <dbus/dbus.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <linux/netlink.h>
 #include <poll.h>
 #include <errno.h>
 #include <signal.h>
@@ -14,25 +15,55 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <sys/un.h>
 #include <unistd.h>
+
+#include <nuubos/notify.h>
 
 #define SOCKET_PATH "/run/nuubos/audiod.sock"
 #define CONFIG_PATH "/state/config/nuubos.conf"
 #define CONFIG_TMP  "/state/config/.nuubos.conf.audio.tmp"
 #define INPUT_DIR   "/dev/input"
-#define RUNTIME_DIR "/run/nuubos"
-#define DISPLAY_STATE_PATH "/run/nuubos/displayd.state"
+#define DRM_CLASS_DIR "/sys/class/drm"
+#define TEST_SOUND_PATH "/usr/share/nuubos/audio/nuubos-test-jingle.wav"
+#define SYSTEM_SOUND_DIR "/usr/share/nuubos/audio/system"
+#define HOME_MUSIC_DIR "/run/nuubos/userdata/music"
+#define DEFAULT_HOME_MUSIC_DIR "/usr/share/nuubos/home-music"
+#define WAV_PLAYER "/usr/bin/nuubos-audio-wav-player"
+#define MP3_PLAYER "/usr/bin/nuubos-audio-mp3-player"
+#define PW_ROUTE_HELPER "/usr/bin/nuubos-pw-route"
+#define PW_APP_VOLUME_HELPER "/usr/bin/nuubos-pw-app-volume"
+#define WPCTL_PATH "/usr/bin/wpctl"
+#define PIPEWIRE_RUNTIME "/run/nuubos/pipewire"
+#define VOLUME_PERSIST_DEBOUNCE_MS 400ULL
 
-#define BLUEALSA_SERVICE "org.bluealsa"
-#define BLUEALSA_PATH "/org/bluealsa"
-#define BLUEALSA_PCM_INTERFACE "org.bluealsa.PCM1"
-#define DBUS_OBJECT_MANAGER "org.freedesktop.DBus.ObjectManager"
-#define DBUS_PROPERTIES "org.freedesktop.DBus.Properties"
+/* Product Audio defaults. They apply when a key is missing from STATE and
+ * on Reset System Settings; nothing else may carry its own copy. Analog
+ * and Bluetooth masters start below full scale to protect hearing on
+ * headphones and Bluetooth absolute-volume sinks. */
+#define DEFAULT_OUTPUT_MODE "auto"
+#define DEFAULT_VOLUME_SPEAKER 70
+#define DEFAULT_VOLUME_HEADPHONES 50
+#define DEFAULT_VOLUME_BLUETOOTH 50
+#define DEFAULT_VOLUME_SYSTEM 60
+#define DEFAULT_VOLUME_HOME_MUSIC 60
+#define DEFAULT_VOLUME_APPLICATIONS 100
+#define DEFAULT_NAVIGATION_SOUNDS true
+#define DEFAULT_POWER_SOUNDS true
+
+#define AUDIO_SERVICE_NAME "org.nuubOS.Audio"
+#define AUDIO_OBJECT_PATH "/org/nuubOS/Audio"
+#define AUDIO_INTERFACE "org.nuubOS.Audio1"
+#define INTROSPECT_INTERFACE "org.freedesktop.DBus.Introspectable"
+
+#define BLUETOOTH_SERVICE "org.nuubOS.Bluetooth"
+#define BLUETOOTH_PATH "/org/nuubOS/Bluetooth"
+#define BLUETOOTH_INTERFACE "org.nuubOS.Bluetooth1"
 
 #define NUUBOS_BITS_PER_LONG (sizeof(unsigned long) * 8U)
 #define NUUBOS_NBITS(n) \
@@ -45,6 +76,28 @@ struct audio_state {
 	int volume_speaker;
 	int volume_headphones;
 	int volume_bluetooth;
+	int volume_system;
+	int volume_home_music;
+	int volume_applications;
+	bool navigation_sounds_enabled;
+	bool power_sounds_enabled;
+
+	pid_t test_pid;
+	pid_t system_pid;
+	pid_t music_pid;
+	/* Write end of the running Home Music player control pipe. */
+	int music_ctl_fd;
+	pid_t ui_anchor_pid;
+	pid_t app_volume_pid;
+	bool test_requested;
+	bool music_requested;
+	bool home_session_active;
+	char system_file[256];
+	char music_file[512];
+	unsigned long long test_offset_ms;
+	unsigned long long music_offset_ms;
+	struct timespec test_started;
+	struct timespec music_started;
 
 	bool headphones_known;
 	bool headphones_available;
@@ -53,15 +106,78 @@ struct audio_state {
 	bool hdmi_available;
 
 	bool bluetooth_available;
-	char bluetooth_pcm_path[256];
-	char bluetooth_device_path[256];
+
+	bool volume_config_dirty;
+	struct timespec volume_config_due;
+	bool pipewire_volume_dirty;
+	struct timespec pipewire_volume_due;
 };
 
-static void apply_selected_bluetooth_volume(
-	DBusConnection *conn,
-	const struct audio_state *state);
+static void emit_state_changed(DBusConnection *conn,
+			       const struct audio_state *state);
+static void reroute_owned_streams(struct audio_state *state);
+static void service_owned_streams(struct audio_state *state);
+static bool start_music_new(struct audio_state *state);
+static void stop_music(struct audio_state *state);
+static void stop_child(pid_t *pid);
+static void stop_test(struct audio_state *state);
+static void ensure_ui_anchor(struct audio_state *state);
+static void restart_ui_anchor(struct audio_state *state);
+static int update_config(const char *key, const char *value);
+static int selected_volume(const struct audio_state *state);
+
 
 static volatile sig_atomic_t stop_requested;
+
+
+static const char audio_introspection_xml[] =
+	"<node>"
+	"<interface name='org.nuubOS.Audio1'>"
+	"<method name='GetSnapshot'>"
+	"<arg name='mode' type='s' direction='out'/>"
+	"<arg name='selected' type='s' direction='out'/>"
+	"<arg name='volume' type='i' direction='out'/>"
+	"<arg name='volume_supported' type='b' direction='out'/>"
+	"<arg name='bluetooth_available' type='b' direction='out'/>"
+	"<arg name='headphones_available' type='b' direction='out'/>"
+	"<arg name='hdmi_available' type='b' direction='out'/>"
+	"<arg name='speaker_available' type='b' direction='out'/>"
+	"<arg name='system_volume' type='i' direction='out'/>"
+	"<arg name='home_music_volume' type='i' direction='out'/>"
+	"<arg name='home_music_playing' type='b' direction='out'/>"
+	"</method>"
+	"<method name='SetOutput'>"
+	"<arg name='output' type='s' direction='in'/>"
+	"</method>"
+	"<method name='SetVolume'>"
+	"<arg name='volume' type='i' direction='in'/>"
+	"</method>"
+	"<method name='AdjustVolume'>"
+	"<arg name='delta' type='i' direction='in'/>"
+	"</method>"
+	"<method name='StartHomeMusic'/>"
+	"<method name='StopHomeMusic'/>"
+	"<signal name='StateChanged'>"
+	"<arg name='mode' type='s'/>"
+	"<arg name='selected' type='s'/>"
+	"<arg name='volume' type='i'/>"
+	"<arg name='volume_supported' type='b'/>"
+	"<arg name='bluetooth_available' type='b'/>"
+	"<arg name='headphones_available' type='b'/>"
+	"<arg name='hdmi_available' type='b'/>"
+	"<arg name='speaker_available' type='b'/>"
+	"<arg name='system_volume' type='i'/>"
+	"<arg name='home_music_volume' type='i'/>"
+	"<arg name='home_music_playing' type='b'/>"
+	"</signal>"
+	"</interface>"
+	"<interface name='org.freedesktop.DBus.Introspectable'>"
+	"<method name='Introspect'>"
+	"<arg name='xml_data' type='s' direction='out'/>"
+	"</method>"
+	"</interface>"
+	"</node>";
+
 
 static void handle_signal(int sig)
 {
@@ -69,10 +185,54 @@ static void handle_signal(int sig)
 	stop_requested = 1;
 }
 
+/* Self-pipe woken by SIGCHLD: player/helper exits are handled as events, so
+ * the main loop sleeps without a timeout when nothing is pending. */
+static int sigchld_pipe[2] = { -1, -1 };
+
+static void handle_sigchld(int sig)
+{
+	int saved_errno = errno;
+
+	(void)sig;
+	if (sigchld_pipe[1] >= 0)
+		if (write(sigchld_pipe[1], "c", 1) < 0) {
+			/* Pipe full: a wakeup is already pending. */
+		}
+	errno = saved_errno;
+}
+
+static int open_sigchld_pipe(void)
+{
+	struct sigaction sa;
+
+	if (pipe(sigchld_pipe) < 0)
+		return -1;
+	for (int i = 0; i < 2; i++) {
+		(void)fcntl(sigchld_pipe[i], F_SETFL, O_NONBLOCK);
+		(void)fcntl(sigchld_pipe[i], F_SETFD, FD_CLOEXEC);
+	}
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = handle_sigchld;
+	sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGCHLD, &sa, NULL) < 0)
+		return -1;
+	return sigchld_pipe[0];
+}
+
+static void drain_sigchld_pipe(int fd)
+{
+	char buf[64];
+
+	while (read(fd, buf, sizeof(buf)) > 0)
+		;
+}
+
 static bool valid_output(const char *output)
 {
 	return strcmp(output, "auto") == 0 ||
 	       strcmp(output, "bluetooth") == 0 ||
+	       strcmp(output, "analog") == 0 ||
 	       strcmp(output, "headphones") == 0 ||
 	       strcmp(output, "hdmi") == 0 ||
 	       strcmp(output, "speaker") == 0;
@@ -162,6 +322,154 @@ out:
 	return rc < 0 ? -1 : 0;
 }
 
+static int apply_pipewire_volume(const char *selected, int volume)
+{
+	char value[16];
+	pid_t pid;
+	int status;
+
+	if (selected == NULL || volume < 0 || volume > 100)
+		return -1;
+
+	if (strcmp(selected, "speaker") != 0 &&
+	    strcmp(selected, "headphones") != 0 &&
+	    strcmp(selected, "bluetooth") != 0)
+		return 0;
+
+	if (access(WPCTL_PATH, X_OK) != 0)
+		return -1;
+
+	/* Avoid the old shell helper + awk + wpctl chain for every 1% tick.
+	 * Product Audio already owns the selected default sink, so one direct
+	 * wpctl transaction is sufficient. */
+	snprintf(value, sizeof(value), "%d%%", volume);
+	pid = fork();
+	if (pid < 0)
+		return -1;
+
+	if (pid == 0) {
+		(void)setenv("XDG_RUNTIME_DIR", PIPEWIRE_RUNTIME, 1);
+		(void)setenv("PIPEWIRE_RUNTIME_DIR", PIPEWIRE_RUNTIME, 1);
+		execl(WPCTL_PATH, WPCTL_PATH,
+		      "set-volume", "@DEFAULT_AUDIO_SINK@", value,
+		      (char *)NULL);
+		_exit(127);
+	}
+
+	/* wpctl normally completes in a few milliseconds. Poll at 1 ms instead
+	 * of the old 10 ms granularity while retaining a bounded timeout. */
+	for (int i = 0; i < 100; i++) {
+		pid_t rc = waitpid(pid, &status, WNOHANG);
+
+		if (rc == pid)
+			return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+		if (rc < 0)
+			return -1;
+		usleep(1000);
+	}
+
+	(void)kill(pid, SIGKILL);
+	(void)waitpid(pid, &status, 0);
+	return -1;
+}
+
+/* Aligning the Applications gain needs several wpctl round trips (~0.3 s on
+ * H700). Run it in the background so the control socket never blocks on it;
+ * a newer request supersedes a running one, and the child is reaped by
+ * service_owned_streams(). */
+static int run_applications_volume_helper(struct audio_state *state, int volume)
+{
+	char value[16];
+	pid_t pid;
+	int status;
+
+	if (volume < 0 || volume > 100 ||
+	    access(PW_APP_VOLUME_HELPER, X_OK) != 0)
+		return -1;
+
+	if (state->app_volume_pid > 0) {
+		(void)kill(state->app_volume_pid, SIGTERM);
+		(void)waitpid(state->app_volume_pid, &status, 0);
+		state->app_volume_pid = -1;
+	}
+
+	snprintf(value, sizeof(value), "%d", volume);
+	pid = fork();
+	if (pid < 0)
+		return -1;
+
+	if (pid == 0) {
+		execl(PW_APP_VOLUME_HELPER, PW_APP_VOLUME_HELPER,
+		      value, (char *)NULL);
+		_exit(127);
+	}
+
+	state->app_volume_pid = pid;
+	return 0;
+}
+
+static int persist_applications_volume(struct audio_state *state,
+				       DBusConnection *conn,
+				       int volume)
+{
+	char value[16];
+
+	if (volume < 0)
+		volume = 0;
+	if (volume > 100)
+		volume = 100;
+
+	snprintf(value, sizeof(value), "%d", volume);
+	if (update_config("AUDIO_VOLUME_APPLICATIONS", value) != 0)
+		return -1;
+
+	state->volume_applications = volume;
+	if (run_applications_volume_helper(state, volume) != 0)
+		fprintf(stderr, "nuubos-audiod: failed to apply Applications volume policy\n");
+	emit_state_changed(conn, state);
+	return 0;
+}
+
+static int persist_sound_toggle(struct audio_state *state,
+				DBusConnection *conn,
+				bool navigation,
+				bool enabled)
+{
+	const char *key = navigation ? "AUDIO_SYSTEM_NAVIGATION_ENABLED" :
+				       "AUDIO_SYSTEM_POWER_ENABLED";
+
+	if (update_config(key, enabled ? "1" : "0") != 0)
+		return -1;
+
+	if (navigation)
+		state->navigation_sounds_enabled = enabled;
+	else
+		state->power_sounds_enabled = enabled;
+
+	emit_state_changed(conn, state);
+	return 0;
+}
+
+static bool system_sound_allowed(const struct audio_state *state,
+				 const char *name)
+{
+	if (state->volume_system <= 0)
+		return false;
+
+	if (strcmp(name, "boot") == 0 ||
+	    strcmp(name, "restart") == 0 ||
+	    strcmp(name, "poweroff") == 0)
+		return state->power_sounds_enabled;
+
+	if (strcmp(name, "select") == 0 ||
+	    strcmp(name, "back") == 0 ||
+	    strcmp(name, "navigation") == 0 ||
+	    strcmp(name, "quick-settings") == 0)
+		return state->navigation_sounds_enabled;
+
+	return false;
+}
+
 static void apply_selected_analog_volume(const struct audio_state *state)
 {
 	int volume;
@@ -173,34 +481,112 @@ static void apply_selected_analog_volume(const struct audio_state *state)
 	else
 		return;
 
-	if (set_codec_dac_volume(volume) < 0)
+	if (apply_pipewire_volume(state->selected, volume) < 0)
 		fprintf(stderr,
-			"nuubos-audiod: failed to set Codec DAC volume\n");
+			"nuubos-audiod: failed to set PipeWire analog volume\n");
+}
+
+static int apply_pipewire_default(const char *selected)
+{
+	pid_t pid;
+	int status;
+
+	/* Every physical output, including Bluetooth, is a PipeWire target. */
+	if (selected == NULL)
+		return 0;
+
+	if (access(PW_ROUTE_HELPER, X_OK) != 0)
+		return -1;
+
+	pid = fork();
+	if (pid < 0)
+		return -1;
+
+	if (pid == 0) {
+		execl(PW_ROUTE_HELPER, PW_ROUTE_HELPER,
+		      "select", selected, (char *)NULL);
+		_exit(127);
+	}
+
+	/* Never let a policy helper stall audiod (and therefore the overlay). */
+	for (int i = 0; i < 50; i++) {
+		pid_t rc = waitpid(pid, &status, WNOHANG);
+
+		if (rc == pid) {
+			if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+				return -1;
+			return 0;
+		}
+
+		if (rc < 0)
+			return -1;
+
+		usleep(10000);
+	}
+
+	(void)kill(pid, SIGKILL);
+	(void)waitpid(pid, &status, 0);
+	return -1;
+}
+
+static const char *fallback_route(const struct audio_state *state)
+{
+	if (state->headphones_known && state->headphones_available)
+		return "headphones";
+
+	if (state->hdmi_known && state->hdmi_available)
+		return "hdmi";
+
+	return "speaker";
 }
 
 static void reconcile_selection(struct audio_state *state)
 {
 	const char *selected;
 
-	if (strcmp(state->mode, "auto") != 0) {
-		selected = state->mode;
-	} else if (state->bluetooth_available) {
-		selected = "bluetooth";
-	} else if (state->headphones_known &&
-		   state->headphones_available) {
-		selected = "headphones";
-	} else if (state->hdmi_known &&
-		   state->hdmi_available) {
-		selected = "hdmi";
-	} else {
+	if (strcmp(state->mode, "analog") == 0) {
+		/* Speaker vs headphones is a physical jack route. "analog"
+		 * deliberately follows that hardware state. */
+		selected = (state->headphones_known &&
+			    state->headphones_available)
+			? "headphones" : "speaker";
+	} else if (strcmp(state->mode, "auto") == 0) {
+		if (state->bluetooth_available)
+			selected = "bluetooth";
+		else
+			selected = fallback_route(state);
+	} else if (strcmp(state->mode, "bluetooth") == 0) {
+		/* Keep the requested mode persisted, but never expose a dead
+		 * selected route. Bluetooth resumes automatically on reconnect. */
+		selected = state->bluetooth_available
+			? "bluetooth" : fallback_route(state);
+	} else if (strcmp(state->mode, "hdmi") == 0) {
+		selected = (state->hdmi_known && state->hdmi_available)
+			? "hdmi" : fallback_route(state);
+	} else if (strcmp(state->mode, "headphones") == 0) {
+		selected = (state->headphones_known &&
+			    state->headphones_available)
+			? "headphones" : "speaker";
+	} else if (strcmp(state->mode, "speaker") == 0) {
 		selected = "speaker";
+	} else {
+		selected = fallback_route(state);
 	}
 
 	(void)copy_string(state->selected,
 			  sizeof(state->selected),
 			  selected);
 
-	apply_selected_analog_volume(state);
+	if (apply_pipewire_default(state->selected) != 0)
+		fprintf(stderr,
+			"nuubos-audiod: PipeWire default route sync failed for %s\n",
+			state->selected);
+	if (strcmp(state->selected, "bluetooth") == 0) {
+		if (apply_pipewire_volume("bluetooth", state->volume_bluetooth) < 0)
+			fprintf(stderr, "nuubos-audiod: failed to set Bluetooth PipeWire volume\n");
+	} else {
+		apply_selected_analog_volume(state);
+	}
 }
 
 static void uppercase_copy(char *dst, size_t size, const char *src)
@@ -233,12 +619,30 @@ static void load_config(struct audio_state *state)
 	FILE *fp;
 	char line[256];
 
-	snprintf(state->mode, sizeof(state->mode), "auto");
+	snprintf(state->mode, sizeof(state->mode), DEFAULT_OUTPUT_MODE);
 	snprintf(state->selected, sizeof(state->selected), "unresolved");
 
-	state->volume_speaker = 100;
-	state->volume_headphones = 100;
-	state->volume_bluetooth = 100;
+	state->volume_speaker = DEFAULT_VOLUME_SPEAKER;
+	state->volume_headphones = DEFAULT_VOLUME_HEADPHONES;
+	state->volume_bluetooth = DEFAULT_VOLUME_BLUETOOTH;
+	state->volume_system = DEFAULT_VOLUME_SYSTEM;
+	state->volume_home_music = DEFAULT_VOLUME_HOME_MUSIC;
+	state->volume_applications = DEFAULT_VOLUME_APPLICATIONS;
+	state->navigation_sounds_enabled = DEFAULT_NAVIGATION_SOUNDS;
+	state->power_sounds_enabled = DEFAULT_POWER_SOUNDS;
+	state->test_pid = -1;
+	state->system_pid = -1;
+	state->music_pid = -1;
+	state->music_ctl_fd = -1;
+	state->ui_anchor_pid = -1;
+	state->app_volume_pid = -1;
+	state->test_requested = false;
+	state->music_requested = false;
+	state->home_session_active = false;
+	state->system_file[0] = '\0';
+	state->music_file[0] = '\0';
+	state->test_offset_ms = 0;
+	state->music_offset_ms = 0;
 
 	state->headphones_known = false;
 	state->headphones_available = false;
@@ -247,8 +651,12 @@ static void load_config(struct audio_state *state)
 	state->hdmi_available = false;
 
 	state->bluetooth_available = false;
-	state->bluetooth_pcm_path[0] = '\0';
-	state->bluetooth_device_path[0] = '\0';
+	state->volume_config_dirty = false;
+	state->volume_config_due.tv_sec = 0;
+	state->volume_config_due.tv_nsec = 0;
+	state->pipewire_volume_dirty = false;
+	state->pipewire_volume_due.tv_sec = 0;
+	state->pipewire_volume_due.tv_nsec = 0;
 
 	fp = fopen(CONFIG_PATH, "r");
 	if (!fp)
@@ -283,6 +691,22 @@ static void load_config(struct audio_state *state)
 			int v = parse_volume(line + 24);
 			if (v >= 0)
 				state->volume_bluetooth = v;
+		} else if (strncmp(line, "AUDIO_VOLUME_SYSTEM=", 20) == 0) {
+			int v = parse_volume(line + 20);
+			if (v >= 0)
+				state->volume_system = v;
+		} else if (strncmp(line, "AUDIO_VOLUME_HOME_MUSIC=", 24) == 0) {
+			int v = parse_volume(line + 24);
+			if (v >= 0)
+				state->volume_home_music = v;
+		} else if (strncmp(line, "AUDIO_VOLUME_APPLICATIONS=", 26) == 0) {
+			int v = parse_volume(line + 26);
+			if (v >= 0)
+				state->volume_applications = v;
+		} else if (strncmp(line, "AUDIO_SYSTEM_NAVIGATION_ENABLED=", 32) == 0) {
+			state->navigation_sounds_enabled = strcmp(line + 32, "0") != 0;
+		} else if (strncmp(line, "AUDIO_SYSTEM_POWER_ENABLED=", 27) == 0) {
+			state->power_sounds_enabled = strcmp(line + 27, "0") != 0;
 		}
 	}
 
@@ -357,13 +781,133 @@ fail:
 	return -1;
 }
 
+
+static unsigned long long monotonic_ms(void)
+{
+	struct timespec now;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+		return 0;
+
+	return (unsigned long long)now.tv_sec * 1000ULL +
+	       (unsigned long long)now.tv_nsec / 1000000ULL;
+}
+
+static void schedule_pipewire_volume_apply(struct audio_state *state)
+{
+	unsigned long long due = monotonic_ms() + 18ULL;
+
+	state->pipewire_volume_dirty = true;
+	state->pipewire_volume_due.tv_sec = (time_t)(due / 1000ULL);
+	state->pipewire_volume_due.tv_nsec = (long)((due % 1000ULL) * 1000000ULL);
+}
+
+static bool pipewire_volume_apply_is_due(const struct audio_state *state)
+{
+	unsigned long long due;
+
+	if (!state->pipewire_volume_dirty)
+		return false;
+	due = (unsigned long long)state->pipewire_volume_due.tv_sec * 1000ULL +
+	      (unsigned long long)state->pipewire_volume_due.tv_nsec / 1000000ULL;
+	return monotonic_ms() >= due;
+}
+
+static long long deadline_remaining_ms(const struct timespec *due)
+{
+	long long due_ms = (long long)due->tv_sec * 1000LL +
+			   (long long)due->tv_nsec / 1000000LL;
+	long long remaining = due_ms - (long long)monotonic_ms();
+
+	return remaining > 0 ? remaining : 0;
+}
+
+/* Wait only until the next deferred volume apply/persist; otherwise forever. */
+static int main_loop_timeout_ms(const struct audio_state *state)
+{
+	long long timeout = -1;
+	long long remaining;
+
+	if (state->pipewire_volume_dirty) {
+		remaining = deadline_remaining_ms(&state->pipewire_volume_due);
+		timeout = remaining;
+	}
+	if (state->volume_config_dirty) {
+		remaining = deadline_remaining_ms(&state->volume_config_due);
+		if (timeout < 0 || remaining < timeout)
+			timeout = remaining;
+	}
+	return timeout > 60000 ? 60000 : (int)timeout;
+}
+
+static int flush_pipewire_volume(struct audio_state *state)
+{
+	int volume;
+
+	if (!state->pipewire_volume_dirty)
+		return 0;
+	volume = selected_volume(state);
+	if (!volume_supported(state->selected) || volume < 0) {
+		state->pipewire_volume_dirty = false;
+		return 0;
+	}
+	if (apply_pipewire_volume(state->selected, volume) < 0)
+		return -1;
+	state->pipewire_volume_dirty = false;
+	return 0;
+}
+
+static void schedule_volume_persist(struct audio_state *state)
+{
+	unsigned long long due = monotonic_ms() + VOLUME_PERSIST_DEBOUNCE_MS;
+
+	state->volume_config_dirty = true;
+	state->volume_config_due.tv_sec = (time_t)(due / 1000ULL);
+	state->volume_config_due.tv_nsec = (long)((due % 1000ULL) * 1000000ULL);
+}
+
+static bool volume_persist_is_due(const struct audio_state *state)
+{
+	unsigned long long due;
+
+	if (!state->volume_config_dirty)
+		return false;
+
+	due = (unsigned long long)state->volume_config_due.tv_sec * 1000ULL +
+	      (unsigned long long)state->volume_config_due.tv_nsec / 1000000ULL;
+	return monotonic_ms() >= due;
+}
+
+static int flush_volume_config(struct audio_state *state)
+{
+	char value[16];
+
+	if (!state->volume_config_dirty)
+		return 0;
+
+	snprintf(value, sizeof(value), "%d", state->volume_speaker);
+	if (update_config("AUDIO_VOLUME_SPEAKER", value) != 0)
+		return -1;
+
+	snprintf(value, sizeof(value), "%d", state->volume_headphones);
+	if (update_config("AUDIO_VOLUME_HEADPHONES", value) != 0)
+		return -1;
+
+	snprintf(value, sizeof(value), "%d", state->volume_bluetooth);
+	if (update_config("AUDIO_VOLUME_BLUETOOTH", value) != 0)
+		return -1;
+
+	state->volume_config_dirty = false;
+	return 0;
+}
+
 static int write_reply(int fd, const char *reply)
 {
 	size_t remaining = strlen(reply);
 	const char *p = reply;
 
 	while (remaining > 0) {
-		ssize_t n = write(fd, p, remaining);
+		ssize_t n = send(fd, p, remaining, MSG_NOSIGNAL);
 
 		if (n < 0) {
 			if (errno == EINTR)
@@ -413,6 +957,305 @@ static const char *volume_key(const char *output)
 	return NULL;
 }
 
+static int selected_volume(const struct audio_state *state)
+{
+	if (!volume_supported(state->selected))
+		return -1;
+	return get_volume(state, state->selected);
+}
+
+static bool product_audio_master_enabled(const struct audio_state *state)
+{
+	int volume = selected_volume(state);
+
+	/* HDMI volume is owned by the TV/receiver. For nuubOS-controlled
+	 * outputs, 0% is a hard Product Audio mute: no owned stream or
+	 * keepalive is scheduled. */
+	return volume < 0 || volume > 0;
+}
+
+static int persist_selected_volume(struct audio_state *state,
+				   DBusConnection *conn,
+				   int volume)
+{
+	int old_volume;
+
+	if (!volume_supported(state->selected))
+		return -2;
+
+	if (volume < 0)
+		volume = 0;
+	if (volume > 100)
+		volume = 100;
+
+	old_volume = selected_volume(state);
+
+	/* Interactive master changes are runtime operations. Persist them only
+	 * after the user stops stepping the control, rather than fsync()ing
+	 * STATE for every 1% event. */
+	set_volume_memory(state, state->selected, volume);
+	schedule_volume_persist(state);
+	/* Coalesce repeated 1% key events. Spawning and synchronously waiting for
+	 * wpctl on every tick caused OSD/input lag and CPU bursts large enough to
+	 * underrun Home Music on H700. The Product state changes immediately; the
+	 * final sink gain is applied once the short input burst settles. */
+	schedule_pipewire_volume_apply(state);
+
+	/* PipeWire owns analog gain. Ordinary 1% master changes must not
+	 * restart playback processes: doing so caused an audible pop on every
+	 * step. Only the hard-mute boundary changes stream scheduling. */
+	if (volume == 0 && old_volume > 0) {
+		stop_test(state);
+		stop_child(&state->system_pid);
+		stop_music(state);
+	} else if (volume > 0 && old_volume == 0 &&
+		   state->music_requested && state->volume_home_music > 0) {
+		state->music_file[0] = '\0';
+		state->music_offset_ms = 0;
+		(void)start_music_new(state);
+	}
+
+	emit_state_changed(conn, state);
+	return 0;
+}
+
+static int persist_output_mode(struct audio_state *state,
+			       DBusConnection *conn,
+			       const char *output)
+{
+	char mode[32];
+	char persistent[32];
+
+	if (!copy_string(mode, sizeof(mode), output))
+		return -1;
+
+	lowercase(mode);
+	if (!valid_output(mode))
+		return -1;
+
+	uppercase_copy(persistent, sizeof(persistent), mode);
+	if (update_config("AUDIO_OUTPUT", persistent) != 0)
+		return -1;
+
+	if (!copy_string(state->mode, sizeof(state->mode), mode))
+		return -1;
+
+	reconcile_selection(state);
+	reroute_owned_streams(state);
+	emit_state_changed(conn, state);
+	return 0;
+}
+
+static void append_state_args(DBusMessage *message,
+			      const struct audio_state *state)
+{
+	const char *mode = state->mode;
+	const char *selected = state->selected;
+	dbus_int32_t volume = selected_volume(state);
+	dbus_bool_t can_volume = volume_supported(state->selected);
+	dbus_bool_t bluetooth = state->bluetooth_available;
+	dbus_bool_t headphones = state->headphones_known &&
+				 state->headphones_available;
+	dbus_bool_t hdmi = state->hdmi_known && state->hdmi_available;
+	dbus_bool_t speaker = TRUE;
+	dbus_int32_t system_volume = state->volume_system;
+	dbus_int32_t home_music_volume = state->volume_home_music;
+	dbus_bool_t home_music_playing = state->music_pid > 0;
+
+	dbus_message_append_args(message,
+				 DBUS_TYPE_STRING, &mode,
+				 DBUS_TYPE_STRING, &selected,
+				 DBUS_TYPE_INT32, &volume,
+				 DBUS_TYPE_BOOLEAN, &can_volume,
+				 DBUS_TYPE_BOOLEAN, &bluetooth,
+				 DBUS_TYPE_BOOLEAN, &headphones,
+				 DBUS_TYPE_BOOLEAN, &hdmi,
+				 DBUS_TYPE_BOOLEAN, &speaker,
+				 DBUS_TYPE_INT32, &system_volume,
+				 DBUS_TYPE_INT32, &home_music_volume,
+				 DBUS_TYPE_BOOLEAN, &home_music_playing,
+				 DBUS_TYPE_INVALID);
+}
+
+static void emit_state_changed(DBusConnection *conn,
+			       const struct audio_state *state)
+{
+	DBusMessage *signal;
+
+	if (!conn)
+		return;
+
+	signal = dbus_message_new_signal(AUDIO_OBJECT_PATH,
+					 AUDIO_INTERFACE,
+					 "StateChanged");
+	if (!signal)
+		return;
+
+	append_state_args(signal, state);
+	dbus_connection_send(conn, signal, NULL);
+	dbus_connection_flush(conn);
+	dbus_message_unref(signal);
+}
+
+static void send_dbus_reply(DBusConnection *conn, DBusMessage *reply)
+{
+	if (!reply)
+		return;
+	dbus_connection_send(conn, reply, NULL);
+	dbus_connection_flush(conn);
+	dbus_message_unref(reply);
+}
+
+static void send_dbus_error(DBusConnection *conn,
+			    DBusMessage *request,
+			    const char *name,
+			    const char *message)
+{
+	send_dbus_reply(conn, dbus_message_new_error(request, name, message));
+}
+
+static bool handle_audio_method(DBusConnection *conn,
+				DBusMessage *message,
+				struct audio_state *state)
+{
+	if (dbus_message_is_method_call(message,
+					INTROSPECT_INTERFACE,
+					"Introspect")) {
+		DBusMessage *reply = dbus_message_new_method_return(message);
+		const char *xml = audio_introspection_xml;
+		if (reply)
+			dbus_message_append_args(reply,
+						 DBUS_TYPE_STRING, &xml,
+						 DBUS_TYPE_INVALID);
+		send_dbus_reply(conn, reply);
+		return true;
+	}
+
+	if (dbus_message_is_method_call(message,
+					AUDIO_INTERFACE,
+					"GetSnapshot")) {
+		DBusMessage *reply = dbus_message_new_method_return(message);
+		if (reply)
+			append_state_args(reply, state);
+		send_dbus_reply(conn, reply);
+		return true;
+	}
+
+	if (dbus_message_is_method_call(message,
+					AUDIO_INTERFACE,
+					"SetOutput")) {
+		DBusError error = DBUS_ERROR_INIT;
+		const char *output = NULL;
+
+		if (!dbus_message_get_args(message, &error,
+					   DBUS_TYPE_STRING, &output,
+					   DBUS_TYPE_INVALID)) {
+			send_dbus_error(conn, message,
+					"org.nuubOS.Audio.Error.InvalidArgument",
+					"SetOutput requires an output name");
+			if (dbus_error_is_set(&error))
+				dbus_error_free(&error);
+			return true;
+		}
+
+		if (persist_output_mode(state, conn, output) != 0) {
+			send_dbus_error(conn, message,
+					"org.nuubOS.Audio.Error.InvalidOutput",
+					"Audio output is invalid or could not be persisted");
+			return true;
+		}
+
+		send_dbus_reply(conn, dbus_message_new_method_return(message));
+		return true;
+	}
+
+	if (dbus_message_is_method_call(message,
+					AUDIO_INTERFACE,
+					"StartHomeMusic")) {
+		state->home_session_active = true;
+		state->music_requested = true;
+		ensure_ui_anchor(state);
+
+		if (state->volume_home_music > 0 &&
+		    state->music_pid <= 0)
+			(void)start_music_new(state);
+
+		emit_state_changed(conn, state);
+		send_dbus_reply(conn, dbus_message_new_method_return(message));
+		return true;
+	}
+
+	if (dbus_message_is_method_call(message,
+					AUDIO_INTERFACE,
+					"StopHomeMusic")) {
+		state->home_session_active = false;
+		state->music_requested = false;
+		stop_music(state);
+		ensure_ui_anchor(state);
+		emit_state_changed(conn, state);
+		send_dbus_reply(conn, dbus_message_new_method_return(message));
+		return true;
+	}
+
+	if (dbus_message_is_method_call(message,
+					AUDIO_INTERFACE,
+					"SetVolume") ||
+	    dbus_message_is_method_call(message,
+					AUDIO_INTERFACE,
+					"AdjustVolume")) {
+		DBusError error = DBUS_ERROR_INIT;
+		dbus_int32_t value = 0;
+		int volume;
+		int rc;
+
+		if (!dbus_message_get_args(message, &error,
+					   DBUS_TYPE_INT32, &value,
+					   DBUS_TYPE_INVALID)) {
+			send_dbus_error(conn, message,
+					"org.nuubOS.Audio.Error.InvalidArgument",
+					"Volume method requires one int32 value");
+			if (dbus_error_is_set(&error))
+				dbus_error_free(&error);
+			return true;
+		}
+
+		if (dbus_message_is_method_call(message,
+						AUDIO_INTERFACE,
+						"AdjustVolume")) {
+			volume = selected_volume(state);
+			if (volume < 0)
+				rc = -2;
+			else
+				rc = persist_selected_volume(
+					state, conn,
+					(volume + (int)value < 0) ? 0 :
+					(volume + (int)value > 100) ? 100 :
+					volume + (int)value);
+		} else {
+			rc = persist_selected_volume(state, conn, (int)value);
+		}
+
+		if (rc == -2) {
+			send_dbus_error(conn, message,
+					"org.nuubOS.Audio.Error.VolumeUnsupported",
+					"Active output does not support nuubOS volume control");
+			return true;
+		}
+		if (rc != 0) {
+			send_dbus_error(conn, message,
+					"org.nuubOS.Audio.Error.Failed",
+					"Volume update failed");
+			return true;
+		}
+
+		send_dbus_reply(conn, dbus_message_new_method_return(message));
+		return true;
+	}
+
+	return false;
+}
+
+
 static void status_reply(const struct audio_state *state,
 			 char *reply, size_t size)
 {
@@ -439,7 +1282,14 @@ static void status_reply(const struct audio_state *state,
 		 "volume.speaker=%d\n"
 		 "volume.headphones=%d\n"
 		 "volume.bluetooth=%d\n"
-		 "volume.hdmi=unsupported\n",
+		 "volume.hdmi=unsupported\n"
+		 "volume.system=%d\n"
+		 "volume.applications=%d\n"
+		 "system.navigation_enabled=%d\n"
+		 "system.power_enabled=%d\n"
+		 "volume.home_music=%d\n"
+		 "home_music.playing=%d\n"
+		 "home_music.track=%s\n",
 		 state->mode,
 		 state->selected,
 		 state->bluetooth_available ? 1 : 0,
@@ -447,55 +1297,23 @@ static void status_reply(const struct audio_state *state,
 		 hdmi,
 		 state->volume_speaker,
 		 state->volume_headphones,
-		 state->volume_bluetooth);
-}
-
-static bool bluetooth_device_path_to_mac(const char *path,
-					 char *mac,
-					 size_t size)
-{
-	const char *p;
-	size_t i;
-
-	if (path == NULL)
-		return false;
-
-	p = strstr(path, "/dev_");
-	if (p == NULL)
-		return false;
-
-	p += 5;
-
-	if (strlen(p) != 17 || size < 18)
-		return false;
-
-	for (i = 0; i < 17; i++) {
-		char c = p[i];
-
-		if ((i + 1) % 3 == 0) {
-			if (c != '_')
-				return false;
-			mac[i] = ':';
-		} else {
-			if (!isxdigit((unsigned char)c))
-				return false;
-			mac[i] = c;
-		}
-	}
-
-	mac[17] = '\0';
-	return true;
+		 state->volume_bluetooth,
+		 state->volume_system,
+		 state->volume_applications,
+		 state->navigation_sounds_enabled ? 1 : 0,
+		 state->power_sounds_enabled ? 1 : 0,
+		 state->volume_home_music,
+		 state->music_pid > 0 ? 1 : 0,
+		 state->music_file[0] != '\0' ? state->music_file : "");
 }
 
 static void route_reply(const struct audio_state *state,
 			char *reply,
 			size_t reply_size)
 {
-	char mac[18];
-
 	if (strcmp(state->selected, "speaker") == 0) {
 		snprintf(reply, reply_size,
-			 "plughw:CARD=Codec,DEV=0\n");
+			 "default\n");
 		return;
 	}
 
@@ -507,7 +1325,7 @@ static void route_reply(const struct audio_state *state,
 		}
 
 		snprintf(reply, reply_size,
-			 "plughw:CARD=Codec,DEV=0\n");
+			 "default\n");
 		return;
 	}
 
@@ -519,26 +1337,745 @@ static void route_reply(const struct audio_state *state,
 		}
 
 		snprintf(reply, reply_size,
-			 "plughw:CARD=HDMI,DEV=0\n");
+			 "default\n");
 		return;
 	}
 
 	if (strcmp(state->selected, "bluetooth") == 0) {
-		if (!state->bluetooth_available ||
-		    !bluetooth_device_path_to_mac(
-			    state->bluetooth_device_path,
-			    mac, sizeof(mac))) {
+		if (!state->bluetooth_available) {
 			snprintf(reply, reply_size, "unavailable\n");
 			return;
 		}
-
-		snprintf(reply, reply_size,
-			 "bluealsa:DEV=%s,PROFILE=a2dp\n",
-			 mac);
+		snprintf(reply, reply_size, "default\n");
 		return;
 	}
 
 	snprintf(reply, reply_size, "unavailable\n");
+}
+
+static unsigned long long elapsed_ms(const struct timespec *started)
+{
+	unsigned long long start =
+		(unsigned long long)started->tv_sec * 1000ULL +
+		(unsigned long long)started->tv_nsec / 1000000ULL;
+	unsigned long long now = monotonic_ms();
+
+	return now > start ? now - start : 0;
+}
+
+static void stop_child(pid_t *pid)
+{
+	int status;
+	int i;
+
+	if (*pid <= 0)
+		return;
+
+	(void)kill(*pid, SIGTERM);
+
+	for (i = 0; i < 10; i++) {
+		pid_t rc = waitpid(*pid, &status, WNOHANG);
+
+		if (rc == *pid || rc < 0) {
+			*pid = -1;
+			return;
+		}
+
+		usleep(10000);
+	}
+
+	(void)kill(*pid, SIGKILL);
+	(void)waitpid(*pid, &status, 0);
+	*pid = -1;
+}
+
+static int current_route(const struct audio_state *state,
+			 char *route, size_t size)
+{
+	route_reply(state, route, size);
+	route[strcspn(route, "\r\n")] = '\0';
+
+	if (strcmp(route, "unavailable") == 0 || route[0] == '\0')
+		return -1;
+
+	return 0;
+}
+
+static pid_t launch_wav(const struct audio_state *state,
+			const char *path,
+			int volume,
+			unsigned long long skip_ms,
+			const char *profile)
+{
+	char route[128];
+	char vol[16];
+	char skip[32];
+	pid_t pid;
+
+	if (volume <= 0 || path == NULL || path[0] == '\0' ||
+	    !product_audio_master_enabled(state))
+		return -1;
+
+	if (current_route(state, route, sizeof(route)) != 0)
+		return -1;
+
+	snprintf(vol, sizeof(vol), "%d", volume);
+	snprintf(skip, sizeof(skip), "%llu", skip_ms);
+
+	pid = fork();
+	if (pid < 0)
+		return -1;
+
+	if (pid == 0) {
+		execl(WAV_PLAYER, WAV_PLAYER,
+		      route, vol, skip,
+		      profile != NULL ? profile : "stream",
+		      path, (char *)NULL);
+		_exit(127);
+	}
+
+	return pid;
+}
+
+static void ensure_ui_anchor(struct audio_state *state)
+{
+	/* PipeWire owns the shared graph. Never schedule a fake silence stream. */
+	stop_child(&state->ui_anchor_pid);
+}
+
+static void restart_ui_anchor(struct audio_state *state)
+{
+	ensure_ui_anchor(state);
+}
+
+
+static bool mp3_name(const char *name)
+{
+	size_t len;
+	if (name == NULL) return false;
+	len = strlen(name);
+	return len > 4 && strcasecmp(name + len - 4, ".mp3") == 0;
+}
+
+static pid_t launch_mp3(const struct audio_state *state,
+			const char *path, int volume,
+			unsigned long long skip_ms, const char *profile,
+			int *ctl_fd)
+{
+	char route[128], vol[16], skip[32];
+	int ctl[2] = { -1, -1 };
+	pid_t pid;
+	if (volume <= 0 || path == NULL || path[0] == '\0' ||
+	    !product_audio_master_enabled(state)) return -1;
+	if (current_route(state, route, sizeof(route)) != 0) return -1;
+	snprintf(vol, sizeof(vol), "%d", volume);
+	snprintf(skip, sizeof(skip), "%llu", skip_ms);
+	/* Optional control pipe: the player reads live volume updates on stdin,
+	 * so a volume step never restarts the stream. */
+	if (ctl_fd != NULL && pipe2(ctl, O_CLOEXEC) != 0) {
+		ctl[0] = -1;
+		ctl[1] = -1;
+	}
+	pid = fork();
+	if (pid < 0) {
+		if (ctl[0] >= 0) close(ctl[0]);
+		if (ctl[1] >= 0) close(ctl[1]);
+		return -1;
+	}
+	if (pid == 0) {
+		if (ctl[0] >= 0)
+			(void)dup2(ctl[0], STDIN_FILENO);
+		execl(MP3_PLAYER, MP3_PLAYER, route, vol, skip,
+		      profile != NULL ? profile : "stream", path, (char *)NULL);
+		_exit(127);
+	}
+	if (ctl[0] >= 0)
+		close(ctl[0]);
+	if (ctl_fd != NULL && ctl[1] >= 0) {
+		(void)fcntl(ctl[1], F_SETFL, O_NONBLOCK);
+		*ctl_fd = ctl[1];
+	}
+	return pid;
+}
+
+static void close_music_ctl(struct audio_state *state)
+{
+	if (state->music_ctl_fd >= 0) {
+		close(state->music_ctl_fd);
+		state->music_ctl_fd = -1;
+	}
+}
+
+static void stop_music_player(struct audio_state *state)
+{
+	close_music_ctl(state);
+	stop_child(&state->music_pid);
+}
+
+/* Apply a Home Music volume to the running player without restarting it. */
+static bool music_set_live_volume(struct audio_state *state, int volume)
+{
+	char line[16];
+	int n;
+
+	if (state->music_pid <= 0 || state->music_ctl_fd < 0)
+		return false;
+
+	n = snprintf(line, sizeof(line), "%d\n", volume);
+	return n > 0 && write(state->music_ctl_fd, line, (size_t)n) == n;
+}
+
+static bool choose_music_track_in(const char *music_dir, char *path,
+				  size_t size)
+{
+	DIR *dir;
+	struct dirent *entry;
+	unsigned int count = 0;
+	bool selected = false;
+
+	dir = opendir(music_dir);
+	if (dir == NULL)
+		return false;
+
+	while ((entry = readdir(dir)) != NULL) {
+		if (!mp3_name(entry->d_name))
+			continue;
+
+		count++;
+
+		if ((unsigned int)(rand() % (int)count) == 0) {
+			int n = snprintf(path, size, "%s/%s",
+					 music_dir, entry->d_name);
+
+			if (n > 0 && (size_t)n < size)
+				selected = true;
+		}
+	}
+
+	closedir(dir);
+	return selected;
+}
+
+/* The active user's own music wins; the bundled nuubOS selection is the
+ * default only when the user has no MP3 files of their own. */
+static bool choose_music_track(char *path, size_t size)
+{
+	return choose_music_track_in(HOME_MUSIC_DIR, path, size) ||
+	       choose_music_track_in(DEFAULT_HOME_MUSIC_DIR, path, size);
+}
+
+static void start_test(struct audio_state *state,
+		       unsigned long long offset_ms)
+{
+	if (!product_audio_master_enabled(state)) {
+		stop_child(&state->test_pid);
+		state->test_requested = false;
+		state->test_offset_ms = 0;
+		return;
+	}
+
+	stop_child(&state->test_pid);
+
+	state->test_pid = launch_wav(
+		state, TEST_SOUND_PATH, 100, offset_ms, "stream");
+
+	if (state->test_pid > 0) {
+		state->test_offset_ms = offset_ms;
+		(void)clock_gettime(CLOCK_MONOTONIC, &state->test_started);
+		return;
+	}
+
+	state->test_requested = false;
+	state->test_offset_ms = 0;
+}
+
+static void stop_test(struct audio_state *state)
+{
+	stop_child(&state->test_pid);
+	state->test_requested = false;
+	state->test_offset_ms = 0;
+}
+
+static void start_system_sound(struct audio_state *state,
+			       const char *name)
+{
+	char path[256];
+
+	if (!system_sound_allowed(state, name) ||
+	    !product_audio_master_enabled(state))
+		return;
+
+	if (strcmp(name, "boot") != 0 &&
+	    strcmp(name, "poweroff") != 0 &&
+	    strcmp(name, "restart") != 0 &&
+	    strcmp(name, "select") != 0 &&
+	    strcmp(name, "back") != 0 &&
+	    strcmp(name, "navigation") != 0 &&
+	    strcmp(name, "quick-settings") != 0)
+		return;
+
+	snprintf(path, sizeof(path), "%s/%s.wav",
+		 SYSTEM_SOUND_DIR, name);
+
+	stop_child(&state->system_pid);
+
+	if (!copy_string(state->system_file,
+			 sizeof(state->system_file), path))
+		return;
+
+	state->system_pid = launch_wav(
+		state, state->system_file, state->volume_system, 0, "sfx");
+}
+
+static bool start_music_current(struct audio_state *state)
+{
+	if (!state->music_requested ||
+	    state->volume_home_music <= 0 ||
+	    !product_audio_master_enabled(state) ||
+	    state->music_file[0] == '\0')
+		return false;
+
+	stop_music_player(state);
+
+	state->music_pid = launch_mp3(
+		state,
+		state->music_file,
+		state->volume_home_music,
+		state->music_offset_ms,
+		"stream",
+		&state->music_ctl_fd);
+
+	if (state->music_pid <= 0)
+		return false;
+
+	(void)clock_gettime(CLOCK_MONOTONIC, &state->music_started);
+	return true;
+}
+
+/* Append one code point as UTF-8; stops silently when out is full. */
+static void utf8_put(char *out, size_t size, size_t *len, unsigned int cp)
+{
+	char enc[4];
+	size_t n;
+
+	if (cp < 0x80) {
+		enc[0] = (char)cp;
+		n = 1;
+	} else if (cp < 0x800) {
+		enc[0] = (char)(0xc0 | (cp >> 6));
+		enc[1] = (char)(0x80 | (cp & 0x3f));
+		n = 2;
+	} else if (cp < 0x10000) {
+		enc[0] = (char)(0xe0 | (cp >> 12));
+		enc[1] = (char)(0x80 | ((cp >> 6) & 0x3f));
+		enc[2] = (char)(0x80 | (cp & 0x3f));
+		n = 3;
+	} else {
+		enc[0] = (char)(0xf0 | (cp >> 18));
+		enc[1] = (char)(0x80 | ((cp >> 12) & 0x3f));
+		enc[2] = (char)(0x80 | ((cp >> 6) & 0x3f));
+		enc[3] = (char)(0x80 | (cp & 0x3f));
+		n = 4;
+	}
+	if (*len + n >= size)
+		return;
+	memcpy(out + *len, enc, n);
+	*len += n;
+	out[*len] = '\0';
+}
+
+/* ID3 text frame payload: encoding byte + text, NUL terminated or not. */
+static void id3_text(const unsigned char *data, size_t size,
+		     char *out, size_t out_size)
+{
+	size_t len = 0;
+	unsigned char encoding;
+	size_t i = 1;
+
+	out[0] = '\0';
+	if (size < 2)
+		return;
+	encoding = data[0];
+
+	if (encoding == 1 || encoding == 2) {
+		bool big_endian = encoding == 2;
+
+		if (encoding == 1 && size >= 3) {
+			if (data[1] == 0xfe && data[2] == 0xff) {
+				big_endian = true;
+				i = 3;
+			} else if (data[1] == 0xff && data[2] == 0xfe) {
+				i = 3;
+			}
+		}
+		for (; i + 1 < size; i += 2) {
+			unsigned int u = big_endian ?
+				(unsigned int)(data[i] << 8 | data[i + 1]) :
+				(unsigned int)(data[i + 1] << 8 | data[i]);
+
+			if (u == 0)
+				break;
+			if (u >= 0xd800 && u < 0xdc00 && i + 3 < size) {
+				unsigned int lo = big_endian ?
+					(unsigned int)(data[i + 2] << 8 | data[i + 3]) :
+					(unsigned int)(data[i + 3] << 8 | data[i + 2]);
+
+				if (lo >= 0xdc00 && lo < 0xe000) {
+					u = 0x10000 + ((u - 0xd800) << 10) + (lo - 0xdc00);
+					i += 2;
+				}
+			}
+			utf8_put(out, out_size, &len, u);
+		}
+	} else {
+		for (; i < size && data[i] != 0; i++) {
+			if (encoding != 3) {
+				/* ISO-8859-1 maps 1:1 onto code points. */
+				utf8_put(out, out_size, &len, data[i]);
+			} else if (len + 1 < out_size) {
+				out[len++] = (char)data[i];
+				out[len] = '\0';
+			}
+		}
+	}
+
+	while (len > 0 && out[len - 1] == ' ')
+		out[--len] = '\0';
+}
+
+/*
+ * Title and artist of an MP3 for the "Now Playing" notification. Reads only
+ * the leading ID3v2 tag (bounded) or the trailing ID3v1 block; the file name
+ * is the fallback title.
+ */
+static void read_track_metadata(const char *path, char *title, size_t title_size,
+				char *artist, size_t artist_size)
+{
+	unsigned char header[10];
+	FILE *fp;
+	const char *base;
+	size_t base_len;
+
+	title[0] = '\0';
+	artist[0] = '\0';
+
+	fp = fopen(path, "rb");
+	if (fp && fread(header, 1, sizeof(header), fp) == sizeof(header) &&
+	    memcmp(header, "ID3", 3) == 0 && header[3] >= 2 && header[3] <= 4) {
+		unsigned int version = header[3];
+		size_t tag_size = ((size_t)(header[6] & 0x7f) << 21) |
+				  ((size_t)(header[7] & 0x7f) << 14) |
+				  ((size_t)(header[8] & 0x7f) << 7) |
+				  (size_t)(header[9] & 0x7f);
+		unsigned char *tag;
+
+		if (tag_size > 256 * 1024)
+			tag_size = 256 * 1024;
+		tag = malloc(tag_size);
+		if (tag && fread(tag, 1, tag_size, fp) == tag_size) {
+			size_t pos = 0;
+			size_t id_len = version == 2 ? 3 : 4;
+			size_t frame_header = version == 2 ? 6 : 10;
+
+			/* v2.3/v2.4 extended header. */
+			if (version > 2 && (header[5] & 0x40) && tag_size >= 4) {
+				size_t ext = version == 4 ?
+					((size_t)(tag[0] & 0x7f) << 21 | (size_t)(tag[1] & 0x7f) << 14 |
+					 (size_t)(tag[2] & 0x7f) << 7 | (size_t)(tag[3] & 0x7f)) :
+					((size_t)tag[0] << 24 | (size_t)tag[1] << 16 |
+					 (size_t)tag[2] << 8 | (size_t)tag[3]) + 4;
+				pos = ext < tag_size ? ext : tag_size;
+			}
+
+			while (pos + frame_header <= tag_size && tag[pos] != 0) {
+				const unsigned char *f = tag + pos;
+				size_t frame_size;
+
+				if (version == 2)
+					frame_size = (size_t)f[3] << 16 | (size_t)f[4] << 8 | f[5];
+				else if (version == 3)
+					frame_size = (size_t)f[4] << 24 | (size_t)f[5] << 16 |
+						     (size_t)f[6] << 8 | f[7];
+				else
+					frame_size = (size_t)(f[4] & 0x7f) << 21 |
+						     (size_t)(f[5] & 0x7f) << 14 |
+						     (size_t)(f[6] & 0x7f) << 7 | (f[7] & 0x7f);
+				if (frame_size == 0 ||
+				    frame_size > tag_size - pos - frame_header)
+					break;
+
+				if (!memcmp(f, version == 2 ? "TT2" : "TIT2", id_len))
+					id3_text(f + frame_header, frame_size, title, title_size);
+				else if (!memcmp(f, version == 2 ? "TP1" : "TPE1", id_len))
+					id3_text(f + frame_header, frame_size, artist, artist_size);
+
+				pos += frame_header + frame_size;
+			}
+		}
+		free(tag);
+	}
+
+	if (fp && title[0] == '\0') {
+		unsigned char v1[128];
+
+		if (fseek(fp, -128, SEEK_END) == 0 &&
+		    fread(v1, 1, sizeof(v1), fp) == sizeof(v1) &&
+		    memcmp(v1, "TAG", 3) == 0) {
+			unsigned char field[31];
+
+			field[0] = 0;
+			memcpy(field + 1, v1 + 3, 30);
+			id3_text(field, sizeof(field), title, title_size);
+			memcpy(field + 1, v1 + 33, 30);
+			id3_text(field, sizeof(field), artist, artist_size);
+		}
+	}
+	if (fp)
+		fclose(fp);
+
+	if (title[0] == '\0') {
+		base = strrchr(path, '/');
+		base = base ? base + 1 : path;
+		base_len = strlen(base);
+		if (base_len > 4 && strcasecmp(base + base_len - 4, ".mp3") == 0)
+			base_len -= 4;
+		if (base_len >= title_size)
+			base_len = title_size - 1;
+		memcpy(title, base, base_len);
+		title[base_len] = '\0';
+	}
+}
+
+static void notify_track(const char *path)
+{
+	struct nuubos_notify n;
+	char title[160];
+	char artist[160];
+
+	read_track_metadata(path, title, sizeof(title), artist, sizeof(artist));
+	nuubos_notify_begin(&n, "POST", "music", "music.track");
+	nuubos_notify_str(&n, "title", title);
+	if (artist[0] != '\0')
+		nuubos_notify_str(&n, "artist", artist);
+	(void)nuubos_notify_send(&n);
+}
+
+static bool start_music_new(struct audio_state *state)
+{
+	state->music_offset_ms = 0;
+
+	if (!state->music_requested ||
+	    state->volume_home_music <= 0 ||
+	    !product_audio_master_enabled(state)) {
+		state->music_file[0] = '\0';
+		return false;
+	}
+
+	if (!choose_music_track(state->music_file,
+				sizeof(state->music_file))) {
+		state->music_file[0] = '\0';
+		return false;
+	}
+
+	if (!start_music_current(state))
+		return false;
+	/* Only a newly chosen track is announced; resuming the same track
+	 * after a reroute goes through start_music_current() directly. */
+	notify_track(state->music_file);
+	return true;
+}
+
+static void stop_music(struct audio_state *state)
+{
+	stop_music_player(state);
+	state->music_offset_ms = 0;
+	state->music_file[0] = '\0';
+}
+
+static void reroute_owned_streams(struct audio_state *state)
+{
+	restart_ui_anchor(state);
+
+	if (!product_audio_master_enabled(state)) {
+		stop_test(state);
+		stop_child(&state->system_pid);
+		stop_music(state);
+		return;
+	}
+
+	if (state->test_requested) {
+		state->test_offset_ms += elapsed_ms(&state->test_started);
+		start_test(state, state->test_offset_ms);
+	}
+
+	if (state->system_pid > 0) {
+		stop_child(&state->system_pid);
+		state->system_pid = launch_wav(
+			state, state->system_file,
+			state->volume_system, 0, "sfx");
+	}
+
+	if (state->music_requested &&
+	    state->volume_home_music > 0) {
+		if (state->music_file[0] != '\0') {
+			state->music_offset_ms += elapsed_ms(&state->music_started);
+			(void)start_music_current(state);
+		} else {
+			(void)start_music_new(state);
+		}
+	}
+}
+
+static int persist_stream_volume(struct audio_state *state,
+				 DBusConnection *conn,
+				 bool music,
+				 int volume)
+{
+	const char *key;
+	char value[16];
+	int old;
+
+	if (volume < 0)
+		volume = 0;
+	if (volume > 100)
+		volume = 100;
+
+	key = music ? "AUDIO_VOLUME_HOME_MUSIC" :
+		      "AUDIO_VOLUME_SYSTEM";
+	old = music ? state->volume_home_music :
+		      state->volume_system;
+
+	snprintf(value, sizeof(value), "%d", volume);
+
+	if (update_config(key, value) != 0)
+		return -1;
+
+	if (music) {
+		state->volume_home_music = volume;
+
+		if (volume == 0) {
+			stop_music(state);
+		} else if (old == 0 && state->music_requested) {
+			state->music_file[0] = '\0';
+			state->music_offset_ms = 0;
+			(void)start_music_new(state);
+		} else if (state->music_pid > 0 &&
+			   !music_set_live_volume(state, volume)) {
+			state->music_offset_ms += elapsed_ms(&state->music_started);
+			(void)start_music_current(state);
+		}
+	} else {
+		state->volume_system = volume;
+
+		if (volume == 0)
+			stop_child(&state->system_pid);
+	}
+
+	ensure_ui_anchor(state);
+	emit_state_changed(conn, state);
+	return 0;
+}
+
+/* Reset System Settings: restore every device-global Product Audio setting
+ * through the same persistence/apply paths used by interactive changes, so
+ * routing, hard-mute boundaries and owned streams stay coherent. */
+static int reset_audio_defaults(struct audio_state *state,
+				DBusConnection *conn)
+{
+	int rc = 0;
+
+	if (persist_output_mode(state, conn, DEFAULT_OUTPUT_MODE) != 0)
+		rc = -1;
+
+	if (volume_supported(state->selected)) {
+		int volume = strcmp(state->selected, "speaker") == 0 ?
+				     DEFAULT_VOLUME_SPEAKER :
+			     strcmp(state->selected, "headphones") == 0 ?
+				     DEFAULT_VOLUME_HEADPHONES :
+				     DEFAULT_VOLUME_BLUETOOTH;
+
+		if (persist_selected_volume(state, conn, volume) != 0)
+			rc = -1;
+	}
+	state->volume_speaker = DEFAULT_VOLUME_SPEAKER;
+	state->volume_headphones = DEFAULT_VOLUME_HEADPHONES;
+	state->volume_bluetooth = DEFAULT_VOLUME_BLUETOOTH;
+	state->volume_config_dirty = true;
+	if (flush_volume_config(state) != 0)
+		rc = -1;
+
+	if (persist_stream_volume(state, conn, false, DEFAULT_VOLUME_SYSTEM) != 0)
+		rc = -1;
+	if (persist_stream_volume(state, conn, true, DEFAULT_VOLUME_HOME_MUSIC) != 0)
+		rc = -1;
+	if (persist_applications_volume(state, conn,
+					DEFAULT_VOLUME_APPLICATIONS) != 0)
+		rc = -1;
+	if (persist_sound_toggle(state, conn, true, DEFAULT_NAVIGATION_SOUNDS) != 0)
+		rc = -1;
+	if (persist_sound_toggle(state, conn, false, DEFAULT_POWER_SOUNDS) != 0)
+		rc = -1;
+
+	emit_state_changed(conn, state);
+	return rc;
+}
+
+static void service_owned_streams(struct audio_state *state)
+{
+	int status;
+	pid_t rc;
+
+	if (state->app_volume_pid > 0) {
+		rc = waitpid(state->app_volume_pid, &status, WNOHANG);
+		if (rc == state->app_volume_pid) {
+			state->app_volume_pid = -1;
+			if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+				fprintf(stderr, "nuubos-audiod: Applications volume policy helper failed\n");
+		}
+	}
+
+	if (state->ui_anchor_pid > 0) {
+		rc = waitpid(state->ui_anchor_pid, &status, WNOHANG);
+		if (rc == state->ui_anchor_pid)
+			state->ui_anchor_pid = -1;
+	}
+
+	if (state->test_pid > 0) {
+		rc = waitpid(state->test_pid, &status, WNOHANG);
+
+		if (rc == state->test_pid) {
+			state->test_pid = -1;
+			state->test_requested = false;
+			state->test_offset_ms = 0;
+		}
+	}
+
+	if (state->system_pid > 0) {
+		rc = waitpid(state->system_pid, &status, WNOHANG);
+
+		if (rc == state->system_pid)
+			state->system_pid = -1;
+	}
+
+	if (state->music_pid > 0) {
+		rc = waitpid(state->music_pid, &status, WNOHANG);
+
+		if (rc == state->music_pid) {
+			state->music_pid = -1;
+			close_music_ctl(state);
+			state->music_offset_ms = 0;
+
+			if (state->music_requested &&
+			    state->volume_home_music > 0 &&
+			    product_audio_master_enabled(state))
+				(void)start_music_new(state);
+		}
+	} else if (state->music_requested &&
+		   state->volume_home_music > 0 &&
+		   product_audio_master_enabled(state) &&
+		   state->music_file[0] == '\0') {
+		(void)start_music_new(state);
+	}
 }
 
 static void handle_command(struct audio_state *state,
@@ -555,6 +2092,214 @@ static void handle_command(struct audio_state *state,
 		return;
 	}
 
+	if (strcmp(command, "TEST START") == 0) {
+		state->test_requested = true;
+		state->test_offset_ms = 0;
+		start_test(state, 0);
+		snprintf(reply, reply_size,
+			 state->test_pid > 0 ? "OK\n" : "ERR test sound failed\n");
+		return;
+	}
+
+	if (strcmp(command, "TEST STOP") == 0) {
+		stop_test(state);
+		snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (strcmp(command, "TEST STATUS") == 0) {
+		snprintf(reply, reply_size, "%s\n",
+			 state->test_pid > 0 ? "playing" : "stopped");
+		return;
+	}
+
+	if (strcmp(command, "RESET DEFAULTS") == 0) {
+		snprintf(reply, reply_size,
+			 reset_audio_defaults(state, dbus_conn) == 0 ?
+				 "OK\n" : "ERR audio reset incomplete\n");
+		return;
+	}
+
+	if (sscanf(command, "SFX PLAY %31s", arg1) == 1) {
+		start_system_sound(state, arg1);
+		snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (strcmp(command, "SYSTEM VOLUME GET") == 0) {
+		snprintf(reply, reply_size, "%d\n", state->volume_system);
+		return;
+	}
+
+	if (sscanf(command, "SYSTEM VOLUME SET %31s", arg1) == 1) {
+		int volume = parse_volume(arg1);
+
+		if (volume < 0 ||
+		    persist_stream_volume(state, dbus_conn, false, volume) != 0)
+			snprintf(reply, reply_size,
+				 "ERR system volume update failed\n");
+		else
+			snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (sscanf(command, "SYSTEM VOLUME ADJUST %31s", arg1) == 1) {
+		int delta = atoi(arg1);
+		int volume = state->volume_system + delta;
+
+		if (volume < 0)
+			volume = 0;
+		if (volume > 100)
+			volume = 100;
+
+		if (persist_stream_volume(state, dbus_conn, false, volume) != 0)
+			snprintf(reply, reply_size,
+				 "ERR system volume update failed\n");
+		else
+			snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (strcmp(command, "APPLICATIONS VOLUME GET") == 0) {
+		snprintf(reply, reply_size, "%d\n", state->volume_applications);
+		return;
+	}
+
+	if (sscanf(command, "APPLICATIONS VOLUME SET %31s", arg1) == 1) {
+		int volume = parse_volume(arg1);
+
+		if (volume < 0 ||
+		    persist_applications_volume(state, dbus_conn, volume) != 0)
+			snprintf(reply, reply_size,
+				 "ERR applications volume update failed\n");
+		else
+			snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (sscanf(command, "APPLICATIONS VOLUME ADJUST %31s", arg1) == 1) {
+		int delta = atoi(arg1);
+		int volume = state->volume_applications + delta;
+
+		if (volume < 0)
+			volume = 0;
+		if (volume > 100)
+			volume = 100;
+
+		if (persist_applications_volume(state, dbus_conn, volume) != 0)
+			snprintf(reply, reply_size,
+				 "ERR applications volume update failed\n");
+		else
+			snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (strcmp(command, "SYSTEM NAVIGATION GET") == 0) {
+		snprintf(reply, reply_size, "%d\n",
+			 state->navigation_sounds_enabled ? 1 : 0);
+		return;
+	}
+
+	if (sscanf(command, "SYSTEM NAVIGATION SET %31s", arg1) == 1) {
+		bool enabled = strcmp(arg1, "0") != 0 &&
+			       strcasecmp(arg1, "off") != 0 &&
+			       strcasecmp(arg1, "false") != 0;
+		if (persist_sound_toggle(state, dbus_conn, true, enabled) != 0)
+			snprintf(reply, reply_size, "ERR navigation sound toggle failed\n");
+		else
+			snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (strcmp(command, "SYSTEM POWER GET") == 0) {
+		snprintf(reply, reply_size, "%d\n",
+			 state->power_sounds_enabled ? 1 : 0);
+		return;
+	}
+
+	if (sscanf(command, "SYSTEM POWER SET %31s", arg1) == 1) {
+		bool enabled = strcmp(arg1, "0") != 0 &&
+			       strcasecmp(arg1, "off") != 0 &&
+			       strcasecmp(arg1, "false") != 0;
+		if (persist_sound_toggle(state, dbus_conn, false, enabled) != 0)
+			snprintf(reply, reply_size, "ERR power sound toggle failed\n");
+		else
+			snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (strcmp(command, "MUSIC VOLUME GET") == 0) {
+		snprintf(reply, reply_size, "%d\n", state->volume_home_music);
+		return;
+	}
+
+	if (sscanf(command, "MUSIC VOLUME SET %31s", arg1) == 1) {
+		int volume = parse_volume(arg1);
+
+		if (volume < 0 ||
+		    persist_stream_volume(state, dbus_conn, true, volume) != 0)
+			snprintf(reply, reply_size,
+				 "ERR home music volume update failed\n");
+		else
+			snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (sscanf(command, "MUSIC VOLUME ADJUST %31s", arg1) == 1) {
+		int delta = atoi(arg1);
+		int volume = state->volume_home_music + delta;
+
+		if (volume < 0)
+			volume = 0;
+		if (volume > 100)
+			volume = 100;
+
+		if (persist_stream_volume(state, dbus_conn, true, volume) != 0)
+			snprintf(reply, reply_size,
+				 "ERR home music volume update failed\n");
+		else
+			snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (strcmp(command, "MUSIC START") == 0) {
+		state->home_session_active = true;
+		state->music_requested = true;
+		ensure_ui_anchor(state);
+
+		if (state->volume_home_music > 0 &&
+		    state->music_pid <= 0)
+			(void)start_music_new(state);
+
+		emit_state_changed(dbus_conn, state);
+		snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (strcmp(command, "MUSIC STOP") == 0) {
+		state->home_session_active = false;
+		state->music_requested = false;
+		stop_music(state);
+		ensure_ui_anchor(state);
+		emit_state_changed(dbus_conn, state);
+		snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (strcmp(command, "MUSIC NEXT") == 0) {
+		stop_music_player(state);
+		state->music_file[0] = '\0';
+		state->music_offset_ms = 0;
+
+		if (state->music_requested &&
+		    state->volume_home_music > 0)
+			(void)start_music_new(state);
+
+		emit_state_changed(dbus_conn, state);
+		snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
 	if (strcmp(command, "OUTPUT GET") == 0) {
 		snprintf(reply, reply_size, "%s\n", state->mode);
 		return;
@@ -566,35 +2311,37 @@ static void handle_command(struct audio_state *state,
 	}
 
 	if (sscanf(command, "OUTPUT SET %31s", arg1) == 1) {
-		char persistent[32];
-
-		lowercase(arg1);
-
-		if (!valid_output(arg1)) {
-			snprintf(reply, reply_size,
-				 "ERR invalid output\n");
+		if (persist_output_mode(state, dbus_conn, arg1) != 0) {
+			snprintf(reply, reply_size, "ERR invalid or unpersistable output\n");
 			return;
 		}
-
-		uppercase_copy(persistent, sizeof(persistent), arg1);
-
-		if (update_config("AUDIO_OUTPUT", persistent) != 0) {
-			snprintf(reply, reply_size,
-				 "ERR cannot persist output: %s\n",
-				 strerror(errno));
-			return;
-		}
-
-		if (!copy_string(state->mode, sizeof(state->mode), arg1)) {
-			snprintf(reply, reply_size,
-				 "ERR output name too long\n");
-			return;
-		}
-
-		reconcile_selection(state);
-		apply_selected_bluetooth_volume(dbus_conn, state);
 
 		snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (sscanf(command, "VOLUME ADJUST %31s", arg1) == 1) {
+		int delta = atoi(arg1);
+		int current = selected_volume(state);
+		int rc;
+
+		if (current < 0) {
+			snprintf(reply, reply_size,
+				 "unsupported %s\n", state->selected);
+			return;
+		}
+
+		rc = persist_selected_volume(
+			state, dbus_conn,
+			(current + delta < 0) ? 0 :
+			(current + delta > 100) ? 100 :
+			current + delta);
+		if (rc != 0) {
+			snprintf(reply, reply_size, "ERR volume update failed\n");
+			return;
+		}
+
+		status_reply(state, reply, reply_size);
 		return;
 	}
 
@@ -634,7 +2381,7 @@ static void handle_command(struct audio_state *state,
 	if (sscanf(command, "VOLUME SET %31s %31s",
 		   arg1, arg2) == 2) {
 		const char *key;
-		char value[8];
+		char value[16];
 		int volume;
 
 		lowercase(arg1);
@@ -658,24 +2405,22 @@ static void handle_command(struct audio_state *state,
 			return;
 		}
 
-		key = volume_key(arg1);
-		snprintf(value, sizeof(value), "%d", volume);
-
-		if (update_config(key, value) != 0) {
-			snprintf(reply, reply_size,
-				 "ERR cannot persist volume: %s\n",
-				 strerror(errno));
-			return;
-		}
-
-		set_volume_memory(state, arg1, volume);
-
 		if (strcmp(state->selected, arg1) == 0) {
-			apply_selected_analog_volume(state);
-
-			if (strcmp(arg1, "bluetooth") == 0)
-				apply_selected_bluetooth_volume(
-					dbus_conn, state);
+			if (persist_selected_volume(state, dbus_conn, volume) != 0) {
+				snprintf(reply, reply_size, "ERR volume update failed\n");
+				return;
+			}
+		} else {
+			key = volume_key(arg1);
+			snprintf(value, sizeof(value), "%d", volume);
+			if (update_config(key, value) != 0) {
+				snprintf(reply, reply_size,
+					 "ERR cannot persist volume: %s\n",
+					 strerror(errno));
+				return;
+			}
+			set_volume_memory(state, arg1, volume);
+			emit_state_changed(dbus_conn, state);
 		}
 
 		snprintf(reply, reply_size, "OK\n");
@@ -798,6 +2543,7 @@ static bool drain_headphone_jack(int fd, struct audio_state *state)
 				state->headphones_available =
 					events[i].value != 0;
 				reconcile_selection(state);
+				reroute_owned_streams(state);
 			}
 		}
 	}
@@ -805,87 +2551,108 @@ static bool drain_headphone_jack(int fd, struct audio_state *state)
 
 static void refresh_hdmi_state(struct audio_state *state)
 {
-	FILE *fp;
-	char line[128];
-	bool found = false;
+	DIR *dir;
+	struct dirent *entry;
+	bool available = false;
+	bool known = false;
 
-	fp = fopen(DISPLAY_STATE_PATH, "r");
-	if (!fp) {
+	dir = opendir(DRM_CLASS_DIR);
+	if (dir == NULL) {
 		state->hdmi_known = false;
 		state->hdmi_available = false;
+		reconcile_selection(state);
 		return;
 	}
 
-	while (fgets(line, sizeof(line), fp)) {
-		if (strcmp(line, "hdmi=connected\n") == 0 ||
-		    strcmp(line, "hdmi=connected") == 0) {
-			state->hdmi_known = true;
-			state->hdmi_available = true;
-			found = true;
-			break;
+	while ((entry = readdir(dir)) != NULL) {
+		char path[512];
+		char status[32];
+		FILE *fp;
+		int n;
+
+		if (strstr(entry->d_name, "-HDMI-A-") == NULL)
+			continue;
+
+		n = snprintf(path, sizeof(path), "%s/%s/status",
+			     DRM_CLASS_DIR, entry->d_name);
+		if (n < 0 || (size_t)n >= sizeof(path))
+			continue;
+
+		fp = fopen(path, "r");
+		if (fp == NULL)
+			continue;
+
+		if (fgets(status, sizeof(status), fp) != NULL) {
+			known = true;
+
+			if (strncmp(status, "connected", 9) == 0)
+				available = true;
 		}
 
-		if (strcmp(line, "hdmi=disconnected\n") == 0 ||
-		    strcmp(line, "hdmi=disconnected") == 0) {
-			state->hdmi_known = true;
-			state->hdmi_available = false;
-			found = true;
+		fclose(fp);
+
+		if (available)
 			break;
-		}
 	}
 
-	fclose(fp);
+	closedir(dir);
 
-	if (!found) {
-		state->hdmi_known = false;
-		state->hdmi_available = false;
-	}
-
+	state->hdmi_known = known;
+	state->hdmi_available = available;
 	reconcile_selection(state);
 }
 
-static int open_display_watch(struct audio_state *state)
+static int open_drm_uevent_socket(struct audio_state *state)
 {
+	struct sockaddr_nl addr;
 	int fd;
+	int rcvbuf = 64 * 1024;
 
-	if (mkdir(RUNTIME_DIR, 0755) < 0 && errno != EEXIST)
-		return -1;
-
-	fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-	if (fd < 0)
-		return -1;
-
-	if (inotify_add_watch(fd, RUNTIME_DIR,
-			      IN_CLOSE_WRITE |
-			      IN_MOVED_TO |
-			      IN_CREATE |
-			      IN_DELETE) < 0) {
-		close(fd);
+	fd = socket(AF_NETLINK,
+		    SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+		    NETLINK_KOBJECT_UEVENT);
+	if (fd < 0) {
+		refresh_hdmi_state(state);
 		return -1;
 	}
 
+	memset(&addr, 0, sizeof(addr));
+	addr.nl_family = AF_NETLINK;
+	addr.nl_pid = (unsigned int)getpid();
+	addr.nl_groups = 1;
+
+	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		close(fd);
+		refresh_hdmi_state(state);
+		return -1;
+	}
+
+	(void)setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
+			 &rcvbuf, sizeof(rcvbuf));
+
 	/*
-	 * Add the watch before reading the initial state: if displayd replaces
-	 * its atomic state file concurrently, the subsequent inotify event
-	 * causes another refresh and no transition is lost.
+	 * Register the listener before taking the first snapshot. A connector
+	 * transition racing startup is therefore either visible in sysfs or
+	 * delivered as a subsequent DRM uevent.
 	 */
 	refresh_hdmi_state(state);
 
 	return fd;
 }
 
-static bool drain_display_watch(int fd, struct audio_state *state)
+static bool drain_drm_uevents(int fd, struct audio_state *state)
 {
-	char buffer[4096]
-		__attribute__((aligned(__alignof__(struct inotify_event))));
 	bool refresh = false;
 
 	for (;;) {
+		char buffer[4096];
 		ssize_t n;
-		size_t offset;
+		size_t offset = 0;
+		bool drm = false;
+		bool hotplug = false;
+		bool connector = false;
 
-		n = read(fd, buffer, sizeof(buffer));
-
+		n = recv(fd, buffer, sizeof(buffer) - 1, 0);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue;
@@ -895,414 +2662,125 @@ static bool drain_display_watch(int fd, struct audio_state *state)
 
 			state->hdmi_known = false;
 			state->hdmi_available = false;
+			reconcile_selection(state);
 			return false;
 		}
 
-		if (n == 0) {
-			state->hdmi_known = false;
-			state->hdmi_available = false;
-			return false;
-		}
-
-		for (offset = 0; offset < (size_t)n; ) {
-			const struct inotify_event *event =
-				(const struct inotify_event *)(buffer + offset);
-
-			if (event->mask & IN_IGNORED)
-				return false;
-
-			if (event->len > 0 &&
-			    strcmp(event->name, "displayd.state") == 0)
-				refresh = true;
-
-			offset += sizeof(*event) + event->len;
-		}
-	}
-
-	if (refresh)
-		refresh_hdmi_state(state);
-
-	return true;
-}
-
-
-static bool dbus_variant_get_string(DBusMessageIter *variant,
-				    const char **value)
-{
-	DBusMessageIter inner;
-
-	if (dbus_message_iter_get_arg_type(variant) != DBUS_TYPE_VARIANT)
-		return false;
-
-	dbus_message_iter_recurse(variant, &inner);
-
-	if (dbus_message_iter_get_arg_type(&inner) != DBUS_TYPE_STRING)
-		return false;
-
-	dbus_message_iter_get_basic(&inner, value);
-	return true;
-}
-
-static bool dbus_variant_get_object_path(DBusMessageIter *variant,
-					 const char **value)
-{
-	DBusMessageIter inner;
-
-	if (dbus_message_iter_get_arg_type(variant) != DBUS_TYPE_VARIANT)
-		return false;
-
-	dbus_message_iter_recurse(variant, &inner);
-
-	if (dbus_message_iter_get_arg_type(&inner) != DBUS_TYPE_OBJECT_PATH)
-		return false;
-
-	dbus_message_iter_get_basic(&inner, value);
-	return true;
-}
-
-static bool bluealsa_pcm_is_a2dp_sink(DBusMessageIter *iface_entry,
-				       const char **device_path)
-{
-	DBusMessageIter entry;
-	DBusMessageIter props;
-	const char *iface;
-	const char *transport = NULL;
-	const char *mode = NULL;
-	const char *device = NULL;
-
-	if (dbus_message_iter_get_arg_type(iface_entry) != DBUS_TYPE_DICT_ENTRY)
-		return false;
-
-	dbus_message_iter_recurse(iface_entry, &entry);
-
-	if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_STRING)
-		return false;
-
-	dbus_message_iter_get_basic(&entry, &iface);
-
-	if (strcmp(iface, BLUEALSA_PCM_INTERFACE) != 0)
-		return false;
-
-	if (!dbus_message_iter_next(&entry))
-		return false;
-
-	if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_ARRAY)
-		return false;
-
-	dbus_message_iter_recurse(&entry, &props);
-
-	for (; dbus_message_iter_get_arg_type(&props) != DBUS_TYPE_INVALID;
-	     dbus_message_iter_next(&props)) {
-		DBusMessageIter prop_entry;
-		const char *key;
-
-		if (dbus_message_iter_get_arg_type(&props) != DBUS_TYPE_DICT_ENTRY)
+		if (n == 0)
 			continue;
 
-		dbus_message_iter_recurse(&props, &prop_entry);
+		buffer[n] = '\0';
 
-		if (dbus_message_iter_get_arg_type(&prop_entry) != DBUS_TYPE_STRING)
-			continue;
+		while (offset < (size_t)n) {
+			const char *field = buffer + offset;
+			size_t remaining = (size_t)n - offset;
+			size_t len = strnlen(field, remaining);
 
-		dbus_message_iter_get_basic(&prop_entry, &key);
-
-		if (!dbus_message_iter_next(&prop_entry))
-			continue;
-
-		if (strcmp(key, "Transport") == 0) {
-			(void)dbus_variant_get_string(&prop_entry, &transport);
-		} else if (strcmp(key, "Mode") == 0) {
-			(void)dbus_variant_get_string(&prop_entry, &mode);
-		} else if (strcmp(key, "Device") == 0) {
-			(void)dbus_variant_get_object_path(&prop_entry, &device);
-		}
-	}
-
-	if (device_path != NULL)
-		*device_path = device;
-
-	return transport != NULL &&
-	       mode != NULL &&
-	       device != NULL &&
-	       strcmp(transport, "A2DP-source") == 0 &&
-	       strcmp(mode, "sink") == 0;
-}
-
-static int set_bluealsa_pcm_volume(DBusConnection *conn,
-				    const char *pcm_path,
-				    int percent)
-{
-	DBusMessage *msg = NULL;
-	DBusMessage *reply = NULL;
-	DBusMessageIter iter;
-	DBusMessageIter variant;
-	DBusError error = DBUS_ERROR_INIT;
-	const char *iface = BLUEALSA_PCM_INTERFACE;
-	const char *property = "Volume";
-	uint8_t channel;
-	uint16_t packed;
-	int level;
-
-	if (conn == NULL || pcm_path == NULL || pcm_path[0] == '\0')
-		return -1;
-
-	if (percent < 0 || percent > 100)
-		return -1;
-
-	/*
-	 * BlueALSA A2DP Volume uses 7 bits per channel:
-	 *
-	 *   0..127 = level
-	 *   bit 7  = mute
-	 *
-	 * PCM1.Volume is a uint16 with:
-	 *
-	 *   high byte = channel 1
-	 *   low byte  = channel 2
-	 */
-	level = (percent * 127 + 50) / 100;
-
-	channel = (uint8_t)level;
-
-	if (percent == 0)
-		channel |= 0x80;
-
-	packed = ((uint16_t)channel << 8) | channel;
-
-	msg = dbus_message_new_method_call(
-		BLUEALSA_SERVICE,
-		pcm_path,
-		DBUS_INTERFACE_PROPERTIES,
-		"Set");
-
-	if (msg == NULL)
-		return -1;
-
-	dbus_message_iter_init_append(msg, &iter);
-
-	if (!dbus_message_iter_append_basic(
-		    &iter, DBUS_TYPE_STRING, &iface))
-		goto fail;
-
-	if (!dbus_message_iter_append_basic(
-		    &iter, DBUS_TYPE_STRING, &property))
-		goto fail;
-
-	if (!dbus_message_iter_open_container(
-		    &iter,
-		    DBUS_TYPE_VARIANT,
-		    DBUS_TYPE_UINT16_AS_STRING,
-		    &variant))
-		goto fail;
-
-	if (!dbus_message_iter_append_basic(
-		    &variant, DBUS_TYPE_UINT16, &packed))
-		goto fail;
-
-	if (!dbus_message_iter_close_container(&iter, &variant))
-		goto fail;
-
-	reply = dbus_connection_send_with_reply_and_block(
-		conn, msg, 1000, &error);
-
-	dbus_message_unref(msg);
-
-	if (reply == NULL) {
-		if (dbus_error_is_set(&error))
-			dbus_error_free(&error);
-		return -1;
-	}
-
-	dbus_message_unref(reply);
-
-	if (dbus_error_is_set(&error))
-		dbus_error_free(&error);
-
-	return 0;
-
-fail:
-	dbus_message_unref(msg);
-
-	if (dbus_error_is_set(&error))
-		dbus_error_free(&error);
-
-	return -1;
-}
-
-static void apply_selected_bluetooth_volume(
-	DBusConnection *conn,
-	const struct audio_state *state)
-{
-	if (strcmp(state->selected, "bluetooth") != 0)
-		return;
-
-	if (!state->bluetooth_available)
-		return;
-
-	if (state->bluetooth_pcm_path[0] == '\0')
-		return;
-
-	if (set_bluealsa_pcm_volume(
-		    conn,
-		    state->bluetooth_pcm_path,
-		    state->volume_bluetooth) < 0)
-		fprintf(stderr,
-			"nuubos-audiod: failed to set Bluetooth volume\n");
-}
-
-static void refresh_bluetooth_state(DBusConnection *conn,
-				    struct audio_state *state)
-{
-	DBusMessage *msg = NULL;
-	DBusMessage *reply = NULL;
-	DBusMessageIter iter;
-	DBusMessageIter objects;
-	DBusError error = DBUS_ERROR_INIT;
-	bool available = false;
-
-	state->bluetooth_available = false;
-	state->bluetooth_pcm_path[0] = '\0';
-	state->bluetooth_device_path[0] = '\0';
-
-	if (!conn) {
-		reconcile_selection(state);
-		return;
-	}
-
-	msg = dbus_message_new_method_call(BLUEALSA_SERVICE,
-					   BLUEALSA_PATH,
-					   DBUS_OBJECT_MANAGER,
-					   "GetManagedObjects");
-	if (!msg) {
-		reconcile_selection(state);
-		return;
-	}
-
-	reply = dbus_connection_send_with_reply_and_block(
-		conn, msg, 1000, &error);
-
-	dbus_message_unref(msg);
-
-	if (!reply) {
-		if (dbus_error_is_set(&error))
-			dbus_error_free(&error);
-
-		reconcile_selection(state);
-		return;
-	}
-
-	if (!dbus_message_iter_init(reply, &iter))
-		goto out;
-
-	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
-		goto out;
-
-	dbus_message_iter_recurse(&iter, &objects);
-
-	for (; dbus_message_iter_get_arg_type(&objects) != DBUS_TYPE_INVALID;
-	     dbus_message_iter_next(&objects)) {
-		DBusMessageIter object_entry;
-		DBusMessageIter ifaces;
-		const char *object_path = NULL;
-
-		if (dbus_message_iter_get_arg_type(&objects) != DBUS_TYPE_DICT_ENTRY)
-			continue;
-
-		dbus_message_iter_recurse(&objects, &object_entry);
-
-		if (dbus_message_iter_get_arg_type(&object_entry) != DBUS_TYPE_OBJECT_PATH)
-			continue;
-
-		dbus_message_iter_get_basic(&object_entry, &object_path);
-
-		if (!dbus_message_iter_next(&object_entry))
-			continue;
-
-		if (dbus_message_iter_get_arg_type(&object_entry) != DBUS_TYPE_ARRAY)
-			continue;
-
-		dbus_message_iter_recurse(&object_entry, &ifaces);
-
-		for (; dbus_message_iter_get_arg_type(&ifaces) != DBUS_TYPE_INVALID;
-		     dbus_message_iter_next(&ifaces)) {
-			const char *device_path = NULL;
-
-			if (bluealsa_pcm_is_a2dp_sink(&ifaces,
-						     &device_path)) {
-				available = true;
-
-				if (object_path != NULL)
-					(void)copy_string(
-						state->bluetooth_pcm_path,
-						sizeof(state->bluetooth_pcm_path),
-						object_path);
-
-				if (device_path != NULL)
-					(void)copy_string(
-						state->bluetooth_device_path,
-						sizeof(state->bluetooth_device_path),
-						device_path);
-
+			if (len == 0 || len == remaining)
 				break;
+
+			if (strcmp(field, "SUBSYSTEM=drm") == 0)
+				drm = true;
+			else if (strcmp(field, "HOTPLUG=1") == 0)
+				hotplug = true;
+			else if (strcmp(field, "DEVTYPE=drm_connector") == 0)
+				connector = true;
+
+			offset += len + 1;
+		}
+
+		if (drm && (hotplug || connector))
+			refresh = true;
+	}
+
+	if (refresh) {
+		refresh_hdmi_state(state);
+		reroute_owned_streams(state);
+	}
+
+	return true;
+}
+
+
+static bool bluetooth_devices_have_connected_audio(DBusMessage *reply)
+{
+	DBusMessageIter root, array;
+	if (!reply || !dbus_message_iter_init(reply, &root) ||
+	    dbus_message_iter_get_arg_type(&root) != DBUS_TYPE_ARRAY)
+		return false;
+	dbus_message_iter_recurse(&root, &array);
+	while (dbus_message_iter_get_arg_type(&array) == DBUS_TYPE_STRUCT) {
+		DBusMessageIter item;
+		const char *address = NULL, *name = NULL, *kind = NULL;
+		dbus_bool_t paired = FALSE, connected = FALSE, trusted = FALSE;
+		dbus_int32_t rssi = 0;
+		dbus_message_iter_recurse(&array, &item);
+		if (dbus_message_iter_get_arg_type(&item) == DBUS_TYPE_STRING) dbus_message_iter_get_basic(&item, &address);
+		if (!dbus_message_iter_next(&item)) break;
+		if (dbus_message_iter_get_arg_type(&item) == DBUS_TYPE_STRING) dbus_message_iter_get_basic(&item, &name);
+		if (!dbus_message_iter_next(&item)) break;
+		if (dbus_message_iter_get_arg_type(&item) == DBUS_TYPE_STRING) dbus_message_iter_get_basic(&item, &kind);
+		if (!dbus_message_iter_next(&item)) break;
+		if (dbus_message_iter_get_arg_type(&item) == DBUS_TYPE_BOOLEAN) dbus_message_iter_get_basic(&item, &paired);
+		if (!dbus_message_iter_next(&item)) break;
+		if (dbus_message_iter_get_arg_type(&item) == DBUS_TYPE_BOOLEAN) dbus_message_iter_get_basic(&item, &connected);
+		if (!dbus_message_iter_next(&item)) break;
+		if (dbus_message_iter_get_arg_type(&item) == DBUS_TYPE_BOOLEAN) dbus_message_iter_get_basic(&item, &trusted);
+		if (dbus_message_iter_next(&item) && dbus_message_iter_get_arg_type(&item) == DBUS_TYPE_INT32)
+			dbus_message_iter_get_basic(&item, &rssi);
+		(void)address; (void)name; (void)paired; (void)trusted; (void)rssi;
+		if (connected && kind && strcasecmp(kind, "audio") == 0)
+			return true;
+		dbus_message_iter_next(&array);
+	}
+	return false;
+}
+
+static void refresh_bluetooth_state(DBusConnection *conn, struct audio_state *state)
+{
+	DBusMessage *msg = NULL, *reply = NULL;
+	DBusError error = DBUS_ERROR_INIT;
+	bool old = state->bluetooth_available;
+	bool available = false;
+	if (conn) {
+		msg = dbus_message_new_method_call(BLUETOOTH_SERVICE, BLUETOOTH_PATH,
+					   BLUETOOTH_INTERFACE, "GetDevices");
+		if (msg) {
+			reply = dbus_connection_send_with_reply_and_block(conn, msg, 1000, &error);
+			dbus_message_unref(msg);
+			if (reply) {
+				available = bluetooth_devices_have_connected_audio(reply);
+				dbus_message_unref(reply);
 			}
 		}
-
-		if (available)
-			break;
 	}
-
-out:
+	if (dbus_error_is_set(&error)) dbus_error_free(&error);
 	state->bluetooth_available = available;
-
-	if (!available) {
-		state->bluetooth_pcm_path[0] = '\0';
-		state->bluetooth_device_path[0] = '\0';
-	}
-
 	reconcile_selection(state);
-	apply_selected_bluetooth_volume(conn, state);
-
-	dbus_message_unref(reply);
-
-	if (dbus_error_is_set(&error))
-		dbus_error_free(&error);
+	if (old != available) reroute_owned_streams(state);
 }
 
-static bool dbus_message_is_bluealsa_event(DBusMessage *message)
+static bool dbus_message_is_bluetooth_event(DBusMessage *message)
 {
-	const char *interface;
-	const char *member;
-
-	if (dbus_message_get_type(message) != DBUS_MESSAGE_TYPE_SIGNAL)
-		return false;
-
+	const char *interface, *member;
+	if (dbus_message_get_type(message) != DBUS_MESSAGE_TYPE_SIGNAL) return false;
 	interface = dbus_message_get_interface(message);
 	member = dbus_message_get_member(message);
-
-	if (!interface || !member)
-		return false;
-
-	if (strcmp(interface, DBUS_OBJECT_MANAGER) == 0 &&
-	    (strcmp(member, "InterfacesAdded") == 0 ||
-	     strcmp(member, "InterfacesRemoved") == 0))
+	if (!interface || !member) return false;
+	if (strcmp(interface, BLUETOOTH_INTERFACE) == 0 &&
+	    (strcmp(member, "DevicesSnapshotChanged") == 0 ||
+	     strcmp(member, "StateChanged") == 0))
 		return true;
-
 	if (strcmp(interface, DBUS_INTERFACE_DBUS) == 0 &&
 	    strcmp(member, "NameOwnerChanged") == 0) {
 		DBusMessageIter iter;
 		const char *name = NULL;
-
-		if (!dbus_message_iter_init(message, &iter))
-			return false;
-
-		if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING)
-			return false;
-
-		dbus_message_iter_get_basic(&iter, &name);
-
-		return name && strcmp(name, BLUEALSA_SERVICE) == 0;
+		if (dbus_message_iter_init(message, &iter) &&
+		    dbus_message_iter_get_arg_type(&iter) == DBUS_TYPE_STRING) {
+			dbus_message_iter_get_basic(&iter, &name);
+			return name && strcmp(name, BLUETOOTH_SERVICE) == 0;
+		}
 	}
-
 	return false;
 }
 
@@ -1310,83 +2788,55 @@ static void drain_dbus(DBusConnection *conn, struct audio_state *state)
 {
 	DBusMessage *message;
 	bool refresh = false;
-
-	if (!conn)
-		return;
-
+	if (!conn) return;
 	dbus_connection_read_write(conn, 0);
-
 	while ((message = dbus_connection_pop_message(conn)) != NULL) {
-		if (dbus_message_is_bluealsa_event(message))
+		if (!handle_audio_method(conn, message, state) &&
+		    dbus_message_is_bluetooth_event(message))
 			refresh = true;
-
 		dbus_message_unref(message);
 	}
-
-	if (refresh)
+	if (refresh) {
 		refresh_bluetooth_state(conn, state);
+		emit_state_changed(conn, state);
+	}
 }
 
 static DBusConnection *open_system_bus(struct audio_state *state)
 {
 	DBusConnection *conn;
 	DBusError error = DBUS_ERROR_INIT;
-
 	conn = dbus_bus_get(DBUS_BUS_SYSTEM, &error);
 	if (!conn) {
-		if (dbus_error_is_set(&error))
-			dbus_error_free(&error);
+		if (dbus_error_is_set(&error)) dbus_error_free(&error);
 		return NULL;
 	}
-
 	dbus_connection_set_exit_on_disconnect(conn, FALSE);
-
-	dbus_bus_add_match(
-		conn,
-		"type='signal',"
-		"sender='org.bluealsa',"
-		"interface='org.freedesktop.DBus.ObjectManager',"
-		"member='InterfacesAdded',"
-		"path_namespace='/org/bluealsa'",
-		&error);
-
-	if (dbus_error_is_set(&error))
-		goto fail;
-
-	dbus_bus_add_match(
-		conn,
-		"type='signal',"
-		"sender='org.bluealsa',"
-		"interface='org.freedesktop.DBus.ObjectManager',"
-		"member='InterfacesRemoved',"
-		"path_namespace='/org/bluealsa'",
-		&error);
-
-	if (dbus_error_is_set(&error))
-		goto fail;
-
-	dbus_bus_add_match(
-		conn,
-		"type='signal',"
-		"sender='org.freedesktop.DBus',"
-		"interface='org.freedesktop.DBus',"
-		"member='NameOwnerChanged',"
-		"arg0='org.bluealsa'",
-		&error);
-
-	if (dbus_error_is_set(&error))
-		goto fail;
-
+	{
+		int request = dbus_bus_request_name(conn, AUDIO_SERVICE_NAME,
+			DBUS_NAME_FLAG_REPLACE_EXISTING, &error);
+		if (request != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER) goto fail;
+	}
+	dbus_bus_add_match(conn,
+		"type='signal',sender='org.nuubOS.Bluetooth',"
+		"interface='org.nuubOS.Bluetooth1',member='DevicesSnapshotChanged',"
+		"path='/org/nuubOS/Bluetooth'", &error);
+	if (dbus_error_is_set(&error)) goto fail;
+	dbus_bus_add_match(conn,
+		"type='signal',sender='org.nuubOS.Bluetooth',"
+		"interface='org.nuubOS.Bluetooth1',member='StateChanged',"
+		"path='/org/nuubOS/Bluetooth'", &error);
+	if (dbus_error_is_set(&error)) goto fail;
+	dbus_bus_add_match(conn,
+		"type='signal',sender='org.freedesktop.DBus',"
+		"interface='org.freedesktop.DBus',member='NameOwnerChanged',"
+		"arg0='org.nuubOS.Bluetooth'", &error);
+	if (dbus_error_is_set(&error)) goto fail;
 	dbus_connection_flush(conn);
-
 	refresh_bluetooth_state(conn, state);
-
 	return conn;
-
 fail:
-	if (dbus_error_is_set(&error))
-		dbus_error_free(&error);
-
+	if (dbus_error_is_set(&error)) dbus_error_free(&error);
 	dbus_connection_unref(conn);
 	return NULL;
 }
@@ -1434,9 +2884,10 @@ int main(int argc, char **argv)
 	struct audio_state state;
 	DBusConnection *dbus_conn;
 	int dbus_fd = -1;
-	int display_watch_fd;
+	int drm_uevent_fd;
 	int jack_fd;
 	int server;
+	int sigchld_fd;
 
 	if (argc == 2 && strcmp(argv[1], "--supported") == 0)
 		return 0;
@@ -1448,10 +2899,24 @@ int main(int argc, char **argv)
 
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
+	/* Control clients use short timeouts. If one disconnects before a reply,
+	 * never let the resulting EPIPE terminate the Product Audio service. */
+	signal(SIGPIPE, SIG_IGN);
+	sigchld_fd = open_sigchld_pipe();
+	if (sigchld_fd < 0)
+		fprintf(stderr, "nuubos-audiod: SIGCHLD pipe failed: %s\n",
+			strerror(errno));
+	srand((unsigned int)(time(NULL) ^ getpid()));
 
 	load_config(&state);
+	if (run_applications_volume_helper(&state, state.volume_applications) != 0)
+		fprintf(stderr, "nuubos-audiod: failed to apply Applications volume policy\n");
+	/* Hardware DAC stays at unity. Product master volume is handled in
+	 * PipeWire so 1% changes do not click/pop the analog codec. */
+	if (set_codec_dac_volume(100) < 0)
+		fprintf(stderr, "nuubos-audiod: failed to set Codec DAC unity\n");
 	jack_fd = open_headphone_jack(&state);
-	display_watch_fd = open_display_watch(&state);
+	drm_uevent_fd = open_drm_uevent_socket(&state);
 
 	dbus_conn = open_system_bus(&state);
 	if (dbus_conn != NULL &&
@@ -1469,8 +2934,8 @@ int main(int argc, char **argv)
 		if (jack_fd >= 0)
 			close(jack_fd);
 
-		if (display_watch_fd >= 0)
-			close(display_watch_fd);
+		if (drm_uevent_fd >= 0)
+			close(drm_uevent_fd);
 
 		if (dbus_conn != NULL)
 			dbus_connection_unref(dbus_conn);
@@ -1478,12 +2943,16 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	emit_state_changed(dbus_conn, &state);
+	start_system_sound(&state, "boot");
+
 	while (!stop_requested) {
-		struct pollfd fds[4];
+		struct pollfd fds[5];
 		nfds_t nfds = 1;
 		int jack_index = -1;
-		int display_index = -1;
+		int drm_index = -1;
 		int dbus_index = -1;
+		int sigchld_index = -1;
 		int rc;
 
 		memset(fds, 0, sizeof(fds));
@@ -1498,9 +2967,9 @@ int main(int argc, char **argv)
 			nfds++;
 		}
 
-		if (display_watch_fd >= 0) {
-			display_index = (int)nfds;
-			fds[nfds].fd = display_watch_fd;
+		if (drm_uevent_fd >= 0) {
+			drm_index = (int)nfds;
+			fds[nfds].fd = drm_uevent_fd;
 			fds[nfds].events = POLLIN;
 			nfds++;
 		}
@@ -1512,12 +2981,37 @@ int main(int argc, char **argv)
 			nfds++;
 		}
 
-		rc = poll(fds, nfds, -1);
+		if (sigchld_fd >= 0) {
+			sigchld_index = (int)nfds;
+			fds[nfds].fd = sigchld_fd;
+			fds[nfds].events = POLLIN;
+			nfds++;
+		}
+
+		rc = poll(fds, nfds, sigchld_fd >= 0 ?
+			  main_loop_timeout_ms(&state) : 250);
 		if (rc < 0) {
 			if (errno == EINTR)
 				continue;
 			break;
 		}
+
+		if (sigchld_index >= 0 &&
+		    (fds[sigchld_index].revents & POLLIN))
+			drain_sigchld_pipe(sigchld_fd);
+
+		service_owned_streams(&state);
+		if (pipewire_volume_apply_is_due(&state) &&
+		    flush_pipewire_volume(&state) != 0)
+			fprintf(stderr,
+				"nuubos-audiod: deferred PipeWire volume apply failed\n");
+		if (volume_persist_is_due(&state) &&
+		    flush_volume_config(&state) != 0)
+			fprintf(stderr,
+				"nuubos-audiod: deferred volume persist failed\n");
+
+		if (rc == 0)
+			continue;
 
 		if (jack_index >= 0 &&
 		    fds[jack_index].revents != 0) {
@@ -1533,25 +3027,31 @@ int main(int argc, char **argv)
 				jack_fd = -1;
 				state.headphones_known = false;
 				state.headphones_available = false;
+				reconcile_selection(&state);
+				reroute_owned_streams(&state);
 			}
+			emit_state_changed(dbus_conn, &state);
 		}
 
-		if (display_index >= 0 &&
-		    fds[display_index].revents != 0) {
+		if (drm_index >= 0 &&
+		    fds[drm_index].revents != 0) {
 			bool alive = true;
 
-			if (fds[display_index].revents & POLLIN)
-				alive = drain_display_watch(display_watch_fd,
+			if (fds[drm_index].revents & POLLIN)
+				alive = drain_drm_uevents(drm_uevent_fd,
 							    &state);
 
 			if (!alive ||
-			    (fds[display_index].revents &
+			    (fds[drm_index].revents &
 			     (POLLERR | POLLHUP | POLLNVAL))) {
-				close(display_watch_fd);
-				display_watch_fd = -1;
+				close(drm_uevent_fd);
+				drm_uevent_fd = -1;
 				state.hdmi_known = false;
 				state.hdmi_available = false;
+				reconcile_selection(&state);
+				reroute_owned_streams(&state);
 			}
+			emit_state_changed(dbus_conn, &state);
 		}
 
 		if (dbus_index >= 0 &&
@@ -1602,11 +3102,20 @@ int main(int argc, char **argv)
 		}
 	}
 
+	stop_test(&state);
+	state.home_session_active = false;
+	state.music_requested = false;
+	stop_music(&state);
+	stop_child(&state.system_pid);
+	stop_child(&state.ui_anchor_pid);
+	if (state.volume_config_dirty)
+		(void)flush_volume_config(&state);
+
 	if (jack_fd >= 0)
 		close(jack_fd);
 
-	if (display_watch_fd >= 0)
-		close(display_watch_fd);
+	if (drm_uevent_fd >= 0)
+		close(drm_uevent_fd);
 
 	if (dbus_conn != NULL)
 		dbus_connection_unref(dbus_conn);

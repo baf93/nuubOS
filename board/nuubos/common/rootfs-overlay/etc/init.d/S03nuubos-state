@@ -86,11 +86,6 @@ NUUBOS_CONFIG_VERSION=5
 STORAGE_MODE=AUTO
 USER_LOGIN_MODE=AUTO
 POWER_MODE=AUTO
-AUDIO_OUTPUT=AUTO
-AUDIO_VOLUME_SPEAKER=100
-AUDIO_VOLUME_HEADPHONES=100
-AUDIO_VOLUME_BLUETOOTH=100
-DISPLAY_BRIGHTNESS=60
 CONFIG_EOF
     else
         VERSION="$(sed -n 's/^NUUBOS_CONFIG_VERSION=//p' "$CONFIG" | head -n 1)"
@@ -101,17 +96,6 @@ CONFIG_EOF
                     echo 'POWER_MODE=AUTO' >> "$CONFIG"
                 fi
 
-                grep -q '^AUDIO_OUTPUT=' "$CONFIG" ||
-                    echo 'AUDIO_OUTPUT=AUTO' >> "$CONFIG"
-                grep -q '^AUDIO_VOLUME_SPEAKER=' "$CONFIG" ||
-                    echo 'AUDIO_VOLUME_SPEAKER=100' >> "$CONFIG"
-                grep -q '^AUDIO_VOLUME_HEADPHONES=' "$CONFIG" ||
-                    echo 'AUDIO_VOLUME_HEADPHONES=100' >> "$CONFIG"
-                grep -q '^AUDIO_VOLUME_BLUETOOTH=' "$CONFIG" ||
-                    echo 'AUDIO_VOLUME_BLUETOOTH=100' >> "$CONFIG"
-                grep -q '^DISPLAY_BRIGHTNESS=' "$CONFIG" ||
-                    echo 'DISPLAY_BRIGHTNESS=60' >> "$CONFIG"
-
                 sed -i \
                     's/^NUUBOS_CONFIG_VERSION=.*/NUUBOS_CONFIG_VERSION=5/' \
                     "$CONFIG"
@@ -119,17 +103,6 @@ CONFIG_EOF
                 log "migrated config v1 to v5"
                 ;;
             2)
-                grep -q '^AUDIO_OUTPUT=' "$CONFIG" ||
-                    echo 'AUDIO_OUTPUT=AUTO' >> "$CONFIG"
-                grep -q '^AUDIO_VOLUME_SPEAKER=' "$CONFIG" ||
-                    echo 'AUDIO_VOLUME_SPEAKER=100' >> "$CONFIG"
-                grep -q '^AUDIO_VOLUME_HEADPHONES=' "$CONFIG" ||
-                    echo 'AUDIO_VOLUME_HEADPHONES=100' >> "$CONFIG"
-                grep -q '^AUDIO_VOLUME_BLUETOOTH=' "$CONFIG" ||
-                    echo 'AUDIO_VOLUME_BLUETOOTH=100' >> "$CONFIG"
-                grep -q '^DISPLAY_BRIGHTNESS=' "$CONFIG" ||
-                    echo 'DISPLAY_BRIGHTNESS=60' >> "$CONFIG"
-
                 sed -i \
                     's/^NUUBOS_CONFIG_VERSION=.*/NUUBOS_CONFIG_VERSION=5/' \
                     "$CONFIG"
@@ -137,9 +110,6 @@ CONFIG_EOF
                 log "migrated config v2 to v5"
                 ;;
             3)
-                grep -q '^DISPLAY_BRIGHTNESS=' "$CONFIG" ||
-                    echo 'DISPLAY_BRIGHTNESS=60' >> "$CONFIG"
-
                 sed -i \
                     's/^NUUBOS_CONFIG_VERSION=.*/NUUBOS_CONFIG_VERSION=5/' \
                     "$CONFIG"

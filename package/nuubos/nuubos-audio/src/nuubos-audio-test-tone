@@ -1,0 +1,49 @@
+#!/bin/sh
+
+case "${1:-toggle}" in
+	start)
+		RESULT="$(/usr/bin/nuubos-audioctl test-sound start 2>&1)"
+		RC=$?
+		if [ "$RC" -ne 0 ] || printf '%s\n' "$RESULT" | grep -q '^ERR'; then
+			printf '%s\n' "$RESULT" >&2
+			exit 1
+		fi
+		echo "playing"
+		;;
+	stop)
+		RESULT="$(/usr/bin/nuubos-audioctl test-sound stop 2>&1)"
+		RC=$?
+		if [ "$RC" -ne 0 ] || printf '%s\n' "$RESULT" | grep -q '^ERR'; then
+			printf '%s\n' "$RESULT" >&2
+			exit 1
+		fi
+		echo "stopped"
+		;;
+	status)
+		exec /usr/bin/nuubos-audioctl test-sound status
+		;;
+	toggle)
+		STATE="$(/usr/bin/nuubos-audioctl test-sound status 2>/dev/null)"
+		if [ "$STATE" = "playing" ]; then
+			RESULT="$(/usr/bin/nuubos-audioctl test-sound stop 2>&1)"
+			RC=$?
+			if [ "$RC" -ne 0 ] || printf '%s\n' "$RESULT" | grep -q '^ERR'; then
+				printf '%s\n' "$RESULT" >&2
+				exit 1
+			fi
+			echo "stopped"
+		else
+			RESULT="$(/usr/bin/nuubos-audioctl test-sound start 2>&1)"
+			RC=$?
+			if [ "$RC" -ne 0 ] || printf '%s\n' "$RESULT" | grep -q '^ERR'; then
+				printf '%s\n' "$RESULT" >&2
+				exit 1
+			fi
+			echo "playing"
+		fi
+		;;
+	*)
+		echo "Usage: $0 {start|stop|toggle|status}" >&2
+		exit 2
+		;;
+esac

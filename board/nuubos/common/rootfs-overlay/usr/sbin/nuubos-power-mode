@@ -4,7 +4,7 @@
 
 usage()
 {
-	echo "Usage: nuubos-power-mode {auto|battery-saver|apply|status}" >&2
+	echo "Usage: nuubos-power-mode {auto|battery-saver|apply|apply-effective <auto|battery-saver>|status}" >&2
 }
 
 show_status()
@@ -71,6 +71,15 @@ case "${1:-}" in
 		;;
 	apply)
 		MODE="$(read_power_mode)"
+		apply_power_mode "$MODE"
+		;;
+	apply-effective)
+		[ "$#" -eq 2 ] || { usage; exit 2; }
+		case "$2" in
+			auto) MODE=AUTO ;;
+			battery-saver) MODE=BATTERY_SAVER ;;
+			*) usage; exit 2 ;;
+		esac
 		apply_power_mode "$MODE"
 		;;
 	status)

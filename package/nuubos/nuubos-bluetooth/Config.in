@@ -1,5 +1,6 @@
 config BR2_PACKAGE_NUUBOS_BLUETOOTH
 	bool "nuubOS Bluetooth product service"
+	select BR2_PACKAGE_NUUBOS_NOTIFY
 	select BR2_PACKAGE_DBUS
 	select BR2_PACKAGE_BLUEZ5_UTILS
 	help

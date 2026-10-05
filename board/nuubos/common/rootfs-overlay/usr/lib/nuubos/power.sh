@@ -107,6 +107,16 @@ apply_power_mode()
 
 read_power_mode()
 {
+	SYSTEM_CONFIG=/state/config/nuubos-system.conf
+
+	if [ -f "$SYSTEM_CONFIG" ]; then
+		PROFILE="$(sed -n 's/^PERFORMANCE_PROFILE=//p' "$SYSTEM_CONFIG" | head -n 1)"
+		case "$PROFILE" in
+			auto) echo AUTO; return 0 ;;
+			battery-saver) echo BATTERY_SAVER; return 0 ;;
+		esac
+	fi
+
 	if [ ! -f "$POWER_CONFIG" ]; then
 		echo AUTO
 		return 0

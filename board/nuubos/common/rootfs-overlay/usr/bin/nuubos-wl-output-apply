@@ -1,11 +1,29 @@
 #!/bin/sh
 
+# Output scale for the current mode of $1 (see policy below).
+hdmi_scale()
+{
+    /usr/bin/wlr-randr 2>/dev/null | awk -v out="$1" '
+        /^[A-Za-z0-9-]+ / { name = $1 }
+        name == out && /current/ { split($1, wh, "x"); h = wh[2] + 0 }
+        END {
+            # ~720 logical lines, in 0.25 steps: 1080p -> 1.5, 1440p -> 2, 2160p -> 3.
+            s = int(h / 720 * 4) / 4
+            if (s < 1) s = 1
+            print s
+        }'
+}
+
 OUTPUTS="$(/usr/bin/wlr-randr 2>/dev/null | awk '/^[A-Za-z0-9-]+ / {print $1}')"
 [ -n "$OUTPUTS" ] || exit 0
 
 HDMI="$(printf '%s\n' "$OUTPUTS" | grep '^HDMI-A-' | head -n 1)"
 if [ -n "$HDMI" ]; then
     /usr/bin/wlr-randr --output "$HDMI" --on --preferred >/dev/null 2>&1 || true
+    # TV/monitor density: scale so the UI sees ~720 logical lines and lays out
+    # its native 16:9 variant crisply instead of drawing a tiny 1:1 UI.
+    SCALE="$(hdmi_scale "$HDMI")"
+    /usr/bin/wlr-randr --output "$HDMI" --scale "$SCALE" >/dev/null 2>&1 || true
     printf '%s\n' "$OUTPUTS" | while read -r OUTPUT; do
         [ -n "$OUTPUT" ] || continue
         [ "$OUTPUT" = "$HDMI" ] && continue

@@ -1,0 +1,7 @@
+config BR2_PACKAGE_NUUBOS_NOTIFY
+	bool "nuubOS notification router"
+	help
+	  EPIC-006 notification router. Owning services post typed
+	  notification events (Toast / Live Notification) through the
+	  staging header <nuubos/notify.h>; the Quick Menu overlay
+	  subscribes and renders them above any screen or application.

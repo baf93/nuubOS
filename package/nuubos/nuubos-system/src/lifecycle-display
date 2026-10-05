@@ -1,0 +1,55 @@
+#!/bin/sh
+
+DISPLAYCTL=/usr/bin/nuubos-displayctl
+STATE=/run/nuubos/lifecycle-display-brightness
+
+valid_percent() {
+    case "${1:-}" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 100 ] 2>/dev/null
+}
+
+case "${1:-}" in
+    screensaver)
+        [ -x "$DISPLAYCTL" ] || exit 0
+
+        if [ ! -s "$STATE" ]; then
+            current="$($DISPLAYCTL brightness 2>/dev/null)"
+            if valid_percent "$current"; then
+                tmp="$STATE.$$"
+                printf '%s\n' "$current" > "$tmp"
+                chmod 0600 "$tmp" 2>/dev/null || true
+                mv -f "$tmp" "$STATE"
+            else
+                exit 0
+            fi
+        fi
+
+        # Runtime-only dimming: never persist 1% as the user's preference.
+        "$DISPLAYCTL" brightness-live 1 >/dev/null 2>&1 || true
+        ;;
+
+    active)
+        [ -x "$DISPLAYCTL" ] || exit 0
+        [ -s "$STATE" ] || exit 0
+
+        saved="$(cat "$STATE" 2>/dev/null)"
+        if valid_percent "$saved"; then
+            if "$DISPLAYCTL" brightness-live "$saved" >/dev/null 2>&1; then
+                rm -f "$STATE"
+            fi
+        else
+            rm -f "$STATE"
+        fi
+        ;;
+
+    reset)
+        rm -f "$STATE"
+        ;;
+
+    *)
+        echo "usage: lifecycle-display {screensaver|active|reset}" >&2
+        exit 2
+        ;;
+esac

@@ -237,7 +237,11 @@ unpublish_user_view()
         }
     ' /proc/mounts
     then
-        umount "$USERDATA_USER_VIEW" || return 1
+        # Switching users must not be blocked by stale open file descriptors
+        # held by the previous session. Lazy-detach the bind mount; existing
+        # descriptors keep their old mount while new opens resolve to the new
+        # active-user view.
+        umount -l "$USERDATA_USER_VIEW" || return 1
     fi
 
     rmdir "$USERDATA_USER_VIEW" 2>/dev/null || true
@@ -818,12 +822,17 @@ case "${1:-}" in
     restart)
         start_storage
         ;;
+    user-switch)
+        # Rebind only the active-user USERDATA view. Physical storage is unchanged.
+        unpublish_user_view || exit 1
+        publish_user_view || exit 1
+        ;;
     stop)
         unpublish_user_view || exit 1
         stop_storage
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart}"
+        echo "Usage: $0 {start|stop|restart|user-switch}"
         exit 1
         ;;
 esac

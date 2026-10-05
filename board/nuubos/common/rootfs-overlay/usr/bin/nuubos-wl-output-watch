@@ -1,7 +1,36 @@
 #!/bin/sh
 
-# Do not force an initial wlr-randr mode change. Labwc reuses the already
-# active boot mode; output policy is applied only to real DRM hotplug events.
+# Do not force an initial wlr-randr mode change when the topology already
+# matches the output policy: Labwc reuses the already active boot mode on the
+# internal panel. When HDMI is connected at session start, however, Labwc
+# enables every connected head (internal panel included, HDMI at a fallback
+# mode), so the shell would land on the hidden internal output. Apply the
+# HDMI-only policy once in that case, then follow real DRM hotplug events.
+
+hdmi_policy_unmet()
+{
+    /usr/bin/wlr-randr 2>/dev/null | awk '
+        /^[A-Za-z0-9-]+ / { name = $1; if (name ~ /^HDMI-A-/) hdmi = name }
+        /^  Enabled:/ { enabled[name] = $2 }
+        /\(.*current.*\)/ {
+            if (name ~ /^HDMI-A-/) {
+                if ($0 !~ /preferred/) wrongmode = 1
+                split($1, wh, "x"); h = wh[2] + 0
+            }
+        }
+        /^  Scale:/ { if (name ~ /^HDMI-A-/) scale = $2 + 0 }
+        END {
+            if (hdmi == "") exit 1
+            want = int(h / 720 * 4) / 4; if (want < 1) want = 1
+            if (enabled[hdmi] != "yes" || wrongmode || scale != want) exit 0
+            for (n in enabled) if (n != hdmi && enabled[n] == "yes") exit 0
+            exit 1
+        }'
+}
+
+if hdmi_policy_unmet; then
+    /usr/bin/nuubos-wl-output-apply
+fi
 
 udevadm monitor --udev --subsystem-match=drm 2>/dev/null | while read -r LINE; do
     case "$LINE" in

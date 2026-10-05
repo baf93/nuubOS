@@ -1,0 +1,36 @@
+#!/bin/sh
+DAEMON=/usr/sbin/nuubos-systemd
+PIDFILE=/run/nuubos/systemd.pid
+
+start_service()
+{
+    mkdir -p /run/nuubos
+    if [ -f "$PIDFILE" ]; then
+        PID="$(cat "$PIDFILE" 2>/dev/null)"
+        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+            echo "nuubos-systemd already running"
+            return 0
+        fi
+        rm -f "$PIDFILE"
+    fi
+    echo "Starting nuubos-systemd..."
+    "$DAEMON" >/run/nuubos/systemd.log 2>&1 &
+}
+
+stop_service()
+{
+    if [ -f "$PIDFILE" ]; then
+        PID="$(cat "$PIDFILE" 2>/dev/null)"
+        if [ -n "$PID" ]; then
+            kill "$PID" 2>/dev/null
+        fi
+    fi
+    rm -f /run/nuubos/systemd.sock "$PIDFILE"
+}
+
+case "$1" in
+    start) start_service ;;
+    stop) stop_service ;;
+    restart) stop_service; start_service ;;
+    *) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
+esac
