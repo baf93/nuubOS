@@ -82,7 +82,6 @@ struct TopbarState {
     wifi_state: String,
     battery_percent: i32,
     battery_state: String,
-    controller_battery: [i32; 4],
 }
 
 impl Default for TopbarState {
@@ -93,7 +92,6 @@ impl Default for TopbarState {
             wifi_state: "disconnected".to_owned(),
             battery_percent: -1,
             battery_state: "unknown".to_owned(),
-            controller_battery: [-1; 4],
         }
     }
 }
@@ -1339,24 +1337,26 @@ fn bluetooth_pair_with_pin(ui: &HomeWindow, address: String, pin: String) {
 
 fn apply_controller_rows(
     ui: &HomeWindow,
-    rows: Vec<(String, String, String, bool, bool, i32, i32)>,
+    rows: Vec<(String, String, String, bool, bool, i32, i32, i32)>,
 ) {
-    /* Top-bar controller presence comes from the typed Controllers Product
-     * Service, not statusd/bluetoothctl. This guarantees an icon for every
-     * connected Bluetooth gamepad even when it exposes no battery supply. */
-    let bluetooth_connected = rows
+    /* Top-bar controllers and their battery come from the typed Controllers
+     * Product Service: every connected external controller holding a player
+     * slot, in player order. */
+    let mut topbar: Vec<TopbarController> = rows
         .iter()
-        .filter(|(_, _, transport, connected, builtin, _, _)| {
-            *connected && !*builtin && transport.eq_ignore_ascii_case("Bluetooth")
+        .filter(|(_, _, _, connected, builtin, _, player, _)| *connected && !*builtin && *player > 0)
+        .map(|(_, _, _, _, _, _, player, battery)| TopbarController {
+            player: *player,
+            battery: *battery,
         })
-        .count()
-        .min(4) as i32;
-    ui.set_controller_count(bluetooth_connected);
+        .collect();
+    topbar.sort_by_key(|controller| controller.player);
+    ui.set_topbar_controllers(ModelRc::from(Rc::new(VecModel::from(topbar))));
 
     let entries: Vec<ControllerEntry> = rows
         .into_iter()
         .map(
-            |(id, name, transport, connected, builtin, preferred_player, effective_player)| {
+            |(id, name, transport, connected, builtin, preferred_player, effective_player, _battery)| {
                 ControllerEntry {
                     id: id.into(),
                     name: name.into(),
@@ -1400,13 +1400,14 @@ fn apply_player_assignment_rows(
     if count > 0 && ui.get_player_assignment_index() >= count {
         ui.set_player_assignment_index(count - 1);
     }
+    update_player_assignment_scroll(ui);
 }
 
 fn refresh_controllers(ui: &HomeWindow) {
     let weak = ui.as_weak();
     thread::spawn(move || {
         let result = (|| -> zbus::Result<(
-            Vec<(String, String, String, bool, bool, i32, i32)>,
+            Vec<(String, String, String, bool, bool, i32, i32, i32)>,
             Vec<(i32, String, String, bool)>,
         )> {
             let connection = zbus::blocking::Connection::system()?;
@@ -1794,6 +1795,16 @@ fn update_controller_list_scroll(ui: &HomeWindow) {
         count,
         ui.get_settings_list_visible_rows(),
         ui.get_controller_list_scroll_offset(),
+    ));
+}
+
+fn update_player_assignment_scroll(ui: &HomeWindow) {
+    let count = ui.get_player_assignments().row_count() as i32;
+    ui.set_player_assignment_scroll_offset(guarded_scroll_offset(
+        ui.get_player_assignment_index(),
+        count,
+        ui.get_settings_list_visible_rows(),
+        ui.get_player_assignment_scroll_offset(),
     ));
 }
 
@@ -2846,7 +2857,7 @@ fn start_controller_signal_listener(ui: &HomeWindow, signal_name: &'static str) 
                 "DevicesChanged" => {
                     let body = message
                         .body()
-                        .deserialize::<(Vec<(String, String, String, bool, bool, i32, i32)>,)>();
+                        .deserialize::<(Vec<(String, String, String, bool, bool, i32, i32, i32)>,)>();
                     if let Ok((rows,)) = body {
                         let weak = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
@@ -4018,18 +4029,6 @@ fn load_topbar_state() -> TopbarState {
                 state.battery_percent = value.parse::<i32>().unwrap_or(-1);
             }
             "BATTERY_STATE" => state.battery_state = value.to_owned(),
-            "CONTROLLER_1_BATTERY" => {
-                state.controller_battery[0] = value.parse::<i32>().unwrap_or(-1);
-            }
-            "CONTROLLER_2_BATTERY" => {
-                state.controller_battery[1] = value.parse::<i32>().unwrap_or(-1);
-            }
-            "CONTROLLER_3_BATTERY" => {
-                state.controller_battery[2] = value.parse::<i32>().unwrap_or(-1);
-            }
-            "CONTROLLER_4_BATTERY" => {
-                state.controller_battery[3] = value.parse::<i32>().unwrap_or(-1);
-            }
             _ => {}
         }
     }
@@ -4044,10 +4043,6 @@ fn apply_topbar_state(ui: &HomeWindow, state: TopbarState) {
     ui.set_battery_percent(state.battery_percent);
     ui.set_battery_state(state.battery_state.into());
     ui.set_battery_label(if state.battery_percent >= 0 { format!("{}%", state.battery_percent).into() } else { "--%".into() });
-    ui.set_controller_one_battery(state.controller_battery[0]);
-    ui.set_controller_two_battery(state.controller_battery[1]);
-    ui.set_controller_three_battery(state.controller_battery[2]);
-    ui.set_controller_four_battery(state.controller_battery[3]);
 }
 
 fn apply_latest_topbar_state(weak: &slint::Weak<HomeWindow>) -> bool {
@@ -4590,6 +4585,7 @@ fn handle_settings_action(
             "menu_confirm" => match ui.get_controllers_menu_index() {
                 0 => {
                     ui.set_player_assignment_index(0);
+                    ui.set_player_assignment_scroll_offset(0);
                     navigate_settings_view(ui, 11);
                 }
                 1 => {
@@ -4612,12 +4608,18 @@ fn handle_settings_action(
         11 => {
             let count = ui.get_player_assignments().row_count() as i32;
             match action {
-                "menu_up" if count > 0 => ui.set_player_assignment_index(
-                    move_model_selection(ui.get_player_assignment_index(), count, -1)
-                ),
-                "menu_down" if count > 0 => ui.set_player_assignment_index(
-                    move_model_selection(ui.get_player_assignment_index(), count, 1)
-                ),
+                "menu_up" if count > 0 => {
+                    ui.set_player_assignment_index(
+                        move_model_selection(ui.get_player_assignment_index(), count, -1),
+                    );
+                    update_player_assignment_scroll(ui);
+                }
+                "menu_down" if count > 0 => {
+                    ui.set_player_assignment_index(
+                        move_model_selection(ui.get_player_assignment_index(), count, 1),
+                    );
+                    update_player_assignment_scroll(ui);
+                }
                 "menu_confirm" if count > 0 => open_player_assignment_dropdown(ui),
                 _ => {}
             }

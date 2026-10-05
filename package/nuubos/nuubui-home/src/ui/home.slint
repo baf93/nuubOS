@@ -76,6 +76,12 @@ export struct ControllerEntry {
     effective-player: int,
 }
 
+/* Connected external controller shown in the top bar. */
+export struct TopbarController {
+    player: int,
+    battery: int,
+}
+
 export struct PlayerAssignmentEntry {
     player: int,
     controller-id: string,
@@ -190,10 +196,13 @@ component BatteryGlyph inherits Rectangle {
 }
 
 component ControllerStatus inherits Rectangle {
-    in property <string> player-label: "1";
+    in property <int> player: 1;
     in property <int> battery-percent: -1;
+    /* Compact: player badge + battery dot only; the group shares one
+     * gamepad icon (used when the controllers do not fit next to the clock). */
+    in property <bool> compact: false;
 
-    width: 34px;
+    width: root.compact ? 16px : 34px;
     height: 38px;
     background: #00000000;
 
@@ -204,11 +213,12 @@ component ControllerStatus inherits Rectangle {
         height: 22px;
         source: @image-url("assets/icons/gamepad.svg");
         image-fit: contain;
+        visible: !root.compact;
     }
 
     Rectangle {
-        x: 16px;
-        y: 4px;
+        x: root.compact ? 1px : 16px;
+        y: root.compact ? 12px : 4px;
         width: 13px;
         height: 13px;
         border-radius: 7px;
@@ -217,18 +227,24 @@ component ControllerStatus inherits Rectangle {
         Text {
             horizontal-alignment: center;
             vertical-alignment: center;
-            text: root.player-label;
+            text: root.player;
             color: #ffffff;
             font-size: 11px;
             font-weight: 700;
         }
     }
 
-    BatteryGlyph {
-        x: 19px;
-        y: 34px;
-        compact: true;
-        percent: root.battery-percent;
+    /* Battery level: green / amber / red dot, hidden when unknown. */
+    Rectangle {
+        x: root.compact ? 4px : 17px;
+        y: root.compact ? 28px : 29px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: #0d0e10;
+        background: root.battery-percent >= 50 ? #43d17a
+            : root.battery-percent >= 20 ? #f2b84b : #ff5c5c;
         visible: root.battery-percent >= 0;
     }
 }
@@ -796,7 +812,7 @@ export component HomeWindow inherits Window {
     callback splash-size-changed();
     changed width => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
     changed height => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
-    in-out property <[string]> i18n-strings: ["Recently Played", "nuubUI graphics foundation", "Native layout • 640×480 • Wayland", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P4", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish"];
+    in-out property <[string]> i18n-strings: ["Recently Played", "nuubUI graphics foundation", "Native layout • 640×480 • Wayland", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish"];
 
     in-out property <string> topbar-time: "--:--";
     in-out property <string> current-user-name: root.i18n-strings[204];
@@ -806,11 +822,9 @@ export component HomeWindow inherits Window {
     in-out property <int> battery-percent: -1;
     in-out property <string> battery-state: "unknown";
     in-out property <string> battery-label: "--%";
-    in-out property <int> controller-count: 0;
-    in-out property <int> controller-one-battery: -1;
-    in-out property <int> controller-two-battery: -1;
-    in-out property <int> controller-three-battery: -1;
-    in-out property <int> controller-four-battery: -1;
+    /* Connected external controllers in player order (Controllers service). */
+    in-out property <[TopbarController]> topbar-controllers: [];
+    property <int> controller-count: root.topbar-controllers.length;
 
     in-out property <bool> settings-open: false;
     in-out property <int> settings-selected-index: 0;
@@ -898,6 +912,7 @@ export component HomeWindow inherits Window {
     in-out property <int> player-assignment-index: 0;
     in-out property <int> controller-list-index: 0;
     in-out property <int> controller-list-scroll-offset: 0;
+    in-out property <int> player-assignment-scroll-offset: 0;
     in-out property <int> controller-detail-index: 0;
     in-out property <int> controller-mapping-index: 0;
     in-out property <int> controller-mapping-scroll-offset: 0;
@@ -1288,12 +1303,17 @@ export component HomeWindow inherits Window {
     property <length> bluetooth-audio-topbar-reserve:
         root.audio-bluetooth-available ? 30px : 0px;
 
-    property <length> controllers-start-x:
-        root.controller-count >= 4 ? root.width - 253px - root.bluetooth-audio-topbar-reserve
-        : root.controller-count == 3 ? root.width - 219px - root.bluetooth-audio-topbar-reserve
-        : root.controller-count == 2 ? root.width - 185px - root.bluetooth-audio-topbar-reserve
-        : root.controller-count == 1 ? root.width - 151px - root.bluetooth-audio-topbar-reserve
-        : root.width - 113px - root.bluetooth-audio-topbar-reserve;
+    /* Controllers end left of the status icons and must not reach the
+     * centered clock (76px wide); when the full icons do not fit they
+     * switch to compact badges sharing one gamepad icon. */
+    property <length> controllers-right: root.width - 117px - root.bluetooth-audio-topbar-reserve;
+    property <length> controllers-room: root.controllers-right - (root.width / 2 + 46px);
+    property <bool> controllers-compact: root.controller-count * 34px > root.controllers-room;
+    property <length> controllers-step: !root.controllers-compact ? 34px
+        : max(13px, min(16px, (root.controllers-room - 26px) / max(1, root.controller-count)));
+    property <length> controllers-start-x: root.controllers-right
+        - (root.controllers-compact ? 26px + root.controller-count * root.controllers-step
+           : root.controller-count * 34px);
 
     title: "nuubOS";
     background: #0d0e10;
@@ -1405,34 +1425,23 @@ export component HomeWindow inherits Window {
                 font-weight: 600;
             }
 
-            /* Right: up to four connected Bluetooth controllers. */
-            ControllerStatus {
+            /* Right: connected external controllers (up to eight players). */
+            Image {
                 x: root.controllers-start-x;
-                y: 0px;
-                player-label: "1";
-                battery-percent: root.controller-one-battery;
-                visible: root.controller-count >= 1;
+                y: 14px;
+                width: 22px;
+                height: 22px;
+                source: @image-url("assets/icons/gamepad.svg");
+                image-fit: contain;
+                visible: root.controllers-compact && root.controller-count > 0;
             }
-            ControllerStatus {
-                x: root.controllers-start-x + 34px;
+            for controller[i] in root.topbar-controllers: ControllerStatus {
+                x: root.controllers-start-x
+                    + (root.controllers-compact ? 26px : 0px) + i * root.controllers-step;
                 y: 0px;
-                player-label: "2";
-                battery-percent: root.controller-two-battery;
-                visible: root.controller-count >= 2;
-            }
-            ControllerStatus {
-                x: root.controllers-start-x + 68px;
-                y: 0px;
-                player-label: "3";
-                battery-percent: root.controller-three-battery;
-                visible: root.controller-count >= 3;
-            }
-            ControllerStatus {
-                x: root.controllers-start-x + 102px;
-                y: 0px;
-                player-label: "4";
-                battery-percent: root.controller-four-battery;
-                visible: root.controller-count >= 4;
+                player: controller.player;
+                battery-percent: controller.battery;
+                compact: root.controllers-compact;
             }
 
             Image {
@@ -2150,7 +2159,7 @@ export component HomeWindow inherits Window {
                 /* Preferred player assignment. */
                 for assignment[i] in root.player-assignments: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.srow-y(i, 0, 0);
+                    y: root.srow-y(i, root.player-assignment-scroll-offset, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: root.i18n-strings[220] + assignment.player;
@@ -2158,7 +2167,7 @@ export component HomeWindow inherits Window {
                         + (assignment.available ? "" : root.i18n-strings[221]);
                     selected: root.settings-view == 11 && root.player-assignment-index == i;
                     visible: root.settings-view == 11
-                        && root.srow-visible(i, 0, root.settings-list-visible-rows);
+                        && root.srow-visible(i, root.player-assignment-scroll-offset, root.settings-list-visible-rows);
                 }
 
                 /* Available controller inventory. */

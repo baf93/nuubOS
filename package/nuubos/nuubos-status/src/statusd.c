@@ -31,7 +31,6 @@
 #define USER_DIR RUNTIME_DIR "/user"
 #define ACTIVE_USER USER_DIR "/active"
 #define MAX_SUBSCRIBERS 8
-#define MAX_CONTROLLERS 4
 
 struct topbar_state {
     char time_hhmm[8];
@@ -39,8 +38,6 @@ struct topbar_state {
     char wifi_state[24];
     int battery_percent;
     char battery_state[24];
-    int controller_count;
-    int controller_battery[MAX_CONTROLLERS];
 };
 
 /* Console battery alerts (EPIC-006, owner: Battery & Charging). Re-armed
@@ -336,124 +333,6 @@ static void refresh_battery(struct topbar_state *state)
         snprintf(state->battery_state, sizeof(state->battery_state), "unknown");
 }
 
-static bool valid_bt_address(const char *addr)
-{
-    size_t i;
-
-    if (strlen(addr) != 17)
-        return false;
-    for (i = 0; i < 17; i++) {
-        if ((i + 1) % 3 == 0) {
-            if (addr[i] != ':')
-                return false;
-        } else if (!isxdigit((unsigned char)addr[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static int parse_battery_percentage(const char *line)
-{
-    const char *p;
-    int value = -1;
-
-    p = strchr(line, '(');
-    if (p && sscanf(p + 1, "%d", &value) == 1)
-        return value;
-
-    p = strchr(line, ':');
-    if (p) {
-        while (*p && !isdigit((unsigned char)*p))
-            p++;
-        if (*p && sscanf(p, "%d", &value) == 1)
-            return value;
-    }
-
-    return -1;
-}
-
-static bool bluetooth_controller_info(const char *addr, int *battery)
-{
-    FILE *fp;
-    char cmd[160];
-    char line[512];
-    bool connected = false;
-    bool controller = false;
-    int percent = -1;
-
-    if (!valid_bt_address(addr))
-        return false;
-
-    snprintf(cmd, sizeof(cmd), "bluetoothctl info %s 2>/dev/null", addr);
-    fp = popen(cmd, "r");
-    if (!fp)
-        return false;
-
-    while (fgets(line, sizeof(line), fp)) {
-        if (strstr(line, "Connected: yes"))
-            connected = true;
-        if (strstr(line, "Icon: input-gaming") ||
-            strstr(line, "00001124-0000-1000-8000-00805f9b34fb") ||
-            strstr(line, "00001812-0000-1000-8000-00805f9b34fb"))
-            controller = true;
-        if (strstr(line, "Battery Percentage:"))
-            percent = parse_battery_percentage(line);
-    }
-
-    pclose(fp);
-    if (!connected || !controller)
-        return false;
-
-    *battery = percent;
-    return true;
-}
-
-static int address_compare(const void *a, const void *b)
-{
-    const char *aa = a;
-    const char *bb = b;
-    return strcmp(aa, bb);
-}
-
-static void refresh_controllers(struct topbar_state *state)
-{
-    FILE *fp;
-    char line[512];
-    char addresses[32][18];
-    int address_count = 0;
-    int i;
-
-    state->controller_count = 0;
-    for (i = 0; i < MAX_CONTROLLERS; i++)
-        state->controller_battery[i] = -1;
-
-    fp = popen("bluetoothctl devices 2>/dev/null", "r");
-    if (!fp)
-        return;
-
-    while (address_count < 32 && fgets(line, sizeof(line), fp)) {
-        char prefix[32];
-        char addr[32];
-        if (sscanf(line, "%31s %31s", prefix, addr) != 2)
-            continue;
-        if (strcmp(prefix, "Device") != 0 || !valid_bt_address(addr))
-            continue;
-        snprintf(addresses[address_count++], sizeof(addresses[0]), "%s", addr);
-    }
-    pclose(fp);
-
-    qsort(addresses, (size_t)address_count, sizeof(addresses[0]), address_compare);
-
-    for (i = 0; i < address_count && state->controller_count < MAX_CONTROLLERS; i++) {
-        int battery = -1;
-        if (!bluetooth_controller_info(addresses[i], &battery))
-            continue;
-        state->controller_battery[state->controller_count] = battery;
-        state->controller_count++;
-    }
-}
-
 static bool state_equal(const struct topbar_state *a,
                         const struct topbar_state *b)
 {
@@ -461,17 +340,13 @@ static bool state_equal(const struct topbar_state *a,
            strcmp(a->user_name, b->user_name) == 0 &&
            strcmp(a->wifi_state, b->wifi_state) == 0 &&
            a->battery_percent == b->battery_percent &&
-           strcmp(a->battery_state, b->battery_state) == 0 &&
-           a->controller_count == b->controller_count &&
-           memcmp(a->controller_battery, b->controller_battery,
-                  sizeof(a->controller_battery)) == 0;
+           strcmp(a->battery_state, b->battery_state) == 0;
 }
 
 static bool publish_state(const struct topbar_state *state)
 {
     char tmp[256];
     FILE *fp;
-    int i;
 
     snprintf(tmp, sizeof(tmp), "%s.tmp.%ld", STATE_FILE, (long)getpid());
     fp = fopen(tmp, "w");
@@ -484,10 +359,6 @@ static bool publish_state(const struct topbar_state *state)
     fprintf(fp, "WIFI_STATE=%s\n", state->wifi_state);
     fprintf(fp, "BATTERY_PERCENT=%d\n", state->battery_percent);
     fprintf(fp, "BATTERY_STATE=%s\n", state->battery_state);
-    fprintf(fp, "CONTROLLER_COUNT=%d\n", state->controller_count);
-    for (i = 0; i < MAX_CONTROLLERS; i++)
-        fprintf(fp, "CONTROLLER_%d_BATTERY=%d\n", i + 1,
-                state->controller_battery[i]);
 
     if (fflush(fp) != 0) {
         fclose(fp);
@@ -740,7 +611,6 @@ static void refresh_all(struct topbar_state *next)
     refresh_user(next);
     refresh_wifi(next);
     refresh_battery(next);
-    refresh_controllers(next);
 }
 
 int main(void)
@@ -759,8 +629,6 @@ int main(void)
     current.battery_percent = -999;
     for (i = 0; i < MAX_SUBSCRIBERS; i++)
         subscribers[i] = -1;
-    for (i = 0; i < MAX_CONTROLLERS; i++)
-        next.controller_battery[i] = -1;
 
     (void)mkdir(RUNTIME_DIR, 0755);
 
@@ -837,10 +705,8 @@ int main(void)
                     }
                 }
                 next = current;
-                if (other) {
+                if (other)
                     refresh_user(&next);
-                    refresh_controllers(&next);
-                }
                 if (zone)
                     refresh_time(&next);
                 commit_if_changed(&current, &next);
@@ -857,10 +723,8 @@ int main(void)
                         rfkill = true;
                 }
                 next = current;
-                if (power) {
+                if (power)
                     refresh_battery(&next);
-                    refresh_controllers(&next);
-                }
                 if (rfkill)
                     refresh_wifi(&next);
                 commit_if_changed(&current, &next);

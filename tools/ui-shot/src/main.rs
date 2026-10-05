@@ -246,6 +246,23 @@ fn main() {
         ui.set_user_count(1); ui.set_oob_index(1);
     })));
     scenes.push(("oob_ready", Box::new(|ui| { ui.set_oob_step(4); })));
+    /* Top bar with connected controllers (battery dots) and BT headphones. */
+    scenes.push(("topbar_controllers_2", Box::new(|ui| {
+        ui.set_oob_active(false);
+        ui.set_settings_open(false);
+        ui.set_audio_bluetooth_available(true);
+        ui.set_topbar_controllers(ModelRc::from(Rc::new(VecModel::from(vec![
+            TopbarController { player: 1, battery: 38 },
+            TopbarController { player: 2, battery: -1 },
+        ]))));
+    })));
+    scenes.push(("topbar_controllers_8", Box::new(|ui| {
+        let batteries = [85, 38, 12, -1, 64, 20, 5, 100];
+        ui.set_topbar_controllers(ModelRc::from(Rc::new(VecModel::from(
+            (0..8).map(|i| TopbarController { player: i + 1, battery: batteries[i as usize] })
+                .collect::<Vec<_>>(),
+        ))));
+    })));
     for (name, f) in &scenes {
         f(&ui);
         for (w, h) in sizes {

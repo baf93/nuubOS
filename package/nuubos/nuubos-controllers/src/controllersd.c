@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 
+#include <ctype.h>
 #include <dbus/dbus.h>
 #include <dirent.h>
 #include <errno.h>
@@ -30,6 +31,7 @@
 #define OBJECT_PATH "/org/nuubOS/Controllers"
 #define INTERFACE_NAME "org.nuubOS.Controllers1"
 #define INTROSPECT_IFACE "org.freedesktop.DBus.Introspectable"
+#define BLUEZ_BATTERY_IFACE "org.bluez.Battery1"
 
 #define INPUT_DIR "/dev/input"
 #define INPUT_SOCKET "/run/nuubos/inputd.sock"
@@ -38,6 +40,7 @@
 #define INPUTD_PID "/run/nuubos-inputd.pid"
 
 #define MAX_CONTROLLERS 16
+#define MAX_PLAYERS 8
 #define MAX_LINE 512
 #define MAX_ID 160
 #define MAX_NAME 160
@@ -65,7 +68,11 @@ struct controller_device {
 	 * without the /sys prefix: its power_supply children are the
 	 * controller's battery. */
 	char sys_parent[256];
+	/* Bluetooth address (upper case) from the HID uniq, or empty. */
+	char bt_address[18];
 	int battery;
+	/* Level comes from org.bluez.Battery1 (GATT Battery Service). */
+	bool battery_from_bluez;
 	bool battery_low_sent;
 	long long connected_ms;
 };
@@ -160,7 +167,7 @@ struct device_caps {
 static volatile sig_atomic_t running = 1;
 static struct controller_device devices[MAX_CONTROLLERS];
 static size_t device_count;
-static struct player_pref prefs[4];
+static struct player_pref prefs[MAX_PLAYERS];
 static char active_user[128] = "default";
 static int input_fd = -1;
 static char input_buf[2048];
@@ -181,6 +188,9 @@ static int remap_baseline[ABS_MAX + 1];
 static struct battery_cache_entry battery_cache[MAX_BATTERY_CACHE];
 
 static void inputd_raw_capture(const char *id, bool enabled);
+static void emit_devices_changed(DBusConnection *conn);
+/* Set once the bus is up; battery changes publish DevicesChanged. */
+static DBusConnection *bus_conn;
 static long long monotonic_ms(void);
 
 static const char introspection_xml[] =
@@ -191,7 +201,7 @@ static const char introspection_xml[] =
 	"<arg name='connected_count' type='u' direction='out'/>"
 	"</method>"
 	"<method name='GetDevices'>"
-	"<arg name='devices' type='a(sssbbii)' direction='out'/>"
+	"<arg name='devices' type='a(sssbbiii)' direction='out'/>"
 	"</method>"
 	"<method name='GetAssignments'>"
 	"<arg name='assignments' type='a(issb)' direction='out'/>"
@@ -229,7 +239,7 @@ static const char introspection_xml[] =
 	"<arg name='controller_id' type='s' direction='in'/>"
 	"</method>"
 	"<signal name='DevicesChanged'>"
-	"<arg name='devices' type='a(sssbbii)'/>"
+	"<arg name='devices' type='a(sssbbiii)'/>"
 	"</signal>"
 	"<signal name='AssignmentsChanged'>"
 	"<arg name='assignments' type='a(issb)'/>"
@@ -464,7 +474,7 @@ static void load_preferences(void)
 	char line[512];
 	int i;
 
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < MAX_PLAYERS; i++) {
 		prefs[i].id[0] = '\0';
 		prefs[i].name[0] = '\0';
 	}
@@ -479,13 +489,13 @@ static void load_preferences(void)
 		char value[384];
 
 		if (sscanf(line, "PLAYER%d_ID=%383[^\n]", &player, value) == 2 &&
-		    player >= 1 && player <= 4) {
+		    player >= 1 && player <= MAX_PLAYERS) {
 			trim(value);
 			copy_text(prefs[player - 1].id, sizeof(prefs[player - 1].id), value);
 			continue;
 		}
 		if (sscanf(line, "PLAYER%d_NAME=%383[^\n]", &player, value) == 2 &&
-		    player >= 1 && player <= 4) {
+		    player >= 1 && player <= MAX_PLAYERS) {
 			trim(value);
 			copy_text(prefs[player - 1].name, sizeof(prefs[player - 1].name), value);
 		}
@@ -508,7 +518,7 @@ static int save_preferences(void)
 	fp = fopen(tmp, "w");
 	if (!fp)
 		return -1;
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < MAX_PLAYERS; i++) {
 		if (fprintf(fp, "PLAYER%d_ID=%s\nPLAYER%d_NAME=%s\n",
 			    i + 1, prefs[i].id, i + 1, prefs[i].name) < 0) {
 			fclose(fp);
@@ -530,7 +540,7 @@ static int save_preferences(void)
 static int preferred_player_for(const char *id)
 {
 	int i;
-	for (i = 0; i < 4; i++)
+	for (i = 0; i < MAX_PLAYERS; i++)
 		if (prefs[i].id[0] && strcmp(prefs[i].id, id) == 0)
 			return i + 1;
 	return 0;
@@ -548,7 +558,7 @@ static void recompute_effective_players(void)
 		devices[i].effective_player = 0;
 	}
 
-	for (p = 0; p < 4; p++) {
+	for (p = 0; p < MAX_PLAYERS; p++) {
 		int idx;
 		if (!prefs[p].id[0])
 			continue;
@@ -559,11 +569,25 @@ static void recompute_effective_players(void)
 		used[idx] = true;
 	}
 
-	for (i = 0; i < device_count && next <= 4; i++) {
-		if (used[i])
-			continue;
-		devices[i].effective_player = next++;
-		used[i] = true;
+	/* Automatic slots: external controllers in connection order, then the
+	 * built-in controls, so connecting a gamepad makes it P1 and moves the
+	 * built-in controls down one slot. */
+	while (next <= MAX_PLAYERS) {
+		int pick = -1;
+
+		for (i = 0; i < device_count; i++) {
+			if (used[i])
+				continue;
+			if (pick < 0 ||
+			    (devices[pick].builtin && !devices[i].builtin) ||
+			    (devices[pick].builtin == devices[i].builtin &&
+			     devices[i].connected_ms < devices[pick].connected_ms))
+				pick = (int)i;
+		}
+		if (pick < 0)
+			break;
+		devices[pick].effective_player = next++;
+		used[pick] = true;
 	}
 }
 
@@ -595,6 +619,38 @@ static int cached_battery(const char *sys_parent)
 		    battery_belongs_to(battery_cache[i].devpath, sys_parent))
 			return battery_cache[i].capacity;
 	return -1;
+}
+
+/* BLE (HOGP) controllers are uhid devices created by BlueZ: the kernel's
+ * HID battery there is synthesized from the report descriptor and never
+ * fed (reads 0%). Their level comes from BlueZ Battery1 instead. */
+static bool kernel_battery_trusted(const struct controller_device *dev)
+{
+	return !dev->battery_from_bluez &&
+	       strstr(dev->sys_parent, "/misc/uhid/") == NULL;
+}
+
+static void read_bt_address(int fd, char *out, size_t out_size)
+{
+	struct input_id id;
+	char uniq[64];
+	size_t i;
+
+	out[0] = '\0';
+	memset(&id, 0, sizeof(id));
+	memset(uniq, 0, sizeof(uniq));
+	if (ioctl(fd, EVIOCGID, &id) < 0 || id.bustype != BUS_BLUETOOTH ||
+	    ioctl(fd, EVIOCGUNIQ(sizeof(uniq)), uniq) < 0 || strlen(uniq) != 17 ||
+	    out_size < 18)
+		return;
+	for (i = 0; i < 17; i++) {
+		char c = uniq[i];
+
+		if (i % 3 == 2 ? c != ':' : !isxdigit((unsigned char)c))
+			return;
+		out[i] = (char)toupper((unsigned char)c);
+	}
+	out[17] = '\0';
 }
 
 static void controller_notify_id(const char *id, const char *prefix,
@@ -692,13 +748,18 @@ static void rescan_devices(bool announce)
 		devices[device_count].builtin = builtin;
 		resolve_sys_parent(g.gl_pathv[i], devices[device_count].sys_parent,
 				   sizeof(devices[device_count].sys_parent));
+		read_bt_address(fd, devices[device_count].bt_address,
+				sizeof(devices[device_count].bt_address));
+		devices[device_count].battery_from_bluez = false;
 		devices[device_count].battery =
-			cached_battery(devices[device_count].sys_parent);
+			kernel_battery_trusted(&devices[device_count])
+				? cached_battery(devices[device_count].sys_parent) : -1;
 		devices[device_count].battery_low_sent = false;
 		devices[device_count].connected_ms = monotonic_ms();
 		for (size_t p = 0; p < previous_count; p++) {
 			if (strcmp(previous[p].id, id) == 0) {
 				devices[device_count].battery = previous[p].battery;
+				devices[device_count].battery_from_bluez = previous[p].battery_from_bluez;
 				devices[device_count].battery_low_sent = previous[p].battery_low_sent;
 				devices[device_count].connected_ms = previous[p].connected_ms;
 				break;
@@ -747,6 +808,181 @@ static int make_uevent_socket(void)
 		return -1;
 	}
 	return fd;
+}
+
+static void set_device_battery(struct controller_device *dev, int capacity)
+{
+	bool first = dev->battery < 0;
+
+	if (dev->battery == capacity)
+		return;
+	dev->battery = capacity;
+	if (bus_conn != NULL)
+		emit_devices_changed(bus_conn);
+	if (first && monotonic_ms() - dev->connected_ms < BATTERY_LATE_UPDATE_MS)
+		notify_controller("UPDATE", "controller.connected", dev);
+	if (capacity > BATTERY_REARM_PERCENT) {
+		dev->battery_low_sent = false;
+	} else if (capacity <= BATTERY_LOW_PERCENT && !dev->battery_low_sent) {
+		dev->battery_low_sent = true;
+		notify_controller_battery_low(dev);
+	}
+}
+
+/* Battery1 from BlueZ wins over the kernel HID battery for that device. */
+static void set_bluez_battery(const char *address, int capacity)
+{
+	if (capacity < 0 || capacity > 100)
+		return;
+	for (size_t i = 0; i < device_count; i++) {
+		struct controller_device *dev = &devices[i];
+
+		if (dev->builtin || strcmp(dev->bt_address, address) != 0)
+			continue;
+		if (!dev->battery_from_bluez)
+			dev->battery = -1;
+		dev->battery_from_bluez = true;
+		if (dev->battery != capacity)
+			set_device_battery(dev, capacity);
+	}
+}
+
+/* /org/bluez/hciN/dev_AA_BB_CC_DD_EE_FF -> AA:BB:CC:DD:EE:FF */
+static bool bluez_path_address(const char *path, char *out, size_t out_size)
+{
+	const char *dev = path ? strstr(path, "/dev_") : NULL;
+	size_t i;
+
+	if (dev == NULL || out_size < 18 || strlen(dev + 5) != 17)
+		return false;
+	for (i = 0; i < 17; i++)
+		out[i] = dev[5 + i] == '_' ? ':' : dev[5 + i];
+	out[17] = '\0';
+	return true;
+}
+
+static int battery_from_properties(DBusMessageIter *dict)
+{
+	while (dbus_message_iter_get_arg_type(dict) == DBUS_TYPE_DICT_ENTRY) {
+		DBusMessageIter entry, variant;
+		const char *key = NULL;
+
+		dbus_message_iter_recurse(dict, &entry);
+		dbus_message_iter_get_basic(&entry, &key);
+		dbus_message_iter_next(&entry);
+		dbus_message_iter_recurse(&entry, &variant);
+		dbus_message_iter_next(dict);
+		if (strcmp(key, "Percentage") == 0 &&
+		    dbus_message_iter_get_arg_type(&variant) == DBUS_TYPE_BYTE) {
+			unsigned char value;
+
+			dbus_message_iter_get_basic(&variant, &value);
+			return value;
+		}
+	}
+	return -1;
+}
+
+/* Battery1 PropertiesChanged / InterfacesAdded from BlueZ. */
+static DBusHandlerResult bluez_battery_filter(DBusConnection *conn,
+					      DBusMessage *message, void *data)
+{
+	DBusMessageIter iter, dict;
+	const char *text = NULL;
+	char address[18];
+	int capacity = -1;
+
+	(void)conn; (void)data;
+	if (dbus_message_is_signal(message, DBUS_INTERFACE_PROPERTIES,
+				   "PropertiesChanged")) {
+		if (!bluez_path_address(dbus_message_get_path(message), address,
+					sizeof(address)) ||
+		    !dbus_message_iter_init(message, &iter) ||
+		    dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING)
+			return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+		dbus_message_iter_get_basic(&iter, &text);
+		if (strcmp(text, BLUEZ_BATTERY_IFACE) != 0 ||
+		    !dbus_message_iter_next(&iter) ||
+		    dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
+			return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+		dbus_message_iter_recurse(&iter, &dict);
+		capacity = battery_from_properties(&dict);
+	} else if (dbus_message_is_signal(message, "org.freedesktop.DBus.ObjectManager",
+					  "InterfacesAdded")) {
+		DBusMessageIter ifaces;
+
+		if (!dbus_message_iter_init(message, &iter) ||
+		    dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_OBJECT_PATH)
+			return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+		dbus_message_iter_get_basic(&iter, &text);
+		if (!bluez_path_address(text, address, sizeof(address)) ||
+		    !dbus_message_iter_next(&iter) ||
+		    dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
+			return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+		dbus_message_iter_recurse(&iter, &ifaces);
+		while (dbus_message_iter_get_arg_type(&ifaces) == DBUS_TYPE_DICT_ENTRY) {
+			DBusMessageIter entry;
+			const char *name = NULL;
+
+			dbus_message_iter_recurse(&ifaces, &entry);
+			dbus_message_iter_get_basic(&entry, &name);
+			dbus_message_iter_next(&entry);
+			if (strcmp(name, BLUEZ_BATTERY_IFACE) == 0) {
+				dbus_message_iter_recurse(&entry, &dict);
+				capacity = battery_from_properties(&dict);
+				break;
+			}
+			dbus_message_iter_next(&ifaces);
+		}
+	} else {
+		return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+	}
+
+	if (capacity >= 0)
+		set_bluez_battery(address, capacity);
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+
+/* Battery1 already present when the controller's input node appears. */
+static void query_bluez_batteries(DBusConnection *conn)
+{
+	for (size_t i = 0; i < device_count; i++) {
+		struct controller_device *dev = &devices[i];
+		DBusMessage *msg, *reply;
+		DBusMessageIter iter, variant;
+		const char *iface = BLUEZ_BATTERY_IFACE;
+		const char *prop = "Percentage";
+		char path[64];
+
+		if (dev->builtin || dev->bt_address[0] == '\0' ||
+		    dev->battery_from_bluez)
+			continue;
+		snprintf(path, sizeof(path), "/org/bluez/hci0/dev_%s", dev->bt_address);
+		for (char *c = path; *c; c++)
+			if (*c == ':')
+				*c = '_';
+		msg = dbus_message_new_method_call("org.bluez", path,
+						   DBUS_INTERFACE_PROPERTIES, "Get");
+		if (msg == NULL)
+			continue;
+		dbus_message_append_args(msg, DBUS_TYPE_STRING, &iface,
+					 DBUS_TYPE_STRING, &prop, DBUS_TYPE_INVALID);
+		reply = dbus_connection_send_with_reply_and_block(conn, msg, 500, NULL);
+		dbus_message_unref(msg);
+		if (reply == NULL)
+			continue;
+		if (dbus_message_iter_init(reply, &iter) &&
+		    dbus_message_iter_get_arg_type(&iter) == DBUS_TYPE_VARIANT) {
+			dbus_message_iter_recurse(&iter, &variant);
+			if (dbus_message_iter_get_arg_type(&variant) == DBUS_TYPE_BYTE) {
+				unsigned char value;
+
+				dbus_message_iter_get_basic(&variant, &value);
+				set_bluez_battery(dev->bt_address, value);
+			}
+		}
+		dbus_message_unref(reply);
+	}
 }
 
 /*
@@ -803,19 +1039,11 @@ static void handle_battery_uevent(const char *buf, size_t len)
 
 	for (size_t i = 0; i < device_count; i++) {
 		struct controller_device *dev = &devices[i];
-		bool first = dev->battery < 0;
 
-		if (dev->builtin || !battery_belongs_to(devpath, dev->sys_parent))
+		if (dev->builtin || !kernel_battery_trusted(dev) ||
+		    !battery_belongs_to(devpath, dev->sys_parent))
 			continue;
-		dev->battery = capacity;
-		if (first && monotonic_ms() - dev->connected_ms < BATTERY_LATE_UPDATE_MS)
-			notify_controller("UPDATE", "controller.connected", dev);
-		if (capacity > BATTERY_REARM_PERCENT) {
-			dev->battery_low_sent = false;
-		} else if (capacity <= BATTERY_LOW_PERCENT && !dev->battery_low_sent) {
-			dev->battery_low_sent = true;
-			notify_controller_battery_low(dev);
-		}
+		set_device_battery(dev, capacity);
 	}
 }
 
@@ -1284,7 +1512,7 @@ static bool append_devices_array(DBusMessageIter *parent)
 	DBusMessageIter array;
 	size_t i;
 
-	if (!dbus_message_iter_open_container(parent, DBUS_TYPE_ARRAY, "(sssbbii)", &array))
+	if (!dbus_message_iter_open_container(parent, DBUS_TYPE_ARRAY, "(sssbbiii)", &array))
 		return false;
 
 	for (i = 0; i < device_count; i++) {
@@ -1296,6 +1524,8 @@ static bool append_devices_array(DBusMessageIter *parent)
 		dbus_bool_t builtin = devices[i].builtin;
 		dbus_int32_t preferred = devices[i].preferred_player;
 		dbus_int32_t effective = devices[i].effective_player;
+		/* Accessory battery percent, -1 when unknown. */
+		dbus_int32_t battery = devices[i].battery;
 
 		if (!dbus_message_iter_open_container(&array, DBUS_TYPE_STRUCT, NULL, &st))
 			return false;
@@ -1306,6 +1536,7 @@ static bool append_devices_array(DBusMessageIter *parent)
 		dbus_message_iter_append_basic(&st, DBUS_TYPE_BOOLEAN, &builtin);
 		dbus_message_iter_append_basic(&st, DBUS_TYPE_INT32, &preferred);
 		dbus_message_iter_append_basic(&st, DBUS_TYPE_INT32, &effective);
+		dbus_message_iter_append_basic(&st, DBUS_TYPE_INT32, &battery);
 		dbus_message_iter_close_container(&array, &st);
 	}
 	return dbus_message_iter_close_container(parent, &array);
@@ -1319,7 +1550,7 @@ static bool append_assignments_array(DBusMessageIter *parent)
 	if (!dbus_message_iter_open_container(parent, DBUS_TYPE_ARRAY, "(issb)", &array))
 		return false;
 
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < MAX_PLAYERS; i++) {
 		DBusMessageIter st;
 		dbus_int32_t player = i + 1;
 		const char *id = prefs[i].id;
@@ -1530,17 +1761,17 @@ static DBusHandlerResult handle_message(DBusConnection *conn,
 					   DBUS_TYPE_STRING, &id,
 					   DBUS_TYPE_STRING, &name,
 					   DBUS_TYPE_INVALID) ||
-		    player < 1 || player > 4) {
+		    player < 1 || player > MAX_PLAYERS) {
 			send_reply(conn, new_error(message,
 				"org.nuubOS.Controllers.Error.InvalidArgument",
-				"Player must be between 1 and 4"));
+				"Player must be between 1 and 8"));
 			dbus_error_free(&error);
 			return DBUS_HANDLER_RESULT_HANDLED;
 		}
 		dbus_error_free(&error);
 
 		if (id[0]) {
-			for (i = 0; i < 4; i++) {
+			for (i = 0; i < MAX_PLAYERS; i++) {
 				if (strcmp(prefs[i].id, id) == 0) {
 					prefs[i].id[0] = '\0';
 					prefs[i].name[0] = '\0';
@@ -2104,6 +2335,18 @@ int main(void)
 	}
 	(void)dbus_connection_get_unix_fd(conn, &dbus_fd);
 
+	dbus_bus_add_match(conn,
+		"type='signal',sender='org.bluez',"
+		"interface='org.freedesktop.DBus.Properties',"
+		"member='PropertiesChanged',arg0='" BLUEZ_BATTERY_IFACE "'", NULL);
+	dbus_bus_add_match(conn,
+		"type='signal',sender='org.bluez',"
+		"interface='org.freedesktop.DBus.ObjectManager',"
+		"member='InterfacesAdded'", NULL);
+	dbus_connection_add_filter(conn, bluez_battery_filter, NULL, NULL);
+	bus_conn = conn;
+	query_bluez_batteries(conn);
+
 	inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 	if (inotify_fd >= 0) {
 		input_watch = inotify_add_watch(inotify_fd, INPUT_DIR,
@@ -2219,6 +2462,7 @@ int main(void)
 					emit_assignments_changed(conn);
 				} else if (input_changed) {
 					rescan_devices(true);
+					query_bluez_batteries(conn);
 					emit_devices_changed(conn);
 					emit_assignments_changed(conn);
 				}
