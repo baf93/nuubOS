@@ -1003,6 +1003,8 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/workspace/.docker-home \
 - Renderer is `renderer-software` (CPU). HDMI 1080p costs; GPU renderer (femtovg/skia on Panfrost) to be evaluated with measurements.
 - Screensaver repaints ~12 fps; display state is not event-driven (forks `displayctl`); test-tone end uses a fixed sleep; listener reconnects use fixed 250/500 ms retries.
 - Wi-Fi scan completion never reaches wifid: `wpa_cli -a` does not forward `CTRL-EVENT-SCAN-RESULTS` to `nuubos-wifi-event`, so `ScanStateChanged false` and scan-session rescans never happen (pre-existing, confirmed 2026-10-05 with the old binary). Root fix: wifid attaches to the wpa_supplicant control socket (`ATTACH`) instead of the action script.
+- `wifid.c` start path waits a fixed `usleep(150000)` after `wpa_supplicant -B` before `wpa_ping()`; remove it with the control-socket rework above.
+- Home main page still shows bring-up placeholder strings (i18n 1/2 "nuubUI graphics foundation", "Native layout • 640×480 • Wayland"); replaced by the Home milestone.
 
 ### 37.9 Idle wakeup discipline
 
