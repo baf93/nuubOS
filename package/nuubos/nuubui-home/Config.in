@@ -7,6 +7,7 @@ config BR2_PACKAGE_NUUBUI_HOME
 	select BR2_PACKAGE_NUUBOS_LOCALIZATION
 	select BR2_PACKAGE_NUUBOS_USERS
 	select BR2_PACKAGE_NUUBOS_REGIONAL
+	select BR2_PACKAGE_NUUBOS_LIBRARY
 	help
 	  nuubUI placeholder Home implemented in Rust + Slint.
 	  Provides the first graphics micro-step with a top bar,

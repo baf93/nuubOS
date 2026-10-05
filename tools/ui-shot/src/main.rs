@@ -24,7 +24,8 @@ fn strings() -> ModelRc<SharedString> {
 
 fn shot(win: &Rc<MinimalSoftwareWindow>, w: u32, h: u32, name: &str) {
     win.set_size(slint::PhysicalSize::new(w, h));
-    std::thread::sleep(std::time::Duration::from_millis(30));
+    // Let 180 ms Home scroll animations settle.
+    std::thread::sleep(std::time::Duration::from_millis(220));
     slint::platform::update_timers_and_animations();
     win.request_redraw();
     let mut buf = vec![PremultipliedRgbaColor::default(); (w * h) as usize];
@@ -262,6 +263,80 @@ fn main() {
             (0..8).map(|i| TopbarController { player: i + 1, battery: batteries[i as usize] })
                 .collect::<Vec<_>>(),
         ))));
+    })));
+    /* Home carousels as built by nuubui-home library.rs (x-units are the
+     * running sum of aspects). Covers are synthetic gradients. */
+    fn cover(w: u32, h: u32, rgb: (u8, u8, u8)) -> slint::Image {
+        let mut buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
+        for (i, p) in buf.make_mut_slice().iter_mut().enumerate() {
+            let y = (i as u32 / w) as f32 / h as f32;
+            let k = 1.0 - 0.6 * y;
+            *p = slint::Rgba8Pixel { r: (rgb.0 as f32 * k) as u8, g: (rgb.1 as f32 * k) as u8, b: (rgb.2 as f32 * k) as u8, a: 255 };
+        }
+        slint::Image::from_rgba8(buf)
+    }
+    fn card(kind: i32, title: &str, detail: &str, system: &str, aspect: f32, accent: u32, img: Option<slint::Image>, available: bool, favorite: bool) -> HomeCard {
+        HomeCard {
+            key: title.into(), kind, title: title.into(), detail: detail.into(), system_name: system.into(),
+            cover_path: "".into(), has_cover: img.is_some(), cover: img.unwrap_or_default(), aspect, x_units: 0.0,
+            accent: slint::Color::from_rgb_u8((accent >> 16) as u8, (accent >> 8) as u8, accent as u8),
+            available, favorite,
+        }
+    }
+    fn units(mut v: Vec<HomeCard>) -> ModelRc<HomeCard> {
+        let mut u = 0.0;
+        for c in v.iter_mut() { c.x_units = u; u += c.aspect; }
+        ModelRc::from(Rc::new(VecModel::from(v)))
+    }
+    let recent = units(vec![
+        card(0, "Super Mario World", "Super Nintendo  •  Last played today  •  Played 2 h 05 min", "Super Nintendo", 1.4, 0x6b5bc4, Some(cover(280, 200, (200, 60, 50))), true, true),
+        card(0, "Crash Bandicoot", "PlayStation  •  Last played yesterday", "PlayStation", 1.0, 0x3d6fb8, Some(cover(240, 240, (230, 120, 30))), true, false),
+        card(0, "Monster Hunter Freedom Unite", "PlayStation Portable  •  Last played 3 days ago", "PlayStation Portable", 0.57, 0x2c2f36, Some(cover(114, 200, (40, 140, 90))), true, false),
+        card(0, "The Legend of Zelda: The Minish Cap", "Game Boy Advance  •  Last played 5 days ago", "Game Boy Advance", 1.0, 0x4b3fb0, None, true, false),
+        card(0, "Sonic the Hedgehog 2", "Unavailable  •  Mega Drive / Genesis", "Mega Drive / Genesis", 0.7, 0x1f4fa8, None, false, false),
+        card(0, "Final Fantasy VII", "PlayStation  •  Last played 12 days ago", "PlayStation", 1.0, 0x3d6fb8, Some(cover(240, 240, (60, 80, 160))), true, true),
+    ]);
+    /* System icons as shipped by nuubos-library. */
+    let icon = |id: &str| slint::Image::load_from_path(std::path::Path::new(
+        &format!("/workspace/package/nuubos/nuubos-library/src/systems/{id}.png"))).ok();
+    let shelf = units(vec![
+        card(1, "Favorites", "4 games", "", 1.6, 0x7a5a14, None, true, false),
+        card(2, "RPG Classics", "12 games", "", 1.6, 0x2d3f66, None, true, false),
+        card(3, "Super Nintendo", "48 games", "", 1.6, 0x6b5bc4, icon("snes"), true, false),
+        card(3, "PlayStation", "23 games", "", 1.6, 0x3d6fb8, icon("psx"), true, false),
+        card(3, "Game Boy Advance", "61 games", "", 1.6, 0x4b3fb0, icon("gba"), true, false),
+        card(3, "Mega Drive / Genesis", "1 game", "", 1.6, 0x1f4fa8, icon("megadrive"), true, false),
+        card(3, "PICO-8", "3 games", "", 1.6, 0xff004d, None, true, false),
+    ]);
+    let apps = units(vec![
+        card(4, "Moonlight", "", "", 1.0, 0x1a1d22, Some(cover(96, 96, (90, 160, 255))), true, false),
+        card(4, "Steam Link", "", "", 1.0, 0x1a1d22, None, true, false),
+        card(4, "Media Player", "", "", 1.0, 0x1a1d22, None, true, false),
+    ]);
+    let grid = units((0..14).map(|i| {
+        let t = ["Chrono Trigger", "Donkey Kong Country", "EarthBound", "F-Zero", "Final Fantasy VI", "Kirby Super Star", "Mega Man X",
+                 "Secret of Mana", "Star Fox", "Super Castlevania IV", "Super Mario Kart", "Super Metroid", "Yoshi's Island", "Zelda: A Link to the Past"][i];
+        let img = if i % 3 == 0 { Some(cover(280, 200, (50 + (i as u8) * 12, 90, 160))) } else { None };
+        card(0, t, "Super Nintendo  •  Never played", "Super Nintendo", 1.4, 0x6b5bc4, img, true, i == 2)
+    }).collect());
+    scenes.push(("home_recent", Box::new(move |ui| {
+        ui.set_topbar_controllers(ModelRc::default());
+        ui.set_audio_bluetooth_available(false);
+        ui.set_home_recent(recent.clone()); ui.set_home_shelf(shelf.clone()); ui.set_home_apps(apps.clone());
+        ui.set_home_row(0); ui.set_home_recent_index(0); ui.set_context_face_position(0); ui.set_select_face_position(1);
+    })));
+    scenes.push(("home_recent_end", Box::new(|ui| { ui.set_home_recent_index(5); })));
+    scenes.push(("home_shelf", Box::new(|ui| { ui.set_home_row(1); ui.set_home_shelf_index(2); })));
+    scenes.push(("home_apps", Box::new(|ui| { ui.set_home_row(2); ui.set_home_apps_index(0); ui.set_library_scanning(true); })));
+    scenes.push(("home_grid", Box::new(move |ui| {
+        ui.set_library_scanning(false);
+        ui.set_library_games(grid.clone()); ui.set_library_aspect(1.4); ui.set_library_title("Super Nintendo".into());
+        ui.set_library_detail("14 games".into()); ui.set_library_index(2); ui.set_library_open(true);
+    })));
+    scenes.push(("home_grid_scrolled", Box::new(|ui| { ui.set_library_index(12); })));
+    scenes.push(("home_notice", Box::new(|ui| {
+        ui.set_library_open(false); ui.set_home_row(0); ui.set_home_recent_index(1);
+        ui.set_home_notice(ui.get_i18n_strings().row_data(411).unwrap_or_default());
     })));
     for (name, f) in &scenes {
         f(&ui);

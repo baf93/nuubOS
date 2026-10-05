@@ -1,3 +1,4 @@
+mod library;
 mod splash;
 slint::include_modules!();
 
@@ -297,6 +298,7 @@ fn apply_language(ui: &HomeWindow, code: &str) {
     }
     ui.set_ui_language_code(code.into());
     ui.set_ui_language_name(language_name(code).into());
+    library::relocalize(ui);
 }
 
 fn tr(ui: &HomeWindow, index: usize, fallback: &str) -> String {
@@ -4112,7 +4114,10 @@ fn input_command(command: &str) -> std::io::Result<String> {
     Ok(reply)
 }
 
-fn set_settings_capture(enabled: bool) {
+/* Controller navigation capture for the foreground nuubUI (Home, library,
+ * Settings, OOB). inputd still calls it the Settings capture; it is
+ * released only when the UI exits (later: while a game/app runs). */
+fn set_ui_capture(enabled: bool) {
     let command = if enabled {
         "SETTINGS OPEN"
     } else {
@@ -4154,6 +4159,11 @@ fn refresh_hint_mapping(ui: &HomeWindow) {
     );
     ui.set_back_face_position(
         binding_code("menu_back")
+            .map(face_position)
+            .unwrap_or(-1),
+    );
+    ui.set_context_face_position(
+        binding_code("face_north")
             .map(face_position)
             .unwrap_or(-1),
     );
@@ -4242,7 +4252,6 @@ fn handle_settings_action(
         match view {
             0 => {
                 settings_active.store(false, Ordering::SeqCst);
-                set_settings_capture(false);
                 ui.set_settings_open(false);
                 write_ui_context("home");
             }
@@ -5030,9 +5039,7 @@ fn start_input_listener(
                     continue;
                 }
 
-                if settings_active.load(Ordering::SeqCst) || OOB_ACTIVE.load(Ordering::SeqCst) {
-                    set_settings_capture(true);
-                }
+                set_ui_capture(true);
 
                 let mut reader = BufReader::new(stream);
                 let mut line = String::new();
@@ -5126,7 +5133,7 @@ fn start_input_listener(
                                     continue;
                                 }
                                 play_ui_sound("settings");
-                                set_settings_capture(true);
+                                set_ui_capture(true);
                                 let weak = weak.clone();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(ui) = weak.upgrade() {
@@ -5151,6 +5158,26 @@ fn start_input_listener(
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(ui) = weak.upgrade() {
                                         handle_settings_action(&ui, &action, &settings_active);
+                                    }
+                                });
+                                continue;
+                            }
+
+                            /* Home carousels / library grid. */
+                            if !settings_active.load(Ordering::SeqCst) &&
+                                !user_picker_active.load(Ordering::SeqCst) &&
+                                !power_active.load(Ordering::SeqCst) &&
+                                matches!(
+                                    fields[2],
+                                    "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+                                    "menu_confirm" | "menu_back" | "face_north"
+                                )
+                            {
+                                let action = fields[2].to_owned();
+                                let weak = weak.clone();
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(ui) = weak.upgrade() {
+                                        library::handle_home_action(&ui, &action);
                                     }
                                 });
                             }
@@ -5214,7 +5241,7 @@ fn enter_oob(ui:&HomeWindow){
     ui.set_settings_view(30);
     ui.set_settings_open(true);
     write_ui_context("oob");
-    thread::spawn(||set_settings_capture(true));
+    thread::spawn(||set_ui_capture(true));
 }
 
 fn leave_oob(ui:&HomeWindow){
@@ -5225,7 +5252,6 @@ fn leave_oob(ui:&HomeWindow){
     ui.set_settings_open(false);
     ui.set_oob_active(false);
     write_ui_context("home");
-    thread::spawn(||set_settings_capture(false));
 }
 
 fn oob_go(ui:&HomeWindow,step:i32){
@@ -5526,6 +5552,8 @@ fn main() -> Result<(), slint::PlatformError> {
     start_rumble_listener(&ui);
     start_lighting_listener(&ui);
     start_audio_product_listener(&ui);
+    library::start_cover_loader(&ui);
+    library::start_library_listener(&ui);
     let system_info_gate = Arc::new((Mutex::new(false), Condvar::new()));
     let _ = SYSTEM_INFO_GATE.set(system_info_gate.clone());
     start_system_info_live(&ui, system_info_gate);
@@ -5573,9 +5601,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let result = ui.run();
 
-    if settings_active.load(Ordering::SeqCst) {
-        set_settings_capture(false);
-    }
+    set_ui_capture(false);
 
     stop_home_music_session();
     clear_ready();

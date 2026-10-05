@@ -1,0 +1,9 @@
+config BR2_PACKAGE_NUUBOS_LIBRARY
+	bool "nuubOS game library service"
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	help
+	  Game Library / ROM Discovery service (EPIC-011, EPIC-012,
+	  EPIC-020 baseline): central system registry, background
+	  reconciliation of /userdata/roms into a shared catalog,
+	  per-user play history, favorites and collections, and the
+	  installed applications registry consumed by Home.

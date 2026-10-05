@@ -55,6 +55,8 @@ static struct binding bindings[] = {
 	{ "menu_right", 547 },
 	{ "menu_confirm", 305 },
 	{ "menu_back", 304 },
+	/* Contextual UI action (EPIC-001 X/Y): e.g. Favorite on Home. */
+	{ "face_north", 307 },
 	/*
 	 * Physical console power is a device-global semantic action.  It is
 	 * deliberately not owned by Settings or Quick Menu and is delivered to
@@ -555,7 +557,8 @@ static void load_bindings(void)
 	bindings[5].code = 547;
 	bindings[6].code = 305;
 	bindings[7].code = 304;
-	bindings[8].code = KEY_POWER;
+	bindings[8].code = 307;
+	bindings[9].code = KEY_POWER;
 
 	load_config_file(DEFAULT_CONFIG);
 	load_config_file(STATE_CONFIG);
@@ -1067,7 +1070,8 @@ static bool action_is_navigation(const char *action)
 	       strcmp(action, "menu_left") == 0 ||
 	       strcmp(action, "menu_right") == 0 ||
 	       strcmp(action, "menu_confirm") == 0 ||
-	       strcmp(action, "menu_back") == 0;
+	       strcmp(action, "menu_back") == 0 ||
+	       strcmp(action, "face_north") == 0;
 }
 
 static bool client_wants_action(const struct client *client,

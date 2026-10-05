@@ -1,0 +1,41 @@
+nuubOS system icons
+===================
+
+The <system>.png icons in this directory are the "XMB Monochrome" theme
+icons from the libretro RetroArch assets repository, redistributed
+unmodified (only the file names were changed to nuubOS system ids):
+
+  https://github.com/libretro/retroarch-assets/tree/master/xmb/monochrome/png
+  commit d9f969054dc7fbb6fa89519036d2b971e0855b51
+
+Copyright (c) libretro / RetroArch assets contributors.
+Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0),
+see LICENSE-CC-BY-4.0.txt.
+
+File name mapping (nuubOS id <- original file):
+  nes.png <- Nintendo - Nintendo Entertainment System.png
+  snes.png <- Nintendo - Super Nintendo Entertainment System.png
+  n64.png <- Nintendo - Nintendo 64.png
+  gb.png <- Nintendo - Game Boy.png
+  gbc.png <- Nintendo - Game Boy Color.png
+  gba.png <- Nintendo - Game Boy Advance.png
+  nds.png <- Nintendo - Nintendo DS.png
+  virtualboy.png <- Nintendo - Virtual Boy.png
+  mastersystem.png <- Sega - Master System - Mark III.png
+  megadrive.png <- Sega - Mega Drive - Genesis.png
+  segacd.png <- Sega - Mega-CD - Sega CD.png
+  sega32x.png <- Sega - 32X.png
+  gamegear.png <- Sega - Game Gear.png
+  saturn.png <- Sega - Saturn.png
+  dreamcast.png <- Sega - Dreamcast.png
+  psx.png <- Sony - PlayStation.png
+  psp.png <- Sony - PlayStation Portable.png
+  pcengine.png <- NEC - PC Engine - TurboGrafx 16.png
+  neogeo.png <- SNK - Neo Geo.png
+  arcade.png <- FBNeo - Arcade Games.png
+  ngp.png <- SNK - Neo Geo Pocket.png
+  wonderswan.png <- Bandai - WonderSwan.png
+  lynx.png <- Atari - Lynx.png
+  atari2600.png <- Atari - 2600.png
+
+pico8 has no icon in this set; the UI shows its generic gamepad glyph.
