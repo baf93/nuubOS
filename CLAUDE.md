@@ -360,15 +360,14 @@ Device-side General includes concepts such as:
 
 The OOB/first-boot experience is deliberately minimal and controller-first.
 
-Reference flow:
+Reference flow (EPIC-002, confirmed by the user 2026-10-05; there is NO Language step — language stays a per-user Settings preference):
 
 1. Welcome
-2. Language
-3. User
-4. Network
-5. Date & Time
-6. Ready
-7. Home
+2. Date & Time (timezone, automatic time, manual date/time)
+3. Wi-Fi (skippable)
+4. Users (create one or more users: username + avatar; Startup/Boot User when more than one)
+5. Ready
+6. Home (or the user picker when the login mode requires it)
 
 Requirements:
 
@@ -796,7 +795,7 @@ Do not interpret this as permission to skip blockers discovered in the current s
 
 The most recent frozen emulation decision is the hybrid RetroArch model described above.
 
-The most recent frozen OOB flow is Welcome → Language → User → Network → Date & Time → Ready → Home.
+The most recent frozen OOB flow is Welcome → Date & Time → Wi-Fi [Skip] → Users → Ready → Home (EPIC-002). The OOB is implemented (2026-10-05); see §37.10.
 
 ## 33. How Claude Code should work on every task
 
@@ -1004,6 +1003,8 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/workspace/.docker-home \
 - Screensaver repaints ~12 fps; display state is not event-driven (forks `displayctl`); test-tone end uses a fixed sleep; listener reconnects use fixed 250/500 ms retries.
 - Wi-Fi scan completion never reaches wifid: `wpa_cli -a` does not forward `CTRL-EVENT-SCAN-RESULTS` to `nuubos-wifi-event`, so `ScanStateChanged false` and scan-session rescans never happen (pre-existing, confirmed 2026-10-05 with the old binary). Root fix: wifid attaches to the wpa_supplicant control socket (`ATTACH`) instead of the action script.
 - `wifid.c` start path waits a fixed `usleep(150000)` after `wpa_supplicant -B` before `wpa_ping()`; remove it with the control-socket rework above.
+- Automatic time does not sync when the network comes up: regionald only syncs every 6 h (`RESYNC_SEC`) or on `SYNC_NOW`. EPIC-002 US-ONB-002 / EPIC-053 expect NTP as soon as connectivity appears (e.g. right after the OOB Wi-Fi step). Needs a network-up event into regionald (udhcpc `bound` or wifid state), not a UI-side sync.
+- controllersd/rumbled/lightingd store preferences under the pseudo-user `/state/users/default` while no user is active (user picker, OOB); those values never migrate to the user created afterwards. S03 ignores non-UUID directories since 2026-10-05 (it used to abort `start_state` on them, skipping network/Bluetooth/SSH setup).
 - Home main page still shows bring-up placeholder strings (i18n 1/2 "nuubUI graphics foundation", "Native layout • 640×480 • Wayland"); replaced by the Home milestone.
 
 ### 37.9 Idle wakeup discipline
@@ -1014,3 +1015,11 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/workspace/.docker-home \
 - glibc `time()` reads the coarse clock and lags the timerfd by a tick; use `clock_gettime(CLOCK_REALTIME)` for wall-clock display. statusd's minute tick is a `CLOCK_REALTIME` absolute timerfd with `TFD_TIMER_CANCEL_ON_SET`; zone changes come from an inotify watch on `/etc/localtime` + `tzset()`.
 - System service supports only `auto`/`battery-saver` (no Performance profile).
 - Unsupported rumble/RGB rows are shown as "Unavailable" instead of hidden.
+
+### 37.10 Initial setup / OOB (EPIC-002)
+
+- State owner: `nuubos-usersd`. `SETUP_COMPLETE=0|1` in `/state/config/nuubos.conf`; STATUS/SUBSCRIBE snapshots carry `setup_complete=`; `selection_required` is 0 while setup is pending. `COMPLETE_SETUP` (≥1 user, else `ERR no users`) fixes DEFAULT_USER if invalid, activates the default user when there is one user or login mode DEFAULT (before committing the flag, so a failed activation stays resumable), then writes the flag. `nuubos-usersctl complete-setup` does the same.
+- S03: config v6. New configs get `SETUP_COMPLETE=0`; v1–v5 migrate to v6 with `SETUP_COMPLETE=1` only if a user profile exists (dev cards provisioned by `scripts/provision-state.sh` without users still get the OOB). While pending, S03 creates no "Player 1" and publishes no active user. A missing key in usersd counts as complete.
+- UI (nuubui-home): `apply_users()` enters/leaves the OOB from the usersd snapshot (`enter_oob`/`leave_oob`, static `OOB_ACTIVE` routes input to `handle_oob_action`, Start is ignored, ui-context `oob` hides QM Switch User, inputd settings capture on). Steps: 0 Welcome and 4 Ready full-screen (`oob-hero`); 1 Date & Time = settings-view 30, 2 Wi-Fi = 31 (+ reused 2/4/6), 3 Users = 32 (+ reused 26 user detail, keyboard purpose 9). The Settings rail shows the steps. Date & Time rows share `date_time_row_action()` with General rows 6–9. Every step commits immediately through the owning service, so an interrupted OOB restarts at Welcome with committed values kept.
+- Creating a user (OOB or Settings → Manage Users) opens the avatar picker on the new user.
+- Test on target without reflashing: `sed -i 's/^SETUP_COMPLETE=.*/SETUP_COMPLETE=0/' /state/config/nuubos.conf` then `reboot` (existing users stay and are listed in the Users step). Headless: `tools/ui-shot/run.sh` renders `oob_*` scenes.

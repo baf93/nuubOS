@@ -90,10 +90,11 @@ sudo chmod 700 \
 
 if [[ ! -f "$MOUNT_DIR/config/nuubos.conf" ]]; then
     sudo tee "$MOUNT_DIR/config/nuubos.conf" >/dev/null <<'EOF2'
-NUUBOS_CONFIG_VERSION=5
+NUUBOS_CONFIG_VERSION=6
 STORAGE_MODE=AUTO
 USER_LOGIN_MODE=AUTO
 POWER_MODE=AUTO
+SETUP_COMPLETE=0
 EOF2
 fi
 

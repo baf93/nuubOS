@@ -36,6 +36,9 @@ const CURTAIN_STAGE_MS: u64 = 460;
 const STAGE_GAP_MS: u64 = 18;
 
 static SYSTEM_INFO_GATE: OnceLock<Arc<(Mutex<bool>, Condvar)>> = OnceLock::new();
+/* Initial setup (OOB) is running: controller navigation belongs to it. The
+ * state itself is owned by nuubos-usersd (setup_complete). */
+static OOB_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn set_system_info_live(active: bool) {
     if let Some(gate) = SYSTEM_INFO_GATE.get() {
@@ -370,7 +373,7 @@ fn open_language_dropdown(ui: &HomeWindow) {
 }
 
 #[derive(Clone,Default)] struct UEntry{id:String,name:String,spec:String,path:String,active:bool,default_user:bool}
-#[derive(Clone,Default)] struct USnap{active:String,mode:String,default_user:String,last_user:String,selection:bool,switch_requested:bool,users:Vec<UEntry>}
+#[derive(Clone,Default)] struct USnap{active:String,mode:String,default_user:String,last_user:String,setup:bool,selection:bool,switch_requested:bool,users:Vec<UEntry>}
 #[derive(Clone,Default)] struct RSnap{timezone:String,auto_time:bool,keyboard:String,last_sync:i64,local_date:String,local_time:String}
 fn product_command_timeout(path:&str,cmd:&str,timeout:Duration)->std::io::Result<String>{let mut x=UnixStream::connect(path)?;x.set_read_timeout(Some(timeout))?;x.write_all(cmd.as_bytes())?;if !cmd.ends_with('\n'){x.write_all(b"\n")?;}x.shutdown(std::net::Shutdown::Write)?;let mut r=String::new();x.read_to_string(&mut r)?;Ok(r)}
 fn product_command(path:&str,cmd:&str)->std::io::Result<String>{product_command_timeout(path,cmd,Duration::from_secs(2))}
@@ -407,7 +410,7 @@ fn round_avatar(src:&Image)->Option<Image>{
     Some(Image::from_rgba8_premultiplied(out))
 }
 fn avatar_image(p:&str)->Image{if p.is_empty(){return Image::default();}let img=Image::load_from_path(Path::new(p)).unwrap_or_default();round_avatar(&img).unwrap_or(img)}
-fn parse_users(r:&str)->USnap{let mut o=USnap{mode:"select".into(),..Default::default()};for l in r.lines(){if let Some(v)=l.strip_prefix("active="){o.active=v.into();}else if let Some(v)=l.strip_prefix("login_mode="){o.mode=v.into();}else if let Some(v)=l.strip_prefix("default_user="){o.default_user=v.into();}else if let Some(v)=l.strip_prefix("last_user="){o.last_user=v.into();}else if let Some(v)=l.strip_prefix("selection_required="){o.selection=v=="1";}else if let Some(v)=l.strip_prefix("switch_requested="){o.switch_requested=v=="1";}else if let Some(v)=l.strip_prefix("user="){let f:Vec<&str>=v.split('\t').collect();if f.len()>=6{o.users.push(UEntry{id:f[0].into(),name:f[1].into(),spec:f[2].into(),path:f[3].into(),active:f[4]=="1",default_user:f[5]=="1"});}}}o}
+fn parse_users(r:&str)->USnap{let mut o=USnap{mode:"select".into(),setup:true,..Default::default()};for l in r.lines(){if let Some(v)=l.strip_prefix("active="){o.active=v.into();}else if let Some(v)=l.strip_prefix("login_mode="){o.mode=v.into();}else if let Some(v)=l.strip_prefix("default_user="){o.default_user=v.into();}else if let Some(v)=l.strip_prefix("last_user="){o.last_user=v.into();}else if let Some(v)=l.strip_prefix("setup_complete="){o.setup=v!="0";}else if let Some(v)=l.strip_prefix("selection_required="){o.selection=v=="1";}else if let Some(v)=l.strip_prefix("switch_requested="){o.switch_requested=v=="1";}else if let Some(v)=l.strip_prefix("user="){let f:Vec<&str>=v.split('\t').collect();if f.len()>=6{o.users.push(UEntry{id:f[0].into(),name:f[1].into(),spec:f[2].into(),path:f[3].into(),active:f[4]=="1",default_user:f[5]=="1"});}}}o}
 fn apply_users(ui:&HomeWindow,s:&USnap,picker:&Arc<AtomicBool>){
     let rows:Vec<UserProfileEntry>=s.users.iter().map(|u|UserProfileEntry{
         id:u.id.clone().into(),
@@ -446,8 +449,27 @@ fn apply_users(ui:&HomeWindow,s:&USnap,picker:&Arc<AtomicBool>){
         ui.set_current_user_avatar(Image::default());
         ui.set_current_user_avatar_available(false);
     }
+    /* Keep the user detail page live for a user other than the active one. */
+    let edit=ui.get_profile_edit_user_id().to_string();
+    if !edit.is_empty() && edit!=s.active {
+        if let Some(u)=s.users.iter().find(|u|u.id==edit){
+            ui.set_profile_edit_name(u.name.clone().into());
+            ui.set_profile_edit_avatar_spec(u.spec.clone().into());
+            ui.set_profile_edit_avatar(avatar_image(&u.path));
+        }
+    }
 
-    let open=s.selection||s.switch_requested;
+    /* Initial setup gates the session: no user picker while the OOB runs. */
+    let oob=!s.setup;
+    if oob!=ui.get_oob_active(){
+        if oob{enter_oob(ui);}else{leave_oob(ui);}
+    }
+    if oob&&ui.get_settings_view()==32{
+        ui.set_oob_index(ui.get_oob_index().clamp(0,oob_users_rows(ui)-1));
+        update_oob_users_scroll(ui);
+    }
+
+    let open=!oob&&(s.selection||s.switch_requested);
     if open&&!ui.get_user_picker_open(){
         let i=s.users.iter()
             .position(|u|u.id==s.last_user)
@@ -479,6 +501,7 @@ fn update_general_scroll(ui:&HomeWindow){
     ));
 }
 fn update_user_scroll(ui:&HomeWindow){ui.set_user_list_scroll(guarded_scroll_offset(ui.get_user_list_index(),ui.get_user_count()+1,ui.get_settings_list_visible_rows(),ui.get_user_list_scroll()));}fn update_avatar_scroll(ui:&HomeWindow){ui.set_avatar_picker_scroll(guarded_scroll_offset(ui.get_avatar_picker_index(),ui.get_avatar_choices().row_count() as i32,5,ui.get_avatar_picker_scroll()));}
+fn users_page_view(ui:&HomeWindow)->i32{if ui.get_oob_active(){32}else{25}}
 fn open_user(ui:&HomeWindow,u:UserProfileEntry,v:i32){ui.set_profile_edit_user_id(u.id);ui.set_profile_edit_name(u.name);ui.set_profile_edit_avatar_spec(u.avatar_spec);ui.set_profile_edit_avatar(u.avatar);ui.set_profile_index(0);ui.set_user_delete_confirm(false);navigate_settings_view(ui,v);}fn open_active_user(ui:&HomeWindow){for i in 0..ui.get_users().row_count(){if let Some(u)=ui.get_users().row_data(i){if u.active{open_user(ui,u,24);return;}}}}fn open_selected_user(ui:&HomeWindow){if let Some(u)=ui.get_users().row_data(ui.get_user_list_index().max(0) as usize){open_user(ui,u,26);}}
 fn open_avatar_picker(ui:&HomeWindow){let id=ui.get_profile_edit_user_id().to_string();let weak=ui.as_weak();thread::spawn(move||if let Ok(r)=users_command(&format!("LIST_AVATARS\t{}",id)){let mut raw=Vec::new();for l in r.lines(){if let Some(v)=l.strip_prefix("avatar="){let f:Vec<&str>=v.split('\t').collect();if f.len()>=3{raw.push((f[0].to_owned(),f[1].to_owned(),f[2].to_owned()));}}}let _=slint::invoke_from_event_loop(move||if let Some(ui)=weak.upgrade(){let rows:Vec<AvatarChoiceEntry>=raw.into_iter().map(|(spec,label,path)|{let lab=if let Some(n)=spec.strip_prefix("builtin:"){tr_arg(&ui,314,"Avatar {0}",n)}else{label};AvatarChoiceEntry{spec:spec.into(),label:lab.into(),path:path.clone().into(),avatar:avatar_image(&path)}}).collect();ui.set_avatar_choices(ModelRc::from(Rc::new(VecModel::from(rows))));ui.set_avatar_picker_index(0);ui.set_avatar_picker_scroll(0);ui.set_avatar_picker_open(true);});});}
 fn timezone_region(zone:&str)->String{
@@ -3505,7 +3528,25 @@ fn finish_system_keyboard(ui: &HomeWindow) {
             bluetooth_pair_with_pin(ui, address, value);
         }
         8 => { if value.trim().is_empty(){return;} let id=ui.get_profile_edit_user_id().to_string();let name=value.trim().to_owned();navigate_settings_view(ui,return_view);ui.set_keyboard_value("".into());thread::spawn(move||{let _=users_command(&format!("SET_NAME	{}	{}",id,name));}); }
-        9 => { if value.trim().is_empty(){return;} let name=value.trim().to_owned();navigate_settings_view(ui,25);ui.set_keyboard_value("".into());thread::spawn(move||{let _=users_command(&format!("CREATE	{}",name));}); }
+        9 => {
+            if value.trim().is_empty(){return;}
+            let name=value.trim().to_owned();
+            navigate_settings_view(ui,return_view);
+            ui.set_keyboard_value("".into());
+            /* A new user also needs a profile picture: open the picker on it. */
+            let w=ui.as_weak();
+            thread::spawn(move||{
+                let id=users_command(&format!("CREATE\t{}",name)).ok()
+                    .and_then(|r|r.trim().strip_prefix("OK ").map(str::to_owned));
+                if let Some(id)=id{
+                    let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){
+                        ui.set_profile_edit_user_id(id.into());
+                        ui.set_profile_edit_name(name.into());
+                        open_avatar_picker(&ui);
+                    });
+                }
+            });
+        }
         _ => navigate_settings_view(ui, return_view),
     }
 }
@@ -4731,10 +4772,10 @@ fn handle_settings_action(
                 }
             }
         },
-        23 => match action {"menu_up"=>{ui.set_general_index(move_model_selection(ui.get_general_index(),12,-1));update_general_scroll(ui);},"menu_down"=>{ui.set_general_index(move_model_selection(ui.get_general_index(),12,1));update_general_scroll(ui);},"menu_left" if !ui.get_automatic_time() && ui.get_general_index()==8=>{thread::spawn(move||{let _=regional_command("ADJUST_LOCAL_DAYS	-1");});},"menu_right" if !ui.get_automatic_time() && ui.get_general_index()==8=>{thread::spawn(move||{let _=regional_command("ADJUST_LOCAL_DAYS	1");});},"menu_left" if !ui.get_automatic_time() && ui.get_general_index()==9=>{thread::spawn(move||{let _=regional_command("ADJUST_LOCAL_MINUTES	-1");});},"menu_right" if !ui.get_automatic_time() && ui.get_general_index()==9=>{thread::spawn(move||{let _=regional_command("ADJUST_LOCAL_MINUTES	1");});},"menu_confirm"=>match ui.get_general_index(){0=>open_active_user(ui),1=>open_language_dropdown(ui),3=>{ui.set_user_list_index(0);ui.set_user_list_scroll(0);navigate_settings_view(ui,25);},4 if ui.get_user_count()>1=>open_startup(ui),5 if ui.get_user_count()>1&&ui.get_user_login_mode().as_str()=="default"=>open_default_user(ui),6=>open_timezone_region(ui),7=>{let v=if ui.get_automatic_time(){"0"}else{"1"};thread::spawn(move||{let _=regional_command(&format!("SET_AUTOMATIC_TIME	{}",v));});},10 if ui.get_automatic_time()=>{ui.set_regional_notice(tr(ui,323,"Syncing…").into());let w=ui.as_weak();thread::spawn(move||{let ok=regional_sync_command().map(|r|r.starts_with("OK")).unwrap_or(false);let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){ui.set_regional_notice(if ok{tr(&ui,299,"Time synchronized").into()}else{tr(&ui,300,"Time synchronization failed").into()});});});},11=>open_keyboard_choice(ui),_=>{}},_=>{}},
+        23 => match action {"menu_up"=>{ui.set_general_index(move_model_selection(ui.get_general_index(),12,-1));update_general_scroll(ui);},"menu_down"=>{ui.set_general_index(move_model_selection(ui.get_general_index(),12,1));update_general_scroll(ui);},_ if (6..=9).contains(&ui.get_general_index())=>date_time_row_action(ui,ui.get_general_index()-6,action),"menu_confirm"=>match ui.get_general_index(){0=>open_active_user(ui),1=>open_language_dropdown(ui),3=>{ui.set_user_list_index(0);ui.set_user_list_scroll(0);navigate_settings_view(ui,25);},4 if ui.get_user_count()>1=>open_startup(ui),5 if ui.get_user_count()>1&&ui.get_user_login_mode().as_str()=="default"=>open_default_user(ui),10 if ui.get_automatic_time()=>{ui.set_regional_notice(tr(ui,323,"Syncing…").into());let w=ui.as_weak();thread::spawn(move||{let ok=regional_sync_command().map(|r|r.starts_with("OK")).unwrap_or(false);let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){ui.set_regional_notice(if ok{tr(&ui,299,"Time synchronized").into()}else{tr(&ui,300,"Time synchronization failed").into()});});});},11=>open_keyboard_choice(ui),_=>{}},_=>{}},
         24 => match action {"menu_up"=>ui.set_profile_index(move_model_selection(ui.get_profile_index(),2,-1)),"menu_down"=>ui.set_profile_index(move_model_selection(ui.get_profile_index(),2,1)),"menu_confirm" if ui.get_profile_index()==0=>open_system_keyboard(ui,&tr(ui,285,"Username"),8,24,"text",ui.get_profile_edit_name().as_str()),"menu_confirm" if ui.get_profile_index()==1=>open_avatar_picker(ui),_=>{}},
         25 => {let n=ui.get_user_count()+1;match action{"menu_up"=>{ui.set_user_list_index(move_model_selection(ui.get_user_list_index(),n,-1));update_user_scroll(ui);},"menu_down"=>{ui.set_user_list_index(move_model_selection(ui.get_user_list_index(),n,1));update_user_scroll(ui);},"menu_confirm" if ui.get_user_list_index()==ui.get_user_count()=>open_system_keyboard(ui,&tr(ui,296,"Enter username"),9,25,"text",""),"menu_confirm"=>open_selected_user(ui),_=>{}}},
-        26 => match action {"menu_up"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),3,-1));ui.set_user_delete_confirm(false);},"menu_down"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),3,1));ui.set_user_delete_confirm(false);},"menu_confirm" if ui.get_profile_index()==0=>open_system_keyboard(ui,&tr(ui,285,"Username"),8,26,"text",ui.get_profile_edit_name().as_str()),"menu_confirm" if ui.get_profile_index()==1=>open_avatar_picker(ui),"menu_confirm" if ui.get_profile_index()==2&&ui.get_profile_edit_user_id()!=ui.get_active_user_id()&&ui.get_user_count()>1=>{if ui.get_user_delete_confirm(){let id=ui.get_profile_edit_user_id().to_string();ui.set_user_delete_confirm(false);navigate_settings_view(ui,25);thread::spawn(move||{let _=users_command(&format!("DELETE	{}	CONFIRM",id));});}else{ui.set_user_delete_confirm(true);}},_=>{}},
+        26 => match action {"menu_up"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),3,-1));ui.set_user_delete_confirm(false);},"menu_down"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),3,1));ui.set_user_delete_confirm(false);},"menu_confirm" if ui.get_profile_index()==0=>open_system_keyboard(ui,&tr(ui,285,"Username"),8,26,"text",ui.get_profile_edit_name().as_str()),"menu_confirm" if ui.get_profile_index()==1=>open_avatar_picker(ui),"menu_confirm" if ui.get_profile_index()==2&&ui.get_profile_edit_user_id()!=ui.get_active_user_id()&&ui.get_user_count()>1=>{if ui.get_user_delete_confirm(){let id=ui.get_profile_edit_user_id().to_string();ui.set_user_delete_confirm(false);navigate_settings_view(ui,users_page_view(ui));thread::spawn(move||{let _=users_command(&format!("DELETE	{}	CONFIRM",id));});}else{ui.set_user_delete_confirm(true);}},_=>{}},
         19 => {
             match action {
                 "menu_up" => {
@@ -4987,7 +5028,7 @@ fn start_input_listener(
                     continue;
                 }
 
-                if settings_active.load(Ordering::SeqCst) {
+                if settings_active.load(Ordering::SeqCst) || OOB_ACTIVE.load(Ordering::SeqCst) {
                     set_settings_capture(true);
                 }
 
@@ -5059,6 +5100,25 @@ fn start_input_listener(
                                 continue;
                             }
 
+                            if OOB_ACTIVE.load(Ordering::SeqCst) {
+                                if matches!(
+                                    fields[2],
+                                    "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+                                    "menu_confirm" | "menu_back"
+                                ) {
+                                    let action = fields[2].to_owned();
+                                    let weak = weak.clone();
+                                    let settings_active = settings_active.clone();
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(ui) = weak.upgrade() {
+                                            handle_oob_action(&ui, &action, &settings_active);
+                                        }
+                                    });
+                                }
+                                /* Start (Settings) is not available during setup. */
+                                continue;
+                            }
+
                             if fields[2] == "settings" {
                                 if settings_active.swap(true, Ordering::SeqCst) {
                                     continue;
@@ -5107,6 +5167,168 @@ fn start_input_listener(
 
         thread::sleep(Duration::from_millis(250));
     });
+}
+
+/* Date & Time rows shared by General (rows 6-9) and the OOB (rows 0-3):
+ * 0 Timezone, 1 Automatic Time, 2 Date, 3 Time. */
+fn date_time_row_action(ui:&HomeWindow,row:i32,action:&str){
+    let manual=!ui.get_automatic_time();
+    let step=if action=="menu_left"{-1}else{1};
+    match (row,action){
+        (0,"menu_confirm")=>open_timezone_region(ui),
+        (1,"menu_confirm")=>{
+            let v=if ui.get_automatic_time(){"0"}else{"1"};
+            thread::spawn(move||{let _=regional_command(&format!("SET_AUTOMATIC_TIME\t{}",v));});
+        }
+        (2,"menu_left"|"menu_right") if manual=>{
+            thread::spawn(move||{let _=regional_command(&format!("ADJUST_LOCAL_DAYS\t{}",step));});
+        }
+        (3,"menu_left"|"menu_right") if manual=>{
+            thread::spawn(move||{let _=regional_command(&format!("ADJUST_LOCAL_MINUTES\t{}",step));});
+        }
+        _=>{}
+    }
+}
+
+/* OOB Users page rows: users, Add User, [Startup, Boot User], Continue
+ * (same order as home.slint). */
+fn oob_users_rows(ui:&HomeWindow)->i32{
+    let n=ui.get_user_count();
+    n+2+if n>1{2}else{0}
+}
+fn update_oob_users_scroll(ui:&HomeWindow){
+    ui.set_oob_scroll(guarded_scroll_offset(
+        ui.get_oob_index(),oob_users_rows(ui),ui.get_settings_list_visible_rows(),ui.get_oob_scroll()
+    ));
+}
+
+fn enter_oob(ui:&HomeWindow){
+    OOB_ACTIVE.store(true,Ordering::SeqCst);
+    ui.set_oob_active(true);
+    ui.set_oob_step(0);
+    ui.set_oob_index(0);
+    ui.set_oob_scroll(0);
+    ui.set_oob_notice("".into());
+    ui.set_settings_view(30);
+    ui.set_settings_open(true);
+    write_ui_context("oob");
+    thread::spawn(||set_settings_capture(true));
+}
+
+fn leave_oob(ui:&HomeWindow){
+    OOB_ACTIVE.store(false,Ordering::SeqCst);
+    ui.set_avatar_picker_open(false);
+    navigate_settings_view(ui,0);
+    ui.set_settings_selected_index(0);
+    ui.set_settings_open(false);
+    ui.set_oob_active(false);
+    write_ui_context("home");
+    thread::spawn(||set_settings_capture(false));
+}
+
+fn oob_go(ui:&HomeWindow,step:i32){
+    ui.set_oob_step(step);
+    ui.set_oob_index(0);
+    ui.set_oob_scroll(0);
+    ui.set_oob_notice("".into());
+    match step{
+        1=>navigate_settings_view(ui,30),
+        2=>{wifi_notice(ui,"");navigate_settings_view(ui,31);}
+        3=>navigate_settings_view(ui,32),
+        _=>{}
+    }
+}
+
+/* Ready → usersd commits setup and starts the session; its snapshot then
+ * closes the OOB (and opens the user picker when the login mode asks). */
+fn oob_finish(ui:&HomeWindow){
+    let w=ui.as_weak();
+    thread::spawn(move||{
+        let reply=users_command("COMPLETE_SETUP").unwrap_or_else(|e|format!("ERR {e}"));
+        if reply.starts_with("OK"){return;}
+        eprintln!("home: complete setup failed: {}",reply.trim());
+        let no_users=reply.starts_with("ERR no users");
+        let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){
+            if no_users{
+                oob_go(&ui,3);
+                ui.set_oob_notice(tr(&ui,298,"At least one user is required").into());
+            }
+        });
+    });
+}
+
+fn handle_oob_action(ui:&HomeWindow,action:&str,settings_active:&Arc<AtomicBool>){
+    /* Dropdowns and the avatar picker behave exactly as in Settings. */
+    if ui.get_avatar_picker_open()||ui.get_settings_choice_open(){
+        handle_settings_action(ui,action,settings_active);
+        return;
+    }
+    let step=ui.get_oob_step();
+    if step==0||step==4{
+        play_ui_sound(action);
+        match action{
+            "menu_confirm" if step==0=>oob_go(ui,1),
+            "menu_confirm"=>oob_finish(ui),
+            "menu_back" if step==4=>oob_go(ui,3),
+            _=>{}
+        }
+        return;
+    }
+    let view=ui.get_settings_view();
+    let index=ui.get_oob_index();
+    match (view,action){
+        (30|31|32,_)=>play_ui_sound(action),
+        /* Reused Settings pages return to their OOB step. */
+        (2,"menu_back")=>{play_ui_sound(action);navigate_settings_view(ui,31);return;}
+        (26,"menu_back")=>{play_ui_sound(action);ui.set_user_delete_confirm(false);navigate_settings_view(ui,32);return;}
+        _=>{handle_settings_action(ui,action,settings_active);return;}
+    }
+    match view{
+        30=>match action{
+            "menu_up"=>ui.set_oob_index(move_model_selection(index,5,-1)),
+            "menu_down"=>ui.set_oob_index(move_model_selection(index,5,1)),
+            "menu_back"=>oob_go(ui,0),
+            "menu_confirm" if index==4=>oob_go(ui,2),
+            _=>date_time_row_action(ui,index,action),
+        },
+        31=>match action{
+            "menu_up"=>ui.set_oob_index(move_model_selection(index,3,-1)),
+            "menu_down"=>ui.set_oob_index(move_model_selection(index,3,1)),
+            "menu_back"=>oob_go(ui,1),
+            "menu_confirm"=>match index{
+                0=>wifi_set_enabled(ui,!ui.get_wifi_enabled()),
+                1 if ui.get_wifi_enabled()=>navigate_settings_view(ui,2),
+                2=>oob_go(ui,3),
+                _=>{}
+            },
+            _=>{}
+        },
+        _=>{
+            let n=ui.get_user_count();
+            let total=oob_users_rows(ui);
+            match action{
+                "menu_up"|"menu_down"=>{
+                    ui.set_oob_index(move_model_selection(index,total,if action=="menu_up"{-1}else{1}));
+                    update_oob_users_scroll(ui);
+                }
+                "menu_back"=>oob_go(ui,2),
+                "menu_confirm" if index<n=>{
+                    if let Some(u)=ui.get_users().row_data(index as usize){open_user(ui,u,26);}
+                }
+                "menu_confirm" if index==n=>{
+                    ui.set_oob_notice("".into());
+                    open_system_keyboard(ui,&tr(ui,296,"Enter username"),9,32,"text","");
+                }
+                "menu_confirm" if n>1&&index==n+1=>open_startup(ui),
+                "menu_confirm" if n>1&&index==n+2&&ui.get_user_login_mode().as_str()=="default"=>open_default_user(ui),
+                "menu_confirm" if index==total-1=>{
+                    if n>0{oob_go(ui,4);}
+                    else{ui.set_oob_notice(tr(ui,298,"At least one user is required").into());}
+                }
+                _=>{}
+            }
+        }
+    }
 }
 
 fn handle_user_picker(ui:&HomeWindow,a:&str,p:&Arc<AtomicBool>){
@@ -5336,7 +5558,9 @@ fn main() -> Result<(), slint::PlatformError> {
         screensaver_gate.clone(),
     );
 
-    write_ui_context("home");
+    if !OOB_ACTIVE.load(Ordering::SeqCst) {
+        write_ui_context("home");
+    }
     let weak = ui.as_weak();
     Timer::single_shot(Duration::from_millis(220), move || {
         if let Some(ui) = weak.upgrade() {

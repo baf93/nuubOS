@@ -796,7 +796,7 @@ export component HomeWindow inherits Window {
     callback splash-size-changed();
     changed width => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
     changed height => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
-    in-out property <[string]> i18n-strings: ["Recently Played", "nuubUI graphics foundation", "Native layout • 640×480 • Wayland", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P4", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost"];
+    in-out property <[string]> i18n-strings: ["Recently Played", "nuubUI graphics foundation", "Native layout • 640×480 • Wayland", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P4", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish"];
 
     in-out property <string> topbar-time: "--:--";
     in-out property <string> current-user-name: root.i18n-strings[204];
@@ -1020,6 +1020,22 @@ export component HomeWindow inherits Window {
     in-out property <bool> system-storage-confirm: false;
     in-out property <bool> system-reset-confirm: false;
 
+    /* Initial setup / OOB (EPIC-002). nuubos-usersd owns the setup state; the
+     * OOB is the Settings shell with a step rail instead of the categories and
+     * reuses the real Settings pages and dropdowns. oob-step: 0 Welcome,
+     * 1 Date & Time (settings-view 30), 2 Wi-Fi (31, then the Wi-Fi pages 2/4
+     * and keyboard 6), 3 Users (32, user detail 26, keyboard 6), 4 Ready.
+     * Welcome and Ready are full-screen. */
+    in-out property <bool> oob-active: false;
+    in-out property <int> oob-step: 0;
+    in-out property <int> oob-index: 0;
+    in-out property <int> oob-scroll: 0;
+    in-out property <string> oob-notice: "";
+    /* Users page rows: users, Add User, [Startup, Boot User when more than
+     * one user], Continue. Rust uses the same row order. */
+    property <int> oob-user-extra: root.user-count > 1 ? 2 : 0;
+    property <int> oob-users-continue: root.user-count + 1 + root.oob-user-extra;
+
     /* Global lifecycle overlays. Business logic remains in nuubos-systemd. */
     in-out property <bool> screensaver-active: false;
     in-out property <int> screensaver-x-permille: 110;
@@ -1036,13 +1052,15 @@ export component HomeWindow inherits Window {
      * 13 controller detail, 14 per-controller mapping, 15 input tester,
      * 17 RGB Lighting, 18 Display & Audio,
      * 19 System, 20 Storage, 21 System Information, 22 Restore Defaults,
-     * 23 General, 24 Profile, 25 Users, 26 User Detail. */
+     * 23 General, 24 Profile, 25 Users, 26 User Detail,
+     * 30 OOB Date & Time, 31 OOB Wi-Fi, 32 OOB Users. */
     in-out property <int> settings-view: 0;
     /* Keep read-only/unavailable rows visually consistent with the rest of Settings.
      * The bottom action bar, not row opacity, communicates whether Confirm/Select
      * has an action for the currently focused row. */
     property <bool> settings-select-hint-visible: root.settings-open && (
         root.settings-choice-open ? true
+        : root.settings-view >= 30 ? true
         : root.settings-view == 23 ? true
         : root.settings-view == 24 ? true
         : root.settings-view == 25 ? true
@@ -1171,6 +1189,9 @@ export component HomeWindow inherits Window {
         /* General sub-pages keep the section they were opened from. */
         : root.settings-view == 24 ? root.i18n-strings[333]
         : root.settings-view == 25 || root.settings-view == 26 ? root.i18n-strings[334]
+        : root.settings-view == 30 ? root.i18n-strings[335]
+        : root.settings-view == 31 ? root.i18n-strings[156]
+        : root.settings-view == 32 ? root.i18n-strings[334]
         : root.page-connectivity ? (root.connectivity-scroll-offset >= 3 ? root.i18n-strings[160] : root.i18n-strings[156])
         : root.settings-view >= 2 && root.settings-view <= 4 ? root.i18n-strings[156]
         : root.settings-view >= 7 && root.settings-view <= 9 ? root.i18n-strings[160]
@@ -1192,6 +1213,8 @@ export component HomeWindow inherits Window {
 
     property <string> settings-notice:
         root.settings-view >= 2 && root.settings-view <= 4 ? root.wifi-notice
+        : root.settings-view == 31 ? (root.wifi-notice != "" ? root.wifi-notice : root.oob-notice)
+        : root.settings-view >= 30 ? root.oob-notice
         : root.settings-view >= 7 && root.settings-view <= 9 ? root.bluetooth-notice
         : root.page-connectivity ? (root.wifi-notice != "" ? root.wifi-notice : root.bluetooth-notice)
         : root.settings-view == 15 && root.controller-remap-waiting ? root.controller-remap-prompt
@@ -1515,7 +1538,7 @@ export component HomeWindow inherits Window {
             Text {
                 x: 18px;
                 y: 14px;
-                text: root.i18n-strings[3];
+                text: root.oob-active ? root.i18n-strings[386] : root.i18n-strings[3];
                 color: #f5f6f8;
                 font-size: 29px;
                 font-weight: 700;
@@ -1539,6 +1562,19 @@ export component HomeWindow inherits Window {
                     height: root.settings-row-height;
                     label: root.i18n-strings[category];
                     selected: root.settings-selected-index == i;
+                    visible: !root.oob-active;
+                }
+
+                /* OOB: the rail shows setup progress; it never takes focus. */
+                for step[i] in [387, 46, 157, 275, 397]: SettingsCategory {
+                    x: 8px;
+                    y: 8px + i * root.settings-row-step;
+                    width: parent.width - 16px;
+                    height: root.settings-row-height;
+                    label: root.i18n-strings[step];
+                    selected: root.oob-step == i;
+                    opacity: i > root.oob-step ? 0.55 : 1.0;
+                    visible: root.oob-active;
                 }
             }
 
@@ -1592,6 +1628,9 @@ export component HomeWindow inherits Window {
                         : root.settings-view == 24 ? root.i18n-strings[284]
                         : root.settings-view == 25 ? root.i18n-strings[287]
                         : root.settings-view == 26 ? root.profile-edit-name
+                        : root.settings-view == 30 ? root.i18n-strings[46]
+                        : root.settings-view == 31 ? root.i18n-strings[157]
+                        : root.settings-view == 32 ? root.i18n-strings[275]
                         : root.i18n-strings[3];
                     text-color: #f5f6f8;
                     text-size: 26px;
@@ -1724,6 +1763,124 @@ export component HomeWindow inherits Window {
                     selected: root.settings-view == 25 && root.user-list-index == root.user-count;
                     visible: root.settings-view == 25
                         && root.srow-visible(root.user-count, root.user-list-scroll, root.settings-list-visible-rows);
+                }
+
+                /* --------------------------------------------- OOB Date & Time (30) */
+                /* Same regional rows and Product Service as General → DATE & TIME. */
+                for row[k] in [
+                    { title: root.i18n-strings[280], value: root.timezone, toggle: false, on: false, enabled: true, detail: "" },
+                    { title: root.i18n-strings[281], value: "", toggle: true, on: root.automatic-time, enabled: true, detail: root.i18n-strings[310] },
+                    { title: root.i18n-strings[326], value: root.manual-date-label, toggle: false, on: false, enabled: !root.automatic-time, detail: "" },
+                    { title: root.i18n-strings[327], value: root.manual-time-label, toggle: false, on: false, enabled: !root.automatic-time, detail: "" },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    detail: row.detail;
+                    toggle: row.toggle;
+                    toggle-on: row.on;
+                    enabled: row.enabled;
+                    selected: root.settings-view == 30 && root.oob-index == k;
+                    visible: root.settings-view == 30;
+                }
+                SettingsActionButton {
+                    x: root.settings-content-x; y: root.srow-y(4, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
+                    label: root.i18n-strings[391];
+                    selected: root.settings-view == 30 && root.oob-index == 4;
+                    visible: root.settings-view == 30;
+                }
+
+                /* ---------------------------------------------------- OOB Wi-Fi (31) */
+                /* Wi-Fi switch and the real Connect page (view 2); Skip continues
+                 * offline. */
+                for row[k] in [
+                    { title: root.i18n-strings[157], value: "", toggle: true, on: root.wifi-enabled, enabled: true, nav: false },
+                    {
+                        title: root.i18n-strings[158],
+                        value: root.connectivity-wifi-active ? root.wifi-current-ssid : root.i18n-strings[159],
+                        toggle: false, on: false, enabled: root.wifi-enabled, nav: root.wifi-enabled,
+                    },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    toggle: row.toggle;
+                    toggle-on: row.on;
+                    enabled: row.enabled;
+                    navigates: row.nav;
+                    emphasized: k == 1 && root.connectivity-wifi-active;
+                    selected: root.settings-view == 31 && root.oob-index == k;
+                    visible: root.settings-view == 31;
+                }
+                SettingsActionButton {
+                    x: root.settings-content-x; y: root.srow-y(2, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
+                    label: root.connectivity-wifi-active ? root.i18n-strings[391] : root.i18n-strings[392];
+                    selected: root.settings-view == 31 && root.oob-index == 2;
+                    visible: root.settings-view == 31;
+                }
+                SettingsHint {
+                    x: root.settings-content-x; y: root.srow-y(3, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
+                    text: root.i18n-strings[393];
+                    visible: root.settings-view == 31 && !root.connectivity-wifi-active;
+                }
+
+                /* ---------------------------------------------------- OOB Users (32) */
+                /* Users are created/edited through the same usersd contract and
+                 * user detail page (26) as Settings → Manage Users. */
+                for user[i] in root.users : SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(i, root.oob-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: user.name;
+                    value: root.user-count > 1 && user.default-user ? root.i18n-strings[303] : "";
+                    preview: user.avatar;
+                    show-preview: true;
+                    selected: root.settings-view == 32 && root.oob-index == i;
+                    visible: root.settings-view == 32
+                        && root.srow-visible(i, root.oob-scroll, root.settings-list-visible-rows);
+                }
+                SettingsActionButton {
+                    x: root.settings-content-x;
+                    y: root.srow-y(root.user-count, root.oob-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    label: root.i18n-strings[288];
+                    selected: root.settings-view == 32 && root.oob-index == root.user-count;
+                    visible: root.settings-view == 32
+                        && root.srow-visible(root.user-count, root.oob-scroll, root.settings-list-visible-rows);
+                }
+                for row[k] in [
+                    { title: root.i18n-strings[276], value: root.user-login-mode == "default" ? root.i18n-strings[278] : root.i18n-strings[277], enabled: true },
+                    { title: root.i18n-strings[324], value: root.default-user-name == "" ? root.i18n-strings[173] : root.default-user-name, enabled: root.user-login-mode == "default" },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(root.user-count + 1 + k, root.oob-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    enabled: row.enabled;
+                    selected: root.settings-view == 32 && root.oob-index == root.user-count + 1 + k;
+                    visible: root.settings-view == 32 && root.user-count > 1
+                        && root.srow-visible(root.user-count + 1 + k, root.oob-scroll, root.settings-list-visible-rows);
+                }
+                SettingsActionButton {
+                    x: root.settings-content-x;
+                    y: root.srow-y(root.oob-users-continue, root.oob-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    label: root.i18n-strings[391];
+                    enabled: root.user-count > 0;
+                    selected: root.settings-view == 32 && root.oob-index == root.oob-users-continue;
+                    visible: root.settings-view == 32
+                        && root.srow-visible(root.oob-users-continue, root.oob-scroll, root.settings-list-visible-rows);
                 }
 
                 /* ----------------------------------------------------------- System */
@@ -2584,6 +2741,95 @@ export component HomeWindow inherits Window {
                 if root.settings-open: Rectangle { horizontal-stretch: 1; }
                 if !root.settings-open: ActionHint { kind: "start"; label: root.i18n-strings[3]; }
                 ActionHint { kind: "menu"; label: root.i18n-strings[187]; }
+            }
+        }
+    }
+
+    /* OOB Welcome (step 0) and Ready (step 4): one obvious action each. The
+     * column is centred in the logical window and only its type sizes grow
+     * mildly with the height, so 640x480 stays compact and TV stays legible. */
+    oob-hero := Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #0d0e10;
+        visible: root.oob-active && (root.oob-step == 0 || root.oob-step == 4);
+        z: 150;
+
+        property <float> type-scale: max(1.0, min(1.35, root.height / 480px));
+        property <bool> ready: root.oob-step == 4;
+
+        VerticalLayout {
+            x: 32px;
+            y: 0px;
+            width: parent.width - 64px;
+            height: parent.height - 58px;
+            alignment: center;
+            spacing: 14px;
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: 0px;
+                Text { text: "nuub"; color: #f5f6f8; font-size: 40px * oob-hero.type-scale; font-weight: 700; }
+                Text { text: "OS"; color: #3a86ff; font-size: 40px * oob-hero.type-scale; font-weight: 700; }
+            }
+            HorizontalLayout {
+                alignment: center;
+                Rectangle { width: 86px; height: 3px; background: #3a86ff; border-radius: 2px; }
+            }
+            Rectangle { height: 4px; }
+            Text {
+                text: oob-hero.ready ? root.i18n-strings[394] : root.i18n-strings[388];
+                color: #f5f6f8;
+                font-size: 26px * oob-hero.type-scale;
+                font-weight: 700;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                alignment: center;
+                Text {
+                    max-width: 520px;
+                    text: oob-hero.ready ? root.i18n-strings[395] : root.i18n-strings[389];
+                    color: #a8adb5;
+                    font-size: 16px * oob-hero.type-scale;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+            Rectangle { height: 10px; }
+            HorizontalLayout {
+                alignment: center;
+                SettingsActionButton {
+                    width: min(300px, root.width - 64px);
+                    height: root.settings-row-height;
+                    label: oob-hero.ready ? root.i18n-strings[396] : root.i18n-strings[390];
+                    selected: true;
+                }
+            }
+            Rectangle { height: 6px; }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 8px;
+                for i in 5: Rectangle {
+                    width: i == root.oob-step ? 18px : 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: i <= root.oob-step ? #3a86ff : #2c3036;
+                }
+            }
+        }
+
+        Rectangle {
+            x: 0; y: parent.height - 58px; width: parent.width; height: 58px;
+            background: #0a0b0d;
+            Rectangle { x: 16px; y: 0; width: parent.width - 32px; height: 1px; background: #25282d; }
+            HorizontalLayout {
+                x: 18px; y: 0; width: parent.width - 36px; height: parent.height;
+                spacing: 20px;
+                alignment: start;
+                ActionHint { kind: "face"; face-position: root.select-face-position; label: root.i18n-strings[185]; }
+                if root.oob-step == 4: ActionHint {
+                    kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[186];
+                }
             }
         }
     }

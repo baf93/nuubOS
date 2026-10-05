@@ -224,6 +224,28 @@ fn main() {
         ui.set_user_picker_index(1);
         ui.set_user_picker_open(true);
     })));
+    /* Initial setup (OOB): Welcome/Ready full-screen, steps in the shell. */
+    scenes.push(("oob_welcome", Box::new(|ui| {
+        ui.set_user_picker_open(false);
+        ui.set_settings_open(true); ui.set_oob_active(true); ui.set_oob_step(0); ui.set_settings_view(30);
+    })));
+    scenes.push(("oob_datetime", Box::new(|ui| {
+        ui.set_oob_step(1); ui.set_settings_view(30); ui.set_oob_index(1); ui.set_automatic_time(false);
+    })));
+    scenes.push(("oob_wifi", Box::new(|ui| {
+        ui.set_oob_step(2); ui.set_settings_view(31); ui.set_oob_index(2); ui.set_connectivity_wifi_active(false);
+    })));
+    scenes.push(("oob_users", Box::new(|ui| {
+        ui.set_oob_step(3); ui.set_settings_view(32); ui.set_user_count(3); ui.set_user_login_mode("default".into());
+        ui.set_default_user_name("Fabio".into()); ui.set_oob_index(5); ui.set_oob_scroll(0);
+    })));
+    scenes.push(("oob_users_one", Box::new(|ui| {
+        let users: Vec<UserProfileEntry> = vec![UserProfileEntry { id: "u0".into(), name: "Fabio".into(), avatar_spec: "".into(),
+            avatar_path: "".into(), avatar: Default::default(), active: false, default_user: true }];
+        ui.set_users(ModelRc::from(Rc::new(VecModel::from(users))));
+        ui.set_user_count(1); ui.set_oob_index(1);
+    })));
+    scenes.push(("oob_ready", Box::new(|ui| { ui.set_oob_step(4); })));
     for (name, f) in &scenes {
         f(&ui);
         for (w, h) in sizes {
