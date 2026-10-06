@@ -795,6 +795,7 @@ component ControllerTesterVisual inherits Rectangle {
  *   kind: 0 game, 1 favorites, 2 custom collection, 3 system, 4 application
  *   aspect: card width / height (real cover proportions when the cover is
  *           loaded, the system box-art shape otherwise)
+ *   accent: system colour from the registry (not painted by the minimal Home)
  *   x-units: sum of the aspects of the cards before this one in its row,
  *            so variable-width rows are positioned without layout passes. */
 export struct HomeCard {
@@ -825,47 +826,57 @@ component HomeStar inherits Path {
 
 /* Stacked-cards glyph for custom collections, drawn from rectangles. */
 component HomeCollectionGlyph inherits Rectangle {
+    in property <color> ink: #c9d6ff;
     background: #00000000;
     Rectangle {
         x: parent.width * 0.22; y: 0; width: parent.width * 0.78; height: parent.height * 0.78;
-        border-radius: 3px; border-width: 2px; border-color: #c9d6ff; background: #00000000;
+        border-radius: 3px; border-width: 2px; border-color: root.ink; background: #00000000;
     }
     Rectangle {
         x: 0; y: parent.height * 0.22; width: parent.width * 0.78; height: parent.height * 0.78;
-        border-radius: 3px; background: #c9d6ff;
+        border-radius: 3px; background: root.ink;
     }
 }
 
 /* One Home/library card. The focus treatment (blue ring + soft glow) is
- * drawn outside the card bounds, so containers keep a small inset. Covers
- * arrive pre-scaled with rounded corners (Rust cover loader): the software
- * renderer does not clip images to border-radius.
- * Games show their cover (or a titled placeholder); tiles (favorites,
- * collections, systems, applications) show a centred icon + name. */
+ * drawn outside the card bounds, separated from it by a thin gap, so
+ * containers keep a small inset. Covers arrive pre-scaled with rounded
+ * corners (Rust cover loader): the software renderer does not clip images
+ * to border-radius.
+ * Minimal and cheap for the software renderer: every face is one flat
+ * matte surface (no gradients, no extra blended layers), so the cover art
+ * and the focus ring are the only colour on screen. Games show their cover
+ * (or a titled placeholder); tiles (favorites, collections, systems,
+ * applications) show a centred monochrome icon + name. Tiles of an
+ * unselected row recede through their ink colour. */
 component HomeCardView inherits Rectangle {
     in property <HomeCard> card;
     in property <bool> focused: false;
+    in property <bool> dimmed: false;
     in property <string> unavailable-label: "";
 
     property <length> radius: max(6px, root.height * 0.045);
-    property <color> base: root.card.accent;
     property <bool> tile: root.card.kind != 0;
-    property <length> icon-size: min(root.height * 0.50, root.width * 0.60);
+    property <length> icon-size: min(root.height * 0.42, root.width * 0.50);
+    property <length> inset: max(6px, min(root.width, root.height) * 0.07);
+    /* Tile icon/label colour: unselected rows recede without an extra
+     * blended layer. */
+    property <color> ink: root.dimmed ? #6f757e : root.focused ? #f5f6f8 : #c9cdd3;
 
     background: #00000000;
 
-    /* Glow + ring sit behind/around the card. */
+    /* Glow + ring, detached from the card by a dark gap. */
     Rectangle {
-        x: -7px; y: -7px; width: parent.width + 14px; height: parent.height + 14px;
-        border-radius: root.radius + 7px;
+        x: -9px; y: -9px; width: parent.width + 18px; height: parent.height + 18px;
+        border-radius: root.radius + 9px;
         background: #00000000;
         border-width: 4px;
-        border-color: #3a86ff38;
+        border-color: #3a86ff30;
         visible: root.focused;
     }
     Rectangle {
-        x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px;
-        border-radius: root.radius + 4px;
+        x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px;
+        border-radius: root.radius + 6px;
         background: #00000000;
         border-width: 3px;
         border-color: #3a86ff;
@@ -876,70 +887,59 @@ component HomeCardView inherits Rectangle {
     Rectangle {
         width: parent.width; height: parent.height;
         border-radius: root.radius;
-        background: root.card.kind == 4
-            ? @linear-gradient(160deg, #23272e 0%, #15171b 100%)
-            : @linear-gradient(160deg, root.base.brighter(0.15) 0%, root.base.darker(0.55) 100%);
+        background: root.focused ? #20242b : #181a1f;
         visible: root.tile || !root.card.has-cover;
-        border-width: root.card.kind == 4 ? 1px : 0px;
-        border-color: #2c3036;
+        border-width: 1px;
+        border-color: root.focused ? #2f343c : #23262c;
 
-        /* Game placeholder: title centred, system name at the bottom. */
+        /* Game placeholder: title in the lower-left corner. */
         if !root.tile: Text {
-            x: parent.width * 0.09; y: parent.height * 0.08;
-            width: parent.width * 0.82; height: parent.height * 0.70;
+            x: root.inset; y: root.inset;
+            width: parent.width - 2 * root.inset; height: parent.height - 2 * root.inset;
             text: root.card.title;
             wrap: word-wrap;
             overflow: elide;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            color: #ffffff;
-            font-size: max(11px, min(parent.width * 0.13, parent.height * 0.10));
+            horizontal-alignment: left;
+            vertical-alignment: bottom;
+            color: #f5f6f8;
+            font-size: max(11px, min(parent.width * 0.08, parent.height * 0.07));
             font-weight: 700;
-        }
-        if !root.tile && root.card.available: Text {
-            x: parent.width * 0.06; y: parent.height * 0.80;
-            width: parent.width * 0.88; height: parent.height * 0.14;
-            text: root.card.system-name;
-            overflow: elide;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            color: #ffffffb0;
-            font-size: max(9px, parent.height * 0.065);
-            font-weight: 600;
         }
 
         /* Tile icon. */
         if root.card.kind == 1: HomeStar {
-            x: (parent.width - root.icon-size) / 2; y: parent.height * 0.10;
+            x: (parent.width - root.icon-size) / 2; y: parent.height * 0.14;
             width: root.icon-size; height: root.icon-size;
         }
         if root.card.kind == 2: HomeCollectionGlyph {
-            x: (parent.width - root.icon-size * 0.86) / 2; y: parent.height * 0.10 + root.icon-size * 0.07;
+            x: (parent.width - root.icon-size * 0.86) / 2; y: parent.height * 0.14 + root.icon-size * 0.07;
             width: root.icon-size * 0.86; height: root.icon-size * 0.80;
+            ink: root.ink;
         }
         if (root.card.kind == 3 || root.card.kind == 4) && root.card.has-cover: Image {
-            x: (parent.width - root.icon-size) / 2; y: parent.height * 0.10;
+            x: (parent.width - root.icon-size) / 2; y: parent.height * 0.14;
             width: root.icon-size; height: root.icon-size;
             source: root.card.cover;
             image-fit: contain;
+            colorize: root.card.kind == 3 ? root.ink : #00000000;
         }
         if (root.card.kind == 3 || root.card.kind == 4) && !root.card.has-cover: Image {
-            x: (parent.width - root.icon-size * 0.8) / 2; y: parent.height * 0.10 + root.icon-size * 0.1;
+            x: (parent.width - root.icon-size * 0.8) / 2; y: parent.height * 0.14 + root.icon-size * 0.1;
             width: root.icon-size * 0.8; height: root.icon-size * 0.8;
             source: @image-url("assets/icons/gamepad.svg");
-            colorize: #ffffff;
+            colorize: root.ink;
             image-fit: contain;
         }
         if root.tile: Text {
-            x: parent.width * 0.06; y: parent.height * 0.68;
-            width: parent.width * 0.88; height: parent.height * 0.26;
+            x: parent.width * 0.06; y: parent.height * 0.66;
+            width: parent.width * 0.88; height: parent.height * 0.24;
             text: root.card.title;
             overflow: elide;
             horizontal-alignment: center;
             vertical-alignment: center;
-            color: #f5f6f8;
-            font-size: max(11px, parent.height * 0.13);
-            font-weight: 700;
+            color: root.ink;
+            font-size: max(13px, parent.height * 0.12);
+            font-weight: 600;
         }
     }
 
@@ -953,30 +953,38 @@ component HomeCardView inherits Rectangle {
     if !root.tile && root.card.favorite: HomeStar {
         x: parent.width - self.width - max(4px, parent.width * 0.04);
         y: max(4px, parent.width * 0.04);
-        width: max(14px, min(parent.width, parent.height) * 0.16);
+        width: max(14px, min(parent.width, parent.height) * 0.14);
         height: self.width;
     }
 
-    /* UNAVAILABLE: entry kept, clearly marked (EPIC-011). */
+    /* UNAVAILABLE: entry kept, clearly marked (EPIC-011) with a compact
+     * badge in the top-left corner over the faded art. */
     if !root.tile && !root.card.available: Rectangle {
         width: parent.width; height: parent.height;
         border-radius: root.radius;
-        background: #0d0e1099;
+        background: #0d0e10a0;
         Rectangle {
-            y: parent.height * 0.76; width: parent.width; height: parent.height * 0.24;
-            background: #0d0e10e8;
-            Text {
-                x: 4px; width: parent.width - 8px; height: parent.height;
+            property <length> label-size: max(10px, min(14px, parent.height * 0.08));
+            x: root.inset; y: root.inset;
+            width: min(parent.width - 2 * root.inset, badge-text.preferred-width + self.label-size * 1.4);
+            height: self.label-size * 1.9;
+            border-radius: self.height / 2;
+            background: #0d0e10e0;
+            border-width: 1px;
+            border-color: #3a3e45;
+            badge-text := Text {
+                x: parent.label-size * 0.7; width: parent.width - parent.label-size * 1.4; height: parent.height;
                 text: root.unavailable-label;
                 overflow: elide;
                 horizontal-alignment: center;
                 vertical-alignment: center;
-                color: #e5e7eb;
-                font-size: max(10px, parent.height * 0.42);
-                font-weight: 700;
+                color: #c9cdd3;
+                font-size: parent.label-size;
+                font-weight: 600;
             }
         }
     }
+
 }
 
 /* Section title; the selected section carries the nuubOS blue bar. */
@@ -989,19 +997,20 @@ component HomeSectionTitle inherits Rectangle {
 
     background: #00000000;
     Rectangle {
-        x: 0; y: 2px; width: 4px; height: parent.height - 4px;
+        x: 0; y: (parent.height - self.height) / 2; width: 3px; height: root.label-size * 1.05;
+        border-radius: 1.5px;
         background: #3a86ff;
         visible: root.active;
     }
     Text {
-        x: root.active ? 12px : 0px;
+        x: root.active ? 11px : 0px;
         y: 0; width: parent.width - self.x - (root.status != "" ? root.status-w + 8px : 0px); height: parent.height;
         text: root.label;
         vertical-alignment: center;
         overflow: elide;
-        color: root.active ? #f5f6f8 : #8b919a;
+        color: root.active ? #f5f6f8 : #6f757e;
         font-size: root.label-size;
-        font-weight: 700;
+        font-weight: root.active ? 700 : 600;
     }
     if root.status != "": Text {
         x: parent.width - root.status-w; y: 0; width: root.status-w; height: parent.height;
@@ -1023,17 +1032,17 @@ component HomeFocusInfo inherits Rectangle {
 
     background: #00000000;
     MarqueeText {
-        x: 0; y: 0; width: parent.width; height: 24px * root.s;
+        x: 0; y: 0; width: parent.width; height: 29px * root.s;
         label: root.title;
         text-color: #f5f6f8;
-        text-size: 19px * root.s;
+        text-size: 23px * root.s;
         text-weight: 700;
     }
     MarqueeText {
-        x: 0; y: 24px * root.s; width: parent.width; height: 20px * root.s;
+        x: 0; y: 30px * root.s; width: parent.width; height: 22px * root.s;
         label: root.notice != "" ? root.notice : root.detail;
-        text-color: root.notice != "" ? #ffc94a : #a8adb5;
-        text-size: 14px * root.s;
+        text-color: root.notice != "" ? #ffc94a : #8b919a;
+        text-size: 16px * root.s;
         text-weight: 500;
     }
 }
@@ -1071,18 +1080,18 @@ component HomeRow inherits Rectangle {
         x: root.pad; y: 0; width: parent.width - 2 * root.pad; height: root.label-h - 10px;
         label: root.label;
         active: root.active;
-        label-size: 17px * root.s;
+        label-size: 19px * root.s;
         status: root.active ? root.status : "";
     }
 
-    /* Strip with 8 px above/below the cards for the focus glow. */
+    /* Strip with 10 px above/below the cards for the focus glow. */
     Rectangle {
-        x: 0; y: root.label-h - 8px; width: parent.width; height: root.card-h + 16px;
+        x: 0; y: root.label-h - 10px; width: parent.width; height: root.card-h + 20px;
         clip: true;
         background: #00000000;
 
         Rectangle {
-            x: root.pad - root.h-scroll; y: 8px; width: root.total-w; height: root.card-h;
+            x: root.pad - root.h-scroll; y: 10px; width: root.total-w; height: root.card-h;
             background: #00000000;
             animate x { duration: 180ms; easing: ease-out; }
 
@@ -1093,6 +1102,7 @@ component HomeRow inherits Rectangle {
                 height: root.card-h;
                 card: card;
                 focused: root.active && i == root.index;
+                dimmed: !root.active;
                 unavailable-label: root.unavailable-label;
             }
         }
@@ -1172,19 +1182,21 @@ export component HomeWindow inherits Window {
      * canvas): type and spacing grow mildly with the height, card sizes
      * follow the space actually available. */
     property <float> home-s: max(1.0, min(1.4, root.height / 480px));
-    property <length> home-pad: 22px * root.home-s;
+    property <length> home-pad: 24px * root.home-s;
     property <length> home-top-pad: 12px * root.home-s;
     property <length> home-rows-h: root.height - 102px - root.home-top-pad;
-    property <length> home-label-h: 34px * root.home-s;
-    property <length> home-info-h: 54px * root.home-s;
-    property <length> home-gap: 14px * root.home-s;
-    property <length> home-big-h: max(104px, root.home-rows-h * 0.42);
-    property <length> home-small-h: max(64px, root.home-rows-h * 0.235);
+    property <length> home-label-h: 40px * root.home-s;
+    property <length> home-info-h: 64px * root.home-s;
+    property <length> home-gap: 16px * root.home-s;
+    /* Large, console-like cards: the next row stays partly visible below
+     * the selected one and scrolls in as focus moves. */
+    property <length> home-big-h: max(128px, root.home-rows-h * 0.52);
+    property <length> home-small-h: max(80px, root.home-rows-h * 0.30);
     property <length> library-view-h: root.home-rows-h - root.home-label-h - root.home-info-h;
-    /* Grid density: about one column per 280 logical px (3 on handhelds,
-     * up to 6 on wide screens), never taller than ~2 rows per screen. */
-    property <int> library-target-columns: max(3, min(6, round(root.width / 280px)));
-    property <length> library-cell-h: max(96px, min(root.library-view-h * 0.52,
+    /* Grid density: about one column per 320 logical px (2 on handhelds,
+     * up to 5 on wide screens), never taller than ~1.6 rows per screen. */
+    property <int> library-target-columns: max(2, min(5, round(root.width / 320px)));
+    property <length> library-cell-h: max(110px, min(root.library-view-h * 0.60,
         ((root.width - 2 * root.home-pad + root.home-gap) / root.library-target-columns - root.home-gap)
         / root.library-aspect));
     property <length> library-cell-w: root.library-cell-h * root.library-aspect;
@@ -1989,20 +2001,20 @@ export component HomeWindow inherits Window {
                     height: root.home-label-h - 10px;
                     label: root.library-detail != "" ? root.library-title + "  •  " + root.library-detail : root.library-title;
                     active: true;
-                    label-size: 17px * root.home-s;
+                    label-size: 19px * root.home-s;
                     status: home-view.status;
                 }
 
                 Rectangle {
                     x: 0;
-                    y: root.home-label-h - 8px;
+                    y: root.home-label-h - 10px;
                     width: parent.width;
-                    height: root.library-view-h + 8px;
+                    height: root.library-view-h + 10px;
                     clip: true;
 
                     Rectangle {
                         x: 0;
-                        y: 8px - library-grid.v-scroll;
+                        y: 10px - library-grid.v-scroll;
                         width: parent.width;
                         height: library-grid.row-count * library-grid.step;
                         animate y { duration: 180ms; easing: ease-out; }
@@ -2046,7 +2058,7 @@ export component HomeWindow inherits Window {
                     text: root.i18n-strings[398];
                     horizontal-alignment: center;
                     color: #f5f6f8;
-                    font-size: 24px * root.home-s;
+                    font-size: 28px * root.home-s;
                     font-weight: 700;
                 }
                 Text {
@@ -2054,7 +2066,7 @@ export component HomeWindow inherits Window {
                     horizontal-alignment: center;
                     wrap: word-wrap;
                     color: #a8adb5;
-                    font-size: 16px * root.home-s;
+                    font-size: 18px * root.home-s;
                 }
                 if root.library-scanning: Text {
                     text: root.i18n-strings[410];
