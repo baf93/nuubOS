@@ -5537,7 +5537,34 @@ fn start_lifecycle_listener(ui: &HomeWindow) {
     });
 }
 
+/* GPU rendering (FemtoVG on OpenGL ES / Panfrost): frames reach labwc as
+ * dmabufs, so the compositor neither copies them nor composites a
+ * fullscreen Home (direct scanout). NUUBOS_UI_RENDERER=software, or a
+ * failure to get an OpenGL ES backend, falls back to the CPU renderer. */
+fn select_renderer() {
+    let software = std::env::var("NUUBOS_UI_RENDERER").map(|v| v == "software").unwrap_or(false);
+    if !software {
+        match slint::BackendSelector::new()
+            .backend_name("winit".into())
+            .renderer_name("femtovg".into())
+            .require_opengl_es()
+            .select()
+        {
+            Ok(()) => return,
+            Err(e) => eprintln!("nuubui-home: GPU renderer unavailable ({e}), using software"),
+        }
+    }
+    if let Err(e) = slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("software".into())
+        .select()
+    {
+        eprintln!("nuubui-home: software renderer selection failed: {e}");
+    }
+}
+
 fn main() -> Result<(), slint::PlatformError> {
+    select_renderer();
     let ui = HomeWindow::new()?;
     ui.window().set_fullscreen(true);
 

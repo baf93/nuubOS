@@ -1,3 +1,4 @@
+mod gpu;
 mod splash;
 slint::include_modules!();
 
@@ -78,10 +79,38 @@ const TOAST_QUEUE_LIMIT: usize = 6;
  * produced otherwise. */
 const ANIMATION_FRAME_MS: u64 = 33;
 
-/* Hands out one software window per component, in creation order:
+/* Window of one Quick Menu component: rendered on the GPU (FemtoVG on
+ * OpenGL ES, frames handed to labwc as dmabufs) or, when EGL is unavailable
+ * or NUUBOS_UI_RENDERER=software, by the CPU into wl_shm buffers. */
+#[derive(Clone)]
+enum UiWindow {
+    Gpu(Rc<gpu::GpuWindow>),
+    Soft(Rc<MinimalSoftwareWindow>),
+}
+
+impl UiWindow {
+    fn new(egl: Option<&Rc<gpu::Egl>>) -> Self {
+        if let Some(egl) = egl {
+            match gpu::GpuWindow::new(egl) {
+                Ok(window) => return UiWindow::Gpu(window),
+                Err(error) => eprintln!("quick-menu: GPU window failed={}, using software", error),
+            }
+        }
+        UiWindow::Soft(MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers))
+    }
+
+    fn adapter(&self) -> Rc<dyn WindowAdapter> {
+        match self {
+            UiWindow::Gpu(window) => window.clone(),
+            UiWindow::Soft(window) => window.clone(),
+        }
+    }
+}
+
+/* Hands out one window per component, in creation order:
  * QuickMenuWindow first, then NotificationWindow. */
 struct QuickPlatform {
-    windows: RefCell<VecDeque<Rc<MinimalSoftwareWindow>>>,
+    windows: RefCell<VecDeque<Rc<dyn WindowAdapter>>>,
     started: Instant,
 }
 
@@ -90,7 +119,7 @@ impl Platform for QuickPlatform {
         &self,
     ) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
         let window = self.windows.borrow_mut().pop_front().ok_or_else(|| {
-            PlatformError::Other("no software window left for component".into())
+            PlatformError::Other("no window left for component".into())
         })?;
         Ok(window)
     }
@@ -188,7 +217,7 @@ struct WaylandState {
     next_buffer: usize,
     full_frames: u8,
     frame_seq: u64,
-    slint_window: Option<Rc<MinimalSoftwareWindow>>,
+    slint_window: Option<UiWindow>,
     /* Fractional output scale (wp_fractional_scale_v1, value * 120). The
      * buffer is rendered at physical resolution and mapped back to the
      * logical surface size with wp_viewport, so HDMI scaling stays crisp. */
@@ -344,6 +373,11 @@ impl WaylandState {
             fractional.destroy();
         }
 
+        /* The EGL surface wraps the wl_surface: release it first. */
+        if let Some(UiWindow::Gpu(window)) = self.slint_window.as_ref() {
+            window.detach();
+        }
+
         if let Some(layer_surface) = self.layer_surface.take() {
             layer_surface.destroy();
         }
@@ -455,6 +489,23 @@ impl WaylandState {
 
         platform::update_timers_and_animations();
 
+        if let Some(UiWindow::Gpu(gpu_window)) = self.slint_window.clone() {
+            let surface = self
+                .surface
+                .as_ref()
+                .ok_or("layer surface disappeared")?
+                .clone();
+            /* Double-buffered state, applied by the commit in eglSwapBuffers. */
+            if let Some(viewport) = self.viewport.as_ref() {
+                viewport.set_destination(logical_width as i32, logical_height as i32);
+            }
+            gpu_window
+                .render(&surface, width, height)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.to_string().into() })?;
+            conn.flush()?;
+            return Ok((logical_width, logical_height));
+        }
+
         if self
             .buffers
             .first()
@@ -472,11 +523,10 @@ impl WaylandState {
             self.full_frames = 2;
         }
 
-        let slint_window = self
-            .slint_window
-            .as_ref()
-            .ok_or("Slint window unavailable")?
-            .clone();
+        let slint_window = match self.slint_window.as_ref() {
+            Some(UiWindow::Soft(window)) => window.clone(),
+            _ => return Err("Slint window unavailable".into()),
+        };
         let index = self.next_buffer;
         let full = self.full_frames > 0;
         let stride = width as usize;
@@ -2842,22 +2892,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _ = fs::remove_file(MAPPED_FILE);
     let _ = fs::remove_file(SURFACE_FILE);
 
-    let slint_window =
-        MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers);
-    let render_window = slint_window.clone();
-    let card_window =
-        MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers);
-    let card_render_window = card_window.clone();
+    let conn = Connection::connect_to_env()?;
+
+    let software = std::env::var("NUUBOS_UI_RENDERER").map(|v| v == "software").unwrap_or(false);
+    let egl = if software {
+        None
+    } else {
+        match gpu::Egl::new(&conn) {
+            Ok(egl) => Some(egl),
+            Err(error) => {
+                eprintln!("quick-menu: EGL unavailable={}, using software", error);
+                None
+            }
+        }
+    };
+    let render_window = UiWindow::new(egl.as_ref());
+    let card_render_window = UiWindow::new(egl.as_ref());
+    eprintln!(
+        "quick-menu: renderer={}",
+        if matches!(render_window, UiWindow::Gpu(_)) { "gpu" } else { "software" }
+    );
 
     platform::set_platform(Box::new(QuickPlatform {
-        windows: RefCell::new(VecDeque::from([slint_window, card_window])),
+        windows: RefCell::new(VecDeque::from([render_window.adapter(), card_render_window.adapter()])),
         started: Instant::now(),
     }))?;
 
     let ui = QuickMenuWindow::new()?;
     let card = NotificationWindow::new()?;
 
-    let conn = Connection::connect_to_env()?;
     let mut queue = conn.new_event_queue::<WaylandState>();
     let qh = queue.handle();
 

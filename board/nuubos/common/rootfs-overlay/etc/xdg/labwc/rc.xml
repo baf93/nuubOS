@@ -9,4 +9,13 @@
     <followMouse>no</followMouse>
     <raiseOnFocus>yes</raiseOnFocus>
   </focus>
+
+  <!-- Controller-first: no pointer image. A visible (even 1 px, software)
+       cursor makes wlroots composite every frame and rules out direct
+       scan-out of fullscreen clients. Moving a real pointer shows it again. -->
+  <windowRules>
+    <windowRule title="*">
+      <action name="HideCursor" />
+    </windowRule>
+  </windowRules>
 </labwc_config>

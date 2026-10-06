@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nuubOS <nuubos@localhost>
+Date: Tue, 6 Oct 2026 08:30:00 +0200
+Subject: [PATCH] output: release the first-frame boot splash on first map
+
+The compositor-owned boot splash (0001) is built from ~250 scene rects
+and was never removed. Below the fullscreen nuubUI client it stayed in
+every output frame, so wlroots always composited and could never scan
+out the client buffer directly.
+
+The client draws its own identical boot frame, so destroy the splash
+tree when the first view maps and never recreate it.
+
+---
+--- a/src/output.c
++++ b/src/output.c
+@@ -630,12 +630,35 @@
+ 	}
+ }
+ 
++static struct wlr_scene_tree *boot_tree;
++static bool boot_tree_released;
++
++/*
++ * The first client toplevel draws its own matching boot frame, so the
++ * compositor-owned splash is no longer needed once a view maps. Destroy it:
++ * left under the client it keeps hundreds of scene nodes in every output
++ * frame, which forces composition and rules out direct scan-out.
++ */
++void
++nuubos_release_boot_splash(void)
++{
++	if (boot_tree_released) {
++		return;
++	}
++	boot_tree_released = true;
++
++	if (boot_tree) {
++		wlr_scene_node_destroy(&boot_tree->node);
++		boot_tree = NULL;
++		wlr_log(WLR_INFO, "nuubOS: released first-frame boot splash");
++	}
++}
++
+ static void
+ nuubos_create_atomic_boot_splash(struct output *output)
+ {
+-	static struct wlr_scene_tree *boot_tree;
+-
+-	if (boot_tree || !wlr_output_is_drm(output->wlr_output)) {
++	if (boot_tree || boot_tree_released
++			|| !wlr_output_is_drm(output->wlr_output)) {
+ 		return;
+ 	}
+ 
+--- a/src/view-impl-common.c
++++ b/src/view-impl-common.c
+@@ -6,10 +6,14 @@
+ #include "view.h"
+ #include "window-rules.h"
+ 
++/* nuubOS first-frame boot splash (src/output.c). */
++void nuubos_release_boot_splash(void);
++
+ void
+ view_impl_map(struct view *view)
+ {
+ 	view_update_visibility(view);
++	nuubos_release_boot_splash();
+ 
+ 	/* Leave minimized, if minimized before map */
+ 	if (!view->minimized) {
+-- 
+2.51.0

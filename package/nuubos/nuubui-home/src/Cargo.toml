@@ -6,7 +6,7 @@ build = "build.rs"
 license = "MIT"
 
 [dependencies]
-slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "compat-1-18"] }
+slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "renderer-software", "compat-1-18"] }
 zbus = "=5.19.0"
 
 [build-dependencies]

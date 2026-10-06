@@ -1,0 +1,74 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] drm: sun4i: ignore pixel alpha on the bottom sun8i layer
+
+The DE33 mixer has no global double-buffer latch (sun8i_mixer_commit()
+writes SUN8I_MIXER_GLOBAL_DBUFF only for older DEs), so a new layer
+attribute (format, alpha mode) can take effect before the new framebuffer
+address. When a Wayland compositor switches the primary plane from its own
+XRGB8888 buffer to direct scan-out of a client's ARGB8888 buffer, the old
+buffer is briefly fetched as ARGB: its X byte (0) becomes pixel alpha and,
+since the blender treats inputs as non-premultiplied, the screen flashes
+black until the next frame.
+
+The bottom layer (normalized zpos 0) only blends with the black background,
+where pixel alpha adds nothing for premultiplied content. Use layer alpha
+0xff for it when the plane alpha property is opaque, for UI and DE3+ VI
+layers. Upper layers keep pixel alpha.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+diff --color -ru a/drivers/gpu/drm/sun4i/sun8i_ui_layer.c b/drivers/gpu/drm/sun4i/sun8i_ui_layer.c
+--- a/drivers/gpu/drm/sun4i/sun8i_ui_layer.c
++++ b/drivers/gpu/drm/sun4i/sun8i_ui_layer.c
+@@ -45,10 +45,22 @@
+ 	fmt = state->fb->format;
+ 	sun8i_mixer_drm_format_to_hw(fmt->format, &hw_fmt);
+ 
+-	val = SUN8I_MIXER_CHAN_UI_LAYER_ATTR_ALPHA(state->alpha >> 8);
+-	val |= (state->alpha == DRM_BLEND_ALPHA_OPAQUE) ?
+-		SUN8I_MIXER_CHAN_UI_LAYER_ATTR_ALPHA_MODE_PIXEL :
+-		SUN8I_MIXER_CHAN_UI_LAYER_ATTR_ALPHA_MODE_COMBINED;
++	/*
++	 * The bottom layer only blends with the black background, so pixel
++	 * alpha adds nothing for premultiplied content. Ignoring it keeps a
++	 * switch between an XRGB and an ARGB framebuffer from showing the X
++	 * byte as alpha (black) while the new format is already active and
++	 * the new address is not (DE33 has no double-buffer latch).
++	 */
++	if (state->normalized_zpos == 0 &&
++	    state->alpha == DRM_BLEND_ALPHA_OPAQUE)
++		val = SUN8I_MIXER_CHAN_UI_LAYER_ATTR_ALPHA(0xff) |
++		      SUN8I_MIXER_CHAN_UI_LAYER_ATTR_ALPHA_MODE_LAYER;
++	else
++		val = SUN8I_MIXER_CHAN_UI_LAYER_ATTR_ALPHA(state->alpha >> 8) |
++		      ((state->alpha == DRM_BLEND_ALPHA_OPAQUE) ?
++		       SUN8I_MIXER_CHAN_UI_LAYER_ATTR_ALPHA_MODE_PIXEL :
++		       SUN8I_MIXER_CHAN_UI_LAYER_ATTR_ALPHA_MODE_COMBINED);
+ 	val |= hw_fmt << SUN8I_MIXER_CHAN_UI_LAYER_ATTR_FBFMT_OFFSET;
+ 	val |= SUN8I_MIXER_CHAN_UI_LAYER_ATTR_EN;
+ 
+diff --color -ru a/drivers/gpu/drm/sun4i/sun8i_vi_layer.c b/drivers/gpu/drm/sun4i/sun8i_vi_layer.c
+--- a/drivers/gpu/drm/sun4i/sun8i_vi_layer.c
++++ b/drivers/gpu/drm/sun4i/sun8i_vi_layer.c
+@@ -44,10 +44,17 @@
+ 		val |= SUN8I_MIXER_CHAN_VI_LAYER_ATTR_RGB_MODE;
+ 	val |= SUN8I_MIXER_CHAN_VI_LAYER_ATTR_EN;
+ 	if (layer->cfg->de_type >= SUN8I_MIXER_DE3) {
+-		val |= SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA(state->alpha >> 8);
+-		val |= (state->alpha == DRM_BLEND_ALPHA_OPAQUE) ?
+-			SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA_MODE_PIXEL :
+-			SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA_MODE_COMBINED;
++		/* Bottom layer: pixel alpha ignored, see sun8i_ui_layer.c. */
++		if (state->normalized_zpos == 0 &&
++		    state->alpha == DRM_BLEND_ALPHA_OPAQUE) {
++			val |= SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA(0xff);
++			val |= SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA_MODE_LAYER;
++		} else {
++			val |= SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA(state->alpha >> 8);
++			val |= (state->alpha == DRM_BLEND_ALPHA_OPAQUE) ?
++				SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA_MODE_PIXEL :
++				SUN50I_MIXER_CHAN_VI_LAYER_ATTR_ALPHA_MODE_COMBINED;
++		}
+ 	}
+ 
+ 	regmap_write(layer->regs,

@@ -6,8 +6,12 @@ build = "build.rs"
 license = "MIT"
 
 [dependencies]
-slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "compat-1-18"] }
+slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "renderer-software", "compat-1-18"] }
 wayland-client = "=0.31.15"
+# libwayland-client backend: EGL (wl_egl_window) needs the C wl_display/wl_surface.
+wayland-backend = { version = "=0.3.17", features = ["client_system"] }
+glutin = { version = "=0.32.3", default-features = false, features = ["egl", "wayland"] }
+raw-window-handle = "=0.6.2"
 wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
 wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
 
