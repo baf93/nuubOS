@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- nuubOS application icon for PC game streaming (Moonlight).
+     Original artwork of the nuubOS project, MIT licensed like this package. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <rect x="22" y="34" width="148" height="100" rx="12" fill="none" stroke="#e6e8ec" stroke-width="10"/>
+  <path d="M84 62 L120 84 L84 106 Z" fill="#3a86ff"/>
+  <path d="M78 134 L72 158 M114 134 L120 158" stroke="#e6e8ec" stroke-width="10" stroke-linecap="round"/>
+  <path d="M58 160 H134" stroke="#e6e8ec" stroke-width="10" stroke-linecap="round"/>
+</svg>

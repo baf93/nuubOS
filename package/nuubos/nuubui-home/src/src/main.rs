@@ -1,4 +1,5 @@
 mod library;
+mod moonlight;
 mod splash;
 slint::include_modules!();
 
@@ -470,6 +471,8 @@ fn apply_users(ui:&HomeWindow,s:&USnap,picker:&Arc<AtomicBool>){
     }
 
     let open=!oob&&(s.selection||s.switch_requested);
+    /* Moonlight shows the active user's PCs: it closes for a user switch. */
+    if open&&moonlight::ACTIVE.load(Ordering::SeqCst){moonlight::leave(ui);}
     if open&&!ui.get_user_picker_open(){
         let i=s.users.iter()
             .position(|u|u.id==s.last_user)
@@ -2547,6 +2550,7 @@ fn apply_settings_choice(ui: &HomeWindow) {
     }
 
     match context.as_str() {
+        c if c.starts_with("moonlight-") => moonlight::apply_choice(c, &value),
         "player-assignment" => {
             let player_index = ui.get_player_assignment_index().max(0) as usize;
             let Some(assignment) = ui.get_player_assignments().row_data(player_index) else {
@@ -3584,6 +3588,7 @@ fn finish_system_keyboard(ui: &HomeWindow) {
                 }
             });
         }
+        moonlight::KEYBOARD_PURPOSE_ADDRESS => moonlight::add_host(ui, &value),
         _ => navigate_settings_view(ui, return_view),
     }
 }
@@ -5101,7 +5106,9 @@ fn start_input_listener(
                             if user_picker_active.load(Ordering::SeqCst) && matches!(fields[2],"menu_left"|"menu_right"|"menu_up"|"menu_down"|"menu_confirm"|"menu_back"){let a=fields[2].to_owned();let w=weak.clone();let p=user_picker_active.clone();let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){handle_user_picker(&ui,&a,&p);});continue;}
                             /* Over a game the Quick Menu shows the power actions;
                              * Home is hidden underneath. */
-                            if library::GAME_RUNNING.load(Ordering::SeqCst) {
+                            if library::GAME_RUNNING.load(Ordering::SeqCst)
+                                || moonlight::STREAM_RUNNING.load(Ordering::SeqCst)
+                            {
                                 continue;
                             }
 
@@ -5155,6 +5162,25 @@ fn start_input_listener(
                                     });
                                 }
                                 /* Start (Settings) is not available during setup. */
+                                continue;
+                            }
+
+                            if moonlight::ACTIVE.load(Ordering::SeqCst) {
+                                if matches!(
+                                    fields[2],
+                                    "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+                                    "menu_confirm" | "menu_back"
+                                ) {
+                                    let action = fields[2].to_owned();
+                                    let weak = weak.clone();
+                                    let settings_active = settings_active.clone();
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(ui) = weak.upgrade() {
+                                            moonlight::handle_action(&ui, &action, &settings_active);
+                                        }
+                                    });
+                                }
+                                /* Moonlight is left with Back, not with Start. */
                                 continue;
                             }
 
@@ -5612,6 +5638,7 @@ fn main() -> Result<(), slint::PlatformError> {
     library::start_cover_loader(&ui);
     library::start_library_listener(&ui);
     library::start_game_listener(&ui);
+    moonlight::start_listener(&ui);
     let system_info_gate = Arc::new((Mutex::new(false), Condvar::new()));
     let _ = SYSTEM_INFO_GATE.set(system_info_gate.clone());
     start_system_info_live(&ui, system_info_gate);

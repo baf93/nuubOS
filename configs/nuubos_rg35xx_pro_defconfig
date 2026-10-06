@@ -151,3 +151,19 @@ BR2_PACKAGE_NUUBOS_QUICK_MENU=y
 
 BR2_PACKAGE_NUUBOS_SYSTEM=y
 BR2_PACKAGE_NUUBOS_EMULATION=y
+
+# PC game streaming (EPIC-025): Moonlight with VPU (Cedrus) decoding.
+# FFmpeg holds only what the V4L2 request hwaccels need.
+BR2_PACKAGE_NUUBOS_STREAMING=y
+# BR2_PACKAGE_FFMPEG_FFMPEG is not set
+BR2_PACKAGE_FFMPEG_ENCODERS=""
+BR2_PACKAGE_FFMPEG_DECODERS="h264 hevc"
+BR2_PACKAGE_FFMPEG_MUXERS=""
+BR2_PACKAGE_FFMPEG_DEMUXERS=""
+BR2_PACKAGE_FFMPEG_PARSERS="h264 hevc"
+BR2_PACKAGE_FFMPEG_BSFS=""
+BR2_PACKAGE_FFMPEG_PROTOCOLS=""
+BR2_PACKAGE_FFMPEG_FILTERS=""
+# BR2_PACKAGE_FFMPEG_INDEVS is not set
+# BR2_PACKAGE_FFMPEG_OUTDEVS is not set
+BR2_PACKAGE_FFMPEG_EXTRACONF="--disable-hwaccels --enable-hwaccel=h264_v4l2request --enable-hwaccel=hevc_v4l2request --enable-v4l2-request --enable-libudev --disable-libv4l2 --disable-v4l2-m2m --disable-avdevice --disable-avfilter --disable-avformat --disable-swresample --disable-swscale --disable-network --disable-vulkan"

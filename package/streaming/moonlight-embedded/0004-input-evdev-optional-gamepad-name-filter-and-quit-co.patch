@@ -1,0 +1,170 @@
+From dd2baf65d97744ec6402ac912d3cacdf7e29b1da Mon Sep 17 00:00:00 2001
+From: nuubOS Project <nuubos@localhost>
+Date: Tue, 6 Oct 2026 18:46:18 +0200
+Subject: [PATCH 4/5] input: evdev: optional gamepad name filter and quit combo
+ switch
+
+-gamepad <name> uses only the gamepads with that name and assigns each
+the player number given by its product id (nuubOS forwards controllers
+through per-player virtual gamepads with product id = player, so player
+order follows the system assignment and grabbed physical controllers are
+never read twice). -noquitcombo disables the gamepad quit combo for
+systems where the session is ended from their own menu.
+---
+ src/config.c      | 10 ++++++++++
+ src/config.h      |  2 ++
+ src/input/evdev.c | 30 +++++++++++++++++++++++++++++-
+ src/input/evdev.h |  1 +
+ src/main.c        |  3 +++
+ 5 files changed, 45 insertions(+), 1 deletion(-)
+
+diff --git a/src/config.c b/src/config.c
+index 91f2061..9c6519f 100644
+--- a/src/config.c
++++ b/src/config.c
+@@ -77,6 +77,8 @@ static struct option long_options[] = {
+   {"pin", required_argument, NULL, '5'},
+   {"port", required_argument, NULL, '6'},
+   {"hdr", no_argument, NULL, '7'},
++  {"gamepad", required_argument, NULL, '8'},
++  {"noquitcombo", no_argument, NULL, '9'},
+   {0, 0, 0, 0},
+ };
+ 
+@@ -260,6 +262,12 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
+   case '7':
+     config->hdr = true;
+     break;
++  case '8':
++    config->gamepad_name = value;
++    break;
++  case '9':
++    config->quit_combo = false;
++    break;
+   case 1:
+     if (config->action == NULL)
+       config->action = value;
+@@ -377,6 +385,8 @@ void config_parse(int argc, char* argv[], PCONFIGURATION config) {
+   config->quitappafter = false;
+   config->viewonly = false;
+   config->mouse_emulation = true;
++  config->gamepad_name = NULL;
++  config->quit_combo = true;
+   config->rotate = 0;
+   config->codec = CODEC_UNSPECIFIED;
+   config->hdr = false;
+diff --git a/src/config.h b/src/config.h
+index 91ee4a1..247acde 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -42,6 +42,8 @@ typedef struct _CONFIGURATION {
+   bool quitappafter;
+   bool viewonly;
+   bool mouse_emulation;
++  char* gamepad_name;
++  bool quit_combo;
+   char* inputs[MAX_INPUTS];
+   int inputsCount;
+   enum codecs codec;
+diff --git a/src/input/evdev.c b/src/input/evdev.c
+index e938a8f..5481cab 100644
+--- a/src/input/evdev.c
++++ b/src/input/evdev.c
+@@ -132,6 +132,11 @@ static bool mouseEmulationEnabled;
+ 
+ static bool waitingToExitOnModifiersUp = false;
+ 
++/* Optional gamepad policy (nuubOS): only gamepads with this name are used,
++ * each as the player given by its product id; others are ignored. */
++static const char* gamepadName = NULL;
++static bool gamepadQuitCombo = true;
++
+ int evdev_gamepads = 0;
+ 
+ #define ACTION_MODIFIERS (MODIFIER_SHIFT|MODIFIER_ALT|MODIFIER_CTRL)
+@@ -354,6 +359,16 @@ static bool evdev_handle_event(struct input_event *ev, struct input_device *dev)
+       dev->mouseHScroll = 0;
+     }
+     if (dev->gamepadModified) {
++      if (dev->controllerId < 0 && gamepadName != NULL) {
++        int player = libevdev_get_id_product(dev->dev);
++
++        if (player >= 1 && player <= MAX_GAMEPADS && (assignedControllerIds & (1 << (player - 1))) == 0) {
++          assignedControllerIds |= (1 << (player - 1));
++          dev->controllerId = player - 1;
++          printf("Assigned %s as player %d\n", libevdev_get_name(dev->dev), player);
++          send_controller_arrival(dev);
++        }
++      }
+       if (dev->controllerId < 0) {
+         for (int i = 0; i < MAX_GAMEPADS; i++) {
+           if ((assignedControllerIds & (1 << i)) == 0) {
+@@ -701,7 +716,7 @@ static bool evdev_handle_event(struct input_event *ev, struct input_device *dev)
+     }
+   }
+ 
+-  if (gamepadModified && (dev->buttonFlags & QUIT_BUTTONS) == QUIT_BUTTONS) {
++  if (gamepadQuitCombo && gamepadModified && (dev->buttonFlags & QUIT_BUTTONS) == QUIT_BUTTONS) {
+     LiSendMultiControllerEvent(dev->controllerId, assignedControllerIds, 0, 0, 0, 0, 0, 0, 0);
+     return false;
+   }
+@@ -868,6 +883,14 @@ void evdev_create(const char* device, struct mapping* mappings, bool verbose, in
+     return;
+   }
+ 
++  if (is_gamepad && gamepadName != NULL && strcmp(name, gamepadName) != 0) {
++    if (verbose)
++      printf("Ignoring gamepad %s: only %s is used\n", name, gamepadName);
++    libevdev_free(evdev);
++    close(fd);
++    return;
++  }
++
+   if (is_gamepad) {
+     evdev_gamepads++;
+ 
+@@ -1089,6 +1112,11 @@ void evdev_stop() {
+   evdev_drain();
+ }
+ 
++void evdev_set_gamepad_policy(const char* name, bool quit_combo) {
++  gamepadName = name;
++  gamepadQuitCombo = quit_combo;
++}
++
+ void evdev_init(bool mouse_emulation_enabled) {
+   handler = evdev_handle_event;
+   mouseEmulationEnabled = mouse_emulation_enabled;
+diff --git a/src/input/evdev.h b/src/input/evdev.h
+index 1239fb0..b2e83c7 100644
+--- a/src/input/evdev.h
++++ b/src/input/evdev.h
+@@ -25,6 +25,7 @@ void evdev_create(const char* device, struct mapping* mappings, bool verbose, in
+ void evdev_loop();
+ 
+ void evdev_init(bool mouse_emulation_enabled);
++void evdev_set_gamepad_policy(const char* name, bool quit_combo);
+ void evdev_start();
+ void evdev_stop();
+ void evdev_map(char* device);
+diff --git a/src/main.c b/src/main.c
+index 499b130..09c7eb0 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -215,6 +215,8 @@ static void help() {
+   printf("\t-quitappafter\t\tSend quit app request to remote after quitting session\n");
+   printf("\t-viewonly\t\tDisable all input processing (view-only mode)\n");
+   printf("\t-nomouseemulation\t\tDisable gamepad mouse emulation support (long pressing Start button)\n");
++  printf("\t-gamepad <name>\t\tOnly use gamepads with this name, as the player given by their product id\n");
++  printf("\t-noquitcombo\t\tDisable the gamepad quit combo (Play+Back+LeftShoulder+RightShoulder)\n");
+   #if defined(HAVE_SDL) || defined(HAVE_X11)
+   printf("\n WM options (SDL and X11 only)\n\n");
+   printf("\t-windowed\t\tDisplay screen in a window\n");
+@@ -362,6 +364,7 @@ int main(int argc, char* argv[]) {
+           mappings = map;
+         }
+ 
++        evdev_set_gamepad_policy(config.gamepad_name, config.quit_combo);
+         for (int i=0;i<config.inputsCount;i++) {
+           if (config.debug_level > 0)
+             printf("Adding input device %s...\n", config.inputs[i]);

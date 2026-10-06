@@ -1,0 +1,64 @@
+From 4f32c47a77761609fb3f845657382d81c614e1cf Mon Sep 17 00:00:00 2001
+From: Jernej Skrabec <jernej.skrabec@gmail.com>
+Date: Mon, 9 Oct 2023 22:19:18 +0200
+Subject: v4l2 request api: add new codecs
+
+---
+ libavcodec/v4l2_request.c | 32 ++++++++++++++++++++++++++++----
+ 1 file changed, 28 insertions(+), 4 deletions(-)
+
+diff --git a/libavcodec/v4l2_request.c b/libavcodec/v4l2_request.c
+index 8d2a248..813c1b3 100644
+--- a/libavcodec/v4l2_request.c
++++ b/libavcodec/v4l2_request.c
+@@ -202,6 +202,27 @@ static const struct {
+     { V4L2_PIX_FMT_NV16, AV_PIX_FMT_NV16, DRM_FORMAT_NV16, DRM_FORMAT_MOD_LINEAR },
+ #if defined(V4L2_PIX_FMT_NV20) && defined(DRM_FORMAT_NV20)
+     { V4L2_PIX_FMT_NV20, AV_PIX_FMT_NONE, DRM_FORMAT_NV20, DRM_FORMAT_MOD_LINEAR },
++#endif
++    { V4L2_PIX_FMT_P010, AV_PIX_FMT_P010, DRM_FORMAT_P010, DRM_FORMAT_MOD_LINEAR },
++#if defined(V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT)
++    {
++        .pixelformat = V4L2_PIX_FMT_YUV420_10_AFBC_16X16_SPLIT,
++        .sw_format = AV_PIX_FMT_NONE,
++        .drm_format = DRM_FORMAT_YUV420_10BIT,
++        .format_modifier = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
++                                                   AFBC_FORMAT_MOD_SPARSE |
++                                                   AFBC_FORMAT_MOD_SPLIT),
++    },
++#endif
++#if defined(V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT)
++    {
++        .pixelformat = V4L2_PIX_FMT_YUV420_8_AFBC_16X16_SPLIT,
++        .sw_format = AV_PIX_FMT_NONE,
++        .drm_format = DRM_FORMAT_YUV420_8BIT,
++        .format_modifier = DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
++                                                   AFBC_FORMAT_MOD_SPARSE |
++                                                   AFBC_FORMAT_MOD_SPLIT),
++    },
+ #endif
+ };
+ 
+@@ -228,15 +249,18 @@ static int v4l2_request_set_drm_descriptor(V4L2RequestDescriptor *req, struct v4
+     desc->objects[0].size = req->capture.size;
+ 
+     desc->nb_layers = 1;
+-    layer->nb_planes = 2;
++    layer->nb_planes = 1;
+ 
+     layer->planes[0].object_index = 0;
+     layer->planes[0].offset = 0;
+     layer->planes[0].pitch = V4L2_TYPE_IS_MULTIPLANAR(format->type) ? format->fmt.pix_mp.plane_fmt[0].bytesperline : format->fmt.pix.bytesperline;
+ 
+-    layer->planes[1].object_index = 0;
+-    layer->planes[1].offset = layer->planes[0].pitch * (V4L2_TYPE_IS_MULTIPLANAR(format->type) ? format->fmt.pix_mp.height : format->fmt.pix.height);
+-    layer->planes[1].pitch = layer->planes[0].pitch;
++    if (!fourcc_mod_is_vendor(desc->objects[0].format_modifier, ARM)) {
++        layer->nb_planes = 2;
++        layer->planes[1].object_index = 0;
++        layer->planes[1].offset = layer->planes[0].pitch * (V4L2_TYPE_IS_MULTIPLANAR(format->type) ? format->fmt.pix_mp.height : format->fmt.pix.height);
++        layer->planes[1].pitch = layer->planes[0].pitch;
++    }
+ 
+     return 0;
+ }

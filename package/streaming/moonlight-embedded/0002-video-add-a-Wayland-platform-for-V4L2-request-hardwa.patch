@@ -1,0 +1,913 @@
+From 0b67df0949d6bbb456a32643b459a84e7ff4cf24 Mon Sep 17 00:00:00 2001
+From: nuubOS Project <nuubos@localhost>
+Date: Tue, 6 Oct 2026 18:45:12 +0200
+Subject: [PATCH 2/5] video: add a Wayland platform for V4L2 request hardware
+ decoders
+
+Decodes H.264/HEVC with FFmpeg's V4L2 request API hwaccel (Allwinner
+Cedrus and other stateless VPUs) and presents the DRM PRIME frames with
+zero copies: each capture dma-buf is wrapped once in a linux-dmabuf
+wl_buffer and attached to a desynchronized subsurface, fitted with
+wp_viewporter over a one-pixel black parent. A frame stays referenced
+until the compositor releases its buffer. Frames are shown as soon as
+they are decoded; a frame is skipped when newer ones are already queued.
+Selected by -platform wayland, or by auto when WAYLAND_DISPLAY is set.
+---
+ CMakeLists.txt      |  41 ++-
+ src/main.c          |   2 +-
+ src/platform.c      |  10 +
+ src/platform.h      |   2 +-
+ src/video/video.h   |   3 +
+ src/video/wayland.c | 690 ++++++++++++++++++++++++++++++++++++++++++++
+ src/video/wayland.h |  36 +++
+ 7 files changed, 780 insertions(+), 4 deletions(-)
+ create mode 100644 src/video/wayland.c
+ create mode 100644 src/video/wayland.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2be10fd..540ca3c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -28,6 +28,7 @@ option(ENABLE_FFMPEG "Compile FFMPEG support" ON)
+ option(ENABLE_X11 "Compile X11 support (requires ENABLE_FFMPEG)" ON)
+ option(ENABLE_CEC "Compile CEC support" ON)
+ option(ENABLE_PULSE "Compile PulseAudio support" ON)
++option(ENABLE_WAYLAND "Compile Wayland support (V4L2 request hardware decoding)" ON)
+ 
+ pkg_check_modules(EVDEV REQUIRED libevdev)
+ pkg_check_modules(UDEV REQUIRED libudev)
+@@ -50,6 +51,21 @@ endif()
+ if (ENABLE_PULSE)
+   pkg_check_modules(PULSE libpulse-simple)
+ endif()
++if (ENABLE_WAYLAND)
++  pkg_check_modules(WAYLAND_CLIENT wayland-client)
++  pkg_check_modules(WAYLAND_PROTOCOLS wayland-protocols)
++  pkg_check_modules(WL_AVCODEC libavcodec)
++  pkg_check_modules(WL_AVUTIL libavutil)
++  if (NOT WAYLAND_PROTOCOLS_DIR)
++    pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
++  endif()
++  if (NOT WAYLAND_SCANNER)
++    find_program(WAYLAND_SCANNER wayland-scanner)
++  endif()
++  if (WAYLAND_CLIENT_FOUND AND WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER AND WL_AVCODEC_FOUND AND WL_AVUTIL_FOUND)
++    set(WAYLAND_FOUND TRUE)
++  endif()
++endif()
+ if (ENABLE_CEC)
+   pkg_check_modules(CEC libcec>=4)
+ endif()
+@@ -195,6 +211,27 @@ if (SOFTWARE_FOUND)
+   endif()
+ endif()
+ 
++if (WAYLAND_FOUND)
++  list(APPEND MOONLIGHT_DEFINITIONS HAVE_WAYLAND)
++  list(APPEND MOONLIGHT_OPTIONS WAYLAND)
++  set(WL_PROTOCOLS
++    "${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml"
++    "${WAYLAND_PROTOCOLS_DIR}/stable/viewporter/viewporter.xml"
++    "${WAYLAND_PROTOCOLS_DIR}/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml")
++  foreach(xml ${WL_PROTOCOLS})
++    get_filename_component(proto ${xml} NAME_WE)
++    add_custom_command(
++      OUTPUT "${PROJECT_BINARY_DIR}/${proto}-client-protocol.h" "${PROJECT_BINARY_DIR}/${proto}-protocol.c"
++      COMMAND ${WAYLAND_SCANNER} client-header ${xml} "${PROJECT_BINARY_DIR}/${proto}-client-protocol.h"
++      COMMAND ${WAYLAND_SCANNER} private-code ${xml} "${PROJECT_BINARY_DIR}/${proto}-protocol.c"
++      DEPENDS ${xml})
++    target_sources(moonlight PRIVATE "${PROJECT_BINARY_DIR}/${proto}-client-protocol.h" "${PROJECT_BINARY_DIR}/${proto}-protocol.c")
++  endforeach()
++  target_sources(moonlight PRIVATE ./src/video/wayland.c)
++  target_include_directories(moonlight PRIVATE ${WAYLAND_CLIENT_INCLUDE_DIRS} ${WL_AVCODEC_INCLUDE_DIRS} ${WL_AVUTIL_INCLUDE_DIRS})
++  target_link_libraries(moonlight ${WAYLAND_CLIENT_LIBRARIES} ${WL_AVCODEC_LIBRARIES} ${WL_AVUTIL_LIBRARIES} pthread)
++endif()
++
+ if (ALSA_FOUND)
+   list(APPEND MOONLIGHT_DEFINITIONS HAVE_ALSA)
+   list(APPEND MOONLIGHT_OPTIONS ALSA)
+@@ -211,12 +248,12 @@ if (PULSE_FOUND)
+   target_link_libraries(moonlight ${PULSE_LIBRARIES})
+ endif()
+ 
+-if (AMLOGIC_FOUND OR BROADCOM-OMX_FOUND OR MMAL_FOUND OR FREESCALE_FOUND OR ROCKCHIP_FOUND OR X11_FOUND)
++if (AMLOGIC_FOUND OR BROADCOM-OMX_FOUND OR MMAL_FOUND OR FREESCALE_FOUND OR ROCKCHIP_FOUND OR X11_FOUND OR WAYLAND_FOUND)
+   list(APPEND MOONLIGHT_DEFINITIONS HAVE_EMBEDDED)
+   list(APPEND MOONLIGHT_OPTIONS EMBEDDED)
+ endif()
+ 
+-if(NOT AMLOGIC_FOUND AND NOT BROADCOM-OMX_FOUND AND NOT MMAL_FOUND AND NOT FREESCALE_FOUND AND NOT ROCKCHIP_FOUND AND NOT SOFTWARE_FOUND)
++if(NOT AMLOGIC_FOUND AND NOT BROADCOM-OMX_FOUND AND NOT MMAL_FOUND AND NOT FREESCALE_FOUND AND NOT ROCKCHIP_FOUND AND NOT SOFTWARE_FOUND AND NOT WAYLAND_FOUND)
+   message(FATAL_ERROR "No video output available")
+ endif()
+ 
+diff --git a/src/main.c b/src/main.c
+index 8e9570d..499b130 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -210,7 +210,7 @@ static void help() {
+   printf("\t-surround <5.1/7.1>\t\tStream 5.1 or 7.1 surround sound\n");
+   printf("\t-keydir <directory>\tLoad encryption keys from directory\n");
+   printf("\t-mapping <file>\t\tUse <file> as gamepad mappings configuration file\n");
+-  printf("\t-platform <system>\tSpecify system used for audio, video and input: pi/imx/aml/rk/x11/x11_vdpau/sdl/fake (default auto)\n");
++  printf("\t-platform <system>\tSpecify system used for audio, video and input: wayland/pi/imx/aml/rk/x11/x11_vdpau/sdl/fake (default auto)\n");
+   printf("\t-nounsupported\t\tDon't stream if resolution is not officially supported by the server\n");
+   printf("\t-quitappafter\t\tSend quit app request to remote after quitting session\n");
+   printf("\t-viewonly\t\tDisable all input processing (view-only mode)\n");
+diff --git a/src/platform.c b/src/platform.c
+index fab3057..f398c58 100644
+--- a/src/platform.c
++++ b/src/platform.c
+@@ -35,6 +35,10 @@ typedef bool(*ImxInit)();
+ 
+ enum platform platform_check(char* name) {
+   bool std = strcmp(name, "auto") == 0;
++  #ifdef HAVE_WAYLAND
++  if ((std && getenv("WAYLAND_DISPLAY") != NULL) || strcmp(name, "wayland") == 0)
++    return WAYLAND;
++  #endif
+   #ifdef HAVE_IMX
+   if (std || strcmp(name, "imx") == 0) {
+     void *handle = dlopen("libmoonlight-imx.so", RTLD_NOW | RTLD_GLOBAL);
+@@ -140,6 +144,10 @@ void platform_stop(enum platform system) {
+ 
+ DECODER_RENDERER_CALLBACKS* platform_get_video(enum platform system) {
+   switch (system) {
++  #ifdef HAVE_WAYLAND
++  case WAYLAND:
++    return &decoder_callbacks_wayland;
++  #endif
+   #ifdef HAVE_X11
+   case X11:
+     return &decoder_callbacks_x11;
+@@ -241,6 +249,8 @@ char* platform_name(enum platform system) {
+     return "AMLogic VPU";
+   case RK:
+     return "Rockchip VPU";
++  case WAYLAND:
++    return "Wayland (V4L2 request hardware decoding)";
+   case X11:
+     return "X Window System (software decoding)";
+   case X11_VAAPI:
+diff --git a/src/platform.h b/src/platform.h
+index 67c5cc7..ee763cb 100644
+--- a/src/platform.h
++++ b/src/platform.h
+@@ -26,7 +26,7 @@
+ 
+ #define IS_EMBEDDED(SYSTEM) SYSTEM != SDL
+ 
+-enum platform { NONE, SDL, X11, X11_VDPAU, X11_VAAPI, PI, MMAL, IMX, AML, RK, FAKE };
++enum platform { NONE, SDL, X11, X11_VDPAU, X11_VAAPI, PI, MMAL, IMX, AML, RK, WAYLAND, FAKE };
+ enum codecs { CODEC_UNSPECIFIED, CODEC_H264, CODEC_HEVC, CODEC_AV1 };
+ 
+ enum platform platform_check(char*);
+diff --git a/src/video/video.h b/src/video/video.h
+index 4c1344b..a0ec041 100644
+--- a/src/video/video.h
++++ b/src/video/video.h
+@@ -48,3 +48,6 @@ extern DECODER_RENDERER_CALLBACKS decoder_callbacks_x11_vdpau;
+ #ifdef HAVE_SDL
+ extern DECODER_RENDERER_CALLBACKS decoder_callbacks_sdl;
+ #endif
++#ifdef HAVE_WAYLAND
++#include "wayland.h"
++#endif
+diff --git a/src/video/wayland.c b/src/video/wayland.c
+new file mode 100644
+index 0000000..28adc6b
+--- /dev/null
++++ b/src/video/wayland.c
+@@ -0,0 +1,690 @@
++/*
++ * This file is part of Moonlight Embedded.
++ *
++ * Copyright (C) 2026 nuubOS Project
++ *
++ * Moonlight is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * Moonlight is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++/*
++ * Wayland platform for stateless V4L2 decoders (Allwinner Cedrus, Hantro,
++ * rkvdec...), written for nuubOS on the Allwinner H700.
++ *
++ * Decoding: FFmpeg's h264/hevc decoders with the V4L2 request API hwaccel
++ * (AV_HWDEVICE_TYPE_DRM). The VPU writes NV12 straight into V4L2 capture
++ * buffers that FFmpeg exports as dma-bufs (AV_PIX_FMT_DRM_PRIME).
++ *
++ * Presentation: zero copy. Every capture buffer is wrapped once in a
++ * zwp_linux_dmabuf_v1 wl_buffer and attached to a desynchronized
++ * subsurface; the compositor samples it directly. The decoded frame is
++ * referenced until the compositor releases its wl_buffer, so the decoder
++ * never overwrites a buffer on screen. The parent surface is one black
++ * pixel stretched with wp_viewporter (letterbox), the video is fitted with
++ * wp_viewporter too: no scaling or colour conversion on the CPU, no GL
++ * context in this process.
++ *
++ * Latency: frames are presented as soon as they are decoded (the newest
++ * committed buffer wins at the next vblank); when more frames are already
++ * queued, a decoded frame is not presented so a burst after a network
++ * hiccup is caught up instead of being displayed late.
++ *
++ * Wayland events (configure, ping, buffer release) are dispatched by a
++ * dedicated thread that sleeps in poll() without timeout.
++ */
++
++#define _GNU_SOURCE
++
++#include "video.h"
++#include "wayland.h"
++
++#include <Limelight.h>
++
++#include <libavcodec/avcodec.h>
++#include <libavutil/hwcontext.h>
++#include <libavutil/hwcontext_drm.h>
++
++#include <wayland-client.h>
++#include "xdg-shell-client-protocol.h"
++#include "linux-dmabuf-unstable-v1-client-protocol.h"
++#include "viewporter-client-protocol.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <poll.h>
++#include <pthread.h>
++#include <signal.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/eventfd.h>
++#include <sys/mman.h>
++#include <sys/stat.h>
++#include <time.h>
++#include <unistd.h>
++
++#define MAX_SLOTS 32
++#define CONFIGURE_TIMEOUT_MS 3000
++
++extern pthread_t main_thread_id;
++
++struct slot {
++  bool used;
++  ino_t ino;
++  int width, height;
++  struct wl_buffer *buffer;
++  AVFrame *held;
++};
++
++/* Decoder */
++static AVCodecContext *codec_ctx;
++static AVBufferRef *hw_device;
++static AVPacket *packet;
++static AVFrame *frame;
++static uint8_t *au_buffer;
++static size_t au_capacity;
++static int stream_width, stream_height;
++
++/* Wayland */
++static struct wl_display *display;
++static struct wl_registry *registry;
++static struct wl_compositor *compositor;
++static struct wl_subcompositor *subcompositor;
++static struct wl_shm *shm;
++static struct xdg_wm_base *wm_base;
++static struct zwp_linux_dmabuf_v1 *dmabuf;
++static struct wp_viewporter *viewporter;
++static struct wl_surface *bg_surface, *video_surface;
++static struct wl_subsurface *subsurface;
++static struct xdg_surface *xdg_surface;
++static struct xdg_toplevel *toplevel;
++static struct wp_viewport *bg_viewport, *video_viewport;
++static struct wl_buffer *black_buffer;
++static int output_width, output_height;
++static bool configured;
++
++static pthread_t event_thread;
++static bool event_thread_started;
++static int wake_fd = -1;
++static volatile bool running;
++
++static pthread_mutex_t slot_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct slot slots[MAX_SLOTS];
++
++/* Statistics for the nuubOS control channel. */
++static pthread_mutex_t stats_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct wayland_video_stats stats;
++
++static uint64_t now_us(void) {
++  struct timespec ts;
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return (uint64_t) ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
++}
++
++/* ------------------------------------------------------------------ */
++/* Wayland                                                             */
++/* ------------------------------------------------------------------ */
++
++static void buffer_release(void *data, struct wl_buffer *buffer) {
++  struct slot *slot = data;
++  AVFrame *held;
++
++  pthread_mutex_lock(&slot_lock);
++  held = slot->held;
++  slot->held = NULL;
++  pthread_mutex_unlock(&slot_lock);
++  if (held)
++    av_frame_free(&held);
++}
++
++static const struct wl_buffer_listener buffer_listener = {
++  .release = buffer_release,
++};
++
++/* Fits the stream into the output keeping its aspect ratio; the black
++ * parent surface fills the rest. Runs on the event thread. */
++static void apply_layout(void) {
++  int w = output_width, h = output_height;
++  int x = 0, y = 0;
++
++  if (stream_width <= 0 || stream_height <= 0 || w <= 0 || h <= 0)
++    return;
++  if ((int64_t) w * stream_height > (int64_t) h * stream_width) {
++    w = (int) ((int64_t) h * stream_width / stream_height);
++    x = (output_width - w) / 2;
++  } else if ((int64_t) w * stream_height < (int64_t) h * stream_width) {
++    h = (int) ((int64_t) w * stream_height / stream_width);
++    y = (output_height - h) / 2;
++  }
++  wp_viewport_set_destination(video_viewport, w, h);
++  wl_subsurface_set_position(subsurface, x, y);
++  wp_viewport_set_destination(bg_viewport, output_width, output_height);
++  wl_surface_attach(bg_surface, black_buffer, 0, 0);
++  wl_surface_damage_buffer(bg_surface, 0, 0, 1, 1);
++  wl_surface_commit(bg_surface);
++}
++
++static void xdg_surface_configure(void *data, struct xdg_surface *surface, uint32_t serial) {
++  xdg_surface_ack_configure(surface, serial);
++  if (output_width <= 0 || output_height <= 0) {
++    output_width = stream_width;
++    output_height = stream_height;
++  }
++  apply_layout();
++  configured = true;
++}
++
++static const struct xdg_surface_listener xdg_surface_listener = {
++  .configure = xdg_surface_configure,
++};
++
++static void toplevel_configure(void *data, struct xdg_toplevel *t, int32_t width, int32_t height, struct wl_array *states) {
++  if (width > 0 && height > 0) {
++    output_width = width;
++    output_height = height;
++  }
++}
++
++static void toplevel_close(void *data, struct xdg_toplevel *t) {
++  /* The compositor closed the window: end the session like a quit. */
++  if (main_thread_id != 0)
++    pthread_kill(main_thread_id, SIGTERM);
++}
++
++static const struct xdg_toplevel_listener toplevel_listener = {
++  .configure = toplevel_configure,
++  .close = toplevel_close,
++};
++
++static void wm_base_ping(void *data, struct xdg_wm_base *base, uint32_t serial) {
++  xdg_wm_base_pong(base, serial);
++}
++
++static const struct xdg_wm_base_listener wm_base_listener = {
++  .ping = wm_base_ping,
++};
++
++static void registry_global(void *data, struct wl_registry *reg, uint32_t name, const char *interface, uint32_t version) {
++  if (strcmp(interface, wl_compositor_interface.name) == 0)
++    compositor = wl_registry_bind(reg, name, &wl_compositor_interface, 4);
++  else if (strcmp(interface, wl_subcompositor_interface.name) == 0)
++    subcompositor = wl_registry_bind(reg, name, &wl_subcompositor_interface, 1);
++  else if (strcmp(interface, wl_shm_interface.name) == 0)
++    shm = wl_registry_bind(reg, name, &wl_shm_interface, 1);
++  else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
++    wm_base = wl_registry_bind(reg, name, &xdg_wm_base_interface, 1);
++    xdg_wm_base_add_listener(wm_base, &wm_base_listener, NULL);
++  } else if (strcmp(interface, zwp_linux_dmabuf_v1_interface.name) == 0 && version >= 3)
++    dmabuf = wl_registry_bind(reg, name, &zwp_linux_dmabuf_v1_interface, 3);
++  else if (strcmp(interface, wp_viewporter_interface.name) == 0)
++    viewporter = wl_registry_bind(reg, name, &wp_viewporter_interface, 1);
++}
++
++static void registry_global_remove(void *data, struct wl_registry *reg, uint32_t name) {
++}
++
++static const struct wl_registry_listener registry_listener = {
++  .global = registry_global,
++  .global_remove = registry_global_remove,
++};
++
++/* One opaque black pixel, stretched over the output by the viewport. */
++static struct wl_buffer *create_black_buffer(void) {
++  struct wl_shm_pool *pool;
++  struct wl_buffer *buffer;
++  uint32_t *pixel;
++  int fd = memfd_create("moonlight-black", MFD_CLOEXEC);
++
++  if (fd < 0)
++    return NULL;
++  if (ftruncate(fd, 4) != 0) {
++    close(fd);
++    return NULL;
++  }
++  pixel = mmap(NULL, 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++  if (pixel == MAP_FAILED) {
++    close(fd);
++    return NULL;
++  }
++  *pixel = 0xff000000;
++  munmap(pixel, 4);
++  pool = wl_shm_create_pool(shm, fd, 4);
++  buffer = wl_shm_pool_create_buffer(pool, 0, 1, 1, 4, WL_SHM_FORMAT_XRGB8888);
++  wl_shm_pool_destroy(pool);
++  close(fd);
++  return buffer;
++}
++
++static void *event_loop(void *arg) {
++  while (running) {
++    struct pollfd fds[2];
++
++    while (wl_display_prepare_read(display) != 0)
++      wl_display_dispatch_pending(display);
++    wl_display_flush(display);
++
++    fds[0] = (struct pollfd) { wl_display_get_fd(display), POLLIN, 0 };
++    fds[1] = (struct pollfd) { wake_fd, POLLIN, 0 };
++    if (poll(fds, 2, -1) < 0) {
++      wl_display_cancel_read(display);
++      if (errno == EINTR)
++        continue;
++      break;
++    }
++    if (fds[0].revents & POLLIN) {
++      if (wl_display_read_events(display) != 0)
++        break;
++    } else {
++      wl_display_cancel_read(display);
++    }
++    if (fds[1].revents & POLLIN)
++      break;
++    if (wl_display_dispatch_pending(display) < 0 || (fds[0].revents & (POLLERR | POLLHUP)))
++      break;
++  }
++  if (running) {
++    fprintf(stderr, "Wayland connection lost\n");
++    if (main_thread_id != 0)
++      pthread_kill(main_thread_id, SIGTERM);
++  }
++  return NULL;
++}
++
++static int wayland_open(void) {
++  long long deadline;
++
++  display = wl_display_connect(NULL);
++  if (display == NULL) {
++    fprintf(stderr, "Can't connect to the Wayland compositor\n");
++    return -1;
++  }
++  registry = wl_display_get_registry(display);
++  wl_registry_add_listener(registry, &registry_listener, NULL);
++  wl_display_roundtrip(display);
++  if (!compositor || !subcompositor || !shm || !wm_base || !dmabuf || !viewporter) {
++    fprintf(stderr, "Wayland compositor lacks a required protocol (dmabuf v3, viewporter, xdg-shell)\n");
++    return -1;
++  }
++
++  black_buffer = create_black_buffer();
++  if (!black_buffer)
++    return -1;
++
++  bg_surface = wl_compositor_create_surface(compositor);
++  video_surface = wl_compositor_create_surface(compositor);
++  subsurface = wl_subcompositor_get_subsurface(subcompositor, video_surface, bg_surface);
++  wl_subsurface_set_desync(subsurface);
++  bg_viewport = wp_viewporter_get_viewport(viewporter, bg_surface);
++  video_viewport = wp_viewporter_get_viewport(viewporter, video_surface);
++
++  /* The video never needs input: pointer/touch go to the parent. */
++  {
++    struct wl_region *empty = wl_compositor_create_region(compositor);
++    wl_surface_set_input_region(video_surface, empty);
++    wl_region_destroy(empty);
++  }
++  {
++    struct wl_region *opaque = wl_compositor_create_region(compositor);
++    wl_region_add(opaque, 0, 0, INT32_MAX, INT32_MAX);
++    wl_surface_set_opaque_region(video_surface, opaque);
++    wl_region_destroy(opaque);
++  }
++
++  xdg_surface = xdg_wm_base_get_xdg_surface(wm_base, bg_surface);
++  xdg_surface_add_listener(xdg_surface, &xdg_surface_listener, NULL);
++  toplevel = xdg_surface_get_toplevel(xdg_surface);
++  xdg_toplevel_add_listener(toplevel, &toplevel_listener, NULL);
++  xdg_toplevel_set_app_id(toplevel, "moonlight");
++  xdg_toplevel_set_title(toplevel, "Moonlight");
++  xdg_toplevel_set_fullscreen(toplevel, NULL);
++  wl_surface_commit(bg_surface);
++
++  deadline = now_us() / 1000 + CONFIGURE_TIMEOUT_MS;
++  while (!configured && now_us() / 1000 < deadline) {
++    if (wl_display_roundtrip(display) < 0)
++      break;
++  }
++  if (!configured) {
++    fprintf(stderr, "Wayland surface was never configured\n");
++    return -1;
++  }
++
++  wake_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
++  if (wake_fd < 0)
++    return -1;
++  running = true;
++  if (pthread_create(&event_thread, NULL, event_loop, NULL) != 0) {
++    running = false;
++    return -1;
++  }
++  event_thread_started = true;
++  return 0;
++}
++
++static void wayland_close(void) {
++  if (event_thread_started) {
++    uint64_t one = 1;
++
++    running = false;
++    if (write(wake_fd, &one, sizeof(one)) < 0) {
++      /* The thread also leaves when the connection drops. */
++    }
++    pthread_join(event_thread, NULL);
++    event_thread_started = false;
++  }
++  running = false;
++  if (wake_fd >= 0)
++    close(wake_fd);
++  wake_fd = -1;
++
++  for (int i = 0; i < MAX_SLOTS; i++) {
++    if (slots[i].buffer)
++      wl_buffer_destroy(slots[i].buffer);
++    if (slots[i].held)
++      av_frame_free(&slots[i].held);
++    memset(&slots[i], 0, sizeof(slots[i]));
++  }
++  if (video_viewport) wp_viewport_destroy(video_viewport);
++  if (bg_viewport) wp_viewport_destroy(bg_viewport);
++  if (toplevel) xdg_toplevel_destroy(toplevel);
++  if (xdg_surface) xdg_surface_destroy(xdg_surface);
++  if (subsurface) wl_subsurface_destroy(subsurface);
++  if (video_surface) wl_surface_destroy(video_surface);
++  if (bg_surface) wl_surface_destroy(bg_surface);
++  if (black_buffer) wl_buffer_destroy(black_buffer);
++  if (viewporter) wp_viewporter_destroy(viewporter);
++  if (dmabuf) zwp_linux_dmabuf_v1_destroy(dmabuf);
++  if (wm_base) xdg_wm_base_destroy(wm_base);
++  if (shm) wl_shm_destroy(shm);
++  if (subcompositor) wl_subcompositor_destroy(subcompositor);
++  if (compositor) wl_compositor_destroy(compositor);
++  if (registry) wl_registry_destroy(registry);
++  if (display) {
++    wl_display_flush(display);
++    wl_display_disconnect(display);
++  }
++  video_viewport = bg_viewport = NULL;
++  toplevel = NULL;
++  xdg_surface = NULL;
++  subsurface = NULL;
++  video_surface = bg_surface = NULL;
++  black_buffer = NULL;
++  viewporter = NULL;
++  dmabuf = NULL;
++  wm_base = NULL;
++  shm = NULL;
++  subcompositor = NULL;
++  compositor = NULL;
++  registry = NULL;
++  display = NULL;
++  configured = false;
++  output_width = output_height = 0;
++}
++
++/* Wraps the capture buffer behind a DRM PRIME frame in a wl_buffer, once:
++ * the decoder recycles a small fixed set of buffers. A dma-buf is
++ * identified by its inode, which stays the same for its whole life. */
++static struct slot *slot_for(const AVFrame *f) {
++  const AVDRMFrameDescriptor *desc = (const AVDRMFrameDescriptor *) f->data[0];
++  const AVDRMLayerDescriptor *layer;
++  struct zwp_linux_buffer_params_v1 *params;
++  struct slot *free_slot = NULL;
++  struct stat st;
++  int plane_index = 0;
++
++  if (desc == NULL || desc->nb_objects < 1 || desc->nb_layers < 1)
++    return NULL;
++  if (fstat(desc->objects[0].fd, &st) != 0)
++    return NULL;
++
++  for (int i = 0; i < MAX_SLOTS; i++) {
++    if (slots[i].used && slots[i].ino == st.st_ino &&
++        slots[i].width == f->width && slots[i].height == f->height)
++      return &slots[i];
++    if (!slots[i].used && free_slot == NULL)
++      free_slot = &slots[i];
++  }
++  if (free_slot == NULL) {
++    /* A new buffer set (decoder reinitialized): forget idle buffers. */
++    for (int i = 0; i < MAX_SLOTS; i++) {
++      if (slots[i].held)
++        continue;
++      wl_buffer_destroy(slots[i].buffer);
++      memset(&slots[i], 0, sizeof(slots[i]));
++      if (free_slot == NULL)
++        free_slot = &slots[i];
++    }
++    if (free_slot == NULL)
++      return NULL;
++  }
++
++  params = zwp_linux_dmabuf_v1_create_params(dmabuf);
++  for (int l = 0; l < desc->nb_layers; l++) {
++    layer = &desc->layers[l];
++    for (int p = 0; p < layer->nb_planes; p++) {
++      const AVDRMPlaneDescriptor *plane = &layer->planes[p];
++      uint64_t modifier = desc->objects[plane->object_index].format_modifier;
++
++      zwp_linux_buffer_params_v1_add(params, desc->objects[plane->object_index].fd,
++                                     plane_index++, plane->offset, plane->pitch,
++                                     modifier >> 32, modifier & 0xffffffff);
++    }
++  }
++  free_slot->buffer = zwp_linux_buffer_params_v1_create_immed(params, f->width, f->height,
++                                                              desc->layers[0].format, 0);
++  zwp_linux_buffer_params_v1_destroy(params);
++  if (free_slot->buffer == NULL)
++    return NULL;
++  wl_buffer_add_listener(free_slot->buffer, &buffer_listener, free_slot);
++  free_slot->used = true;
++  free_slot->ino = st.st_ino;
++  free_slot->width = f->width;
++  free_slot->height = f->height;
++  return free_slot;
++}
++
++static bool present(AVFrame *f) {
++  struct slot *slot;
++  AVFrame *ref = av_frame_clone(f);
++  AVFrame *previous;
++
++  if (ref == NULL)
++    return false;
++  pthread_mutex_lock(&slot_lock);
++  slot = slot_for(f);
++  if (slot == NULL) {
++    pthread_mutex_unlock(&slot_lock);
++    av_frame_free(&ref);
++    return false;
++  }
++  /* Normally NULL: the decoder cannot reuse a buffer referenced here. */
++  previous = slot->held;
++  slot->held = ref;
++  pthread_mutex_unlock(&slot_lock);
++  if (previous)
++    av_frame_free(&previous);
++
++  wl_surface_attach(video_surface, slot->buffer, 0, 0);
++  wl_surface_damage_buffer(video_surface, 0, 0, INT32_MAX, INT32_MAX);
++  wl_surface_commit(video_surface);
++  wl_display_flush(display);
++  return true;
++}
++
++/* ------------------------------------------------------------------ */
++/* Decoder                                                             */
++/* ------------------------------------------------------------------ */
++
++static enum AVPixelFormat get_format(AVCodecContext *ctx, const enum AVPixelFormat *formats) {
++  for (const enum AVPixelFormat *p = formats; *p != AV_PIX_FMT_NONE; p++) {
++    if (*p == AV_PIX_FMT_DRM_PRIME)
++      return *p;
++  }
++  fprintf(stderr, "The hardware decoder does not support this stream\n");
++  return AV_PIX_FMT_NONE;
++}
++
++static int decoder_open(int videoFormat, int width, int height) {
++  const AVCodec *codec;
++  int err;
++
++  if (videoFormat & VIDEO_FORMAT_MASK_H264)
++    codec = avcodec_find_decoder(AV_CODEC_ID_H264);
++  else if (videoFormat & VIDEO_FORMAT_MASK_H265)
++    codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
++  else {
++    fprintf(stderr, "Video format not supported by the hardware decoder\n");
++    return -1;
++  }
++  if (codec == NULL) {
++    fprintf(stderr, "FFmpeg decoder not available\n");
++    return -1;
++  }
++
++  err = av_hwdevice_ctx_create(&hw_device, AV_HWDEVICE_TYPE_DRM, NULL, NULL, 0);
++  if (err < 0) {
++    fprintf(stderr, "Can't create the DRM hardware device: %s\n", av_err2str(err));
++    return -1;
++  }
++
++  codec_ctx = avcodec_alloc_context3(codec);
++  packet = av_packet_alloc();
++  frame = av_frame_alloc();
++  if (codec_ctx == NULL || packet == NULL || frame == NULL)
++    return -1;
++
++  codec_ctx->hw_device_ctx = av_buffer_ref(hw_device);
++  codec_ctx->get_format = get_format;
++  codec_ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
++  codec_ctx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
++  codec_ctx->flags2 |= AV_CODEC_FLAG2_SHOW_ALL;
++  codec_ctx->err_recognition = AV_EF_EXPLODE;
++  codec_ctx->thread_count = 1;
++  codec_ctx->width = width;
++  codec_ctx->height = height;
++  /* Buffers held by the compositor (on screen + pending) on top of the
++   * decoder's own references. */
++  codec_ctx->extra_hw_frames = 3;
++
++  err = avcodec_open2(codec_ctx, codec, NULL);
++  if (err < 0) {
++    fprintf(stderr, "Can't open the %s decoder: %s\n", codec->name, av_err2str(err));
++    return -1;
++  }
++  printf("Using FFmpeg decoder %s with the V4L2 request hwaccel\n", codec->name);
++  return 0;
++}
++
++static void decoder_close(void) {
++  if (codec_ctx)
++    avcodec_free_context(&codec_ctx);
++  if (hw_device)
++    av_buffer_unref(&hw_device);
++  if (packet)
++    av_packet_free(&packet);
++  if (frame)
++    av_frame_free(&frame);
++  free(au_buffer);
++  au_buffer = NULL;
++  au_capacity = 0;
++}
++
++static int wayland_setup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
++  stream_width = width;
++  stream_height = height;
++  memset(&stats, 0, sizeof(stats));
++  if (decoder_open(videoFormat, width, height) != 0 || wayland_open() != 0) {
++    wayland_close();
++    decoder_close();
++    return -1;
++  }
++  return 0;
++}
++
++static void wayland_cleanup(void) {
++  wayland_close();
++  decoder_close();
++}
++
++static int wayland_submit_decode_unit(PDECODE_UNIT du) {
++  size_t needed = (size_t) du->fullLength + AV_INPUT_BUFFER_PADDING_SIZE;
++  size_t offset = 0;
++  uint64_t start;
++  int err;
++
++  if (needed > au_capacity) {
++    uint8_t *grown = realloc(au_buffer, needed);
++    if (grown == NULL)
++      return DR_NEED_IDR;
++    au_buffer = grown;
++    au_capacity = needed;
++  }
++  for (PLENTRY entry = du->bufferList; entry != NULL; entry = entry->next) {
++    memcpy(au_buffer + offset, entry->data, entry->length);
++    offset += entry->length;
++  }
++  memset(au_buffer + offset, 0, AV_INPUT_BUFFER_PADDING_SIZE);
++
++  start = now_us();
++  packet->data = au_buffer;
++  packet->size = (int) offset;
++  err = avcodec_send_packet(codec_ctx, packet);
++  if (err < 0) {
++    pthread_mutex_lock(&stats_lock);
++    stats.decode_errors++;
++    pthread_mutex_unlock(&stats_lock);
++    return DR_NEED_IDR;
++  }
++
++  err = avcodec_receive_frame(codec_ctx, frame);
++  if (err == 0) {
++    uint64_t decoded = now_us();
++    bool shown = false;
++
++    /* Frames already waiting: show the newest one instead of this. */
++    if (LiGetPendingVideoFrames() == 0)
++      shown = present(frame);
++    av_frame_unref(frame);
++
++    pthread_mutex_lock(&stats_lock);
++    stats.decoded++;
++    if (shown)
++      stats.presented++;
++    else
++      stats.skipped++;
++    stats.decode_us_total += decoded - start;
++    if (du->receiveTimeUs && decoded > du->receiveTimeUs)
++      stats.receive_to_present_us_total += decoded - du->receiveTimeUs;
++    pthread_mutex_unlock(&stats_lock);
++  } else if (err != AVERROR(EAGAIN)) {
++    pthread_mutex_lock(&stats_lock);
++    stats.decode_errors++;
++    pthread_mutex_unlock(&stats_lock);
++    return DR_NEED_IDR;
++  }
++  return DR_OK;
++}
++
++void wayland_video_stats(struct wayland_video_stats *out) {
++  pthread_mutex_lock(&stats_lock);
++  *out = stats;
++  pthread_mutex_unlock(&stats_lock);
++}
++
++DECODER_RENDERER_CALLBACKS decoder_callbacks_wayland = {
++  .setup = wayland_setup,
++  .cleanup = wayland_cleanup,
++  .submitDecodeUnit = wayland_submit_decode_unit,
++  .capabilities = 0,
++};
+diff --git a/src/video/wayland.h b/src/video/wayland.h
+new file mode 100644
+index 0000000..d93c2e9
+--- /dev/null
++++ b/src/video/wayland.h
+@@ -0,0 +1,36 @@
++/*
++ * This file is part of Moonlight Embedded.
++ *
++ * Copyright (C) 2026 nuubOS Project
++ *
++ * Moonlight is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * Moonlight is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#pragma once
++
++#include <Limelight.h>
++
++#include <stdint.h>
++
++struct wayland_video_stats {
++  uint64_t decoded;
++  uint64_t presented;
++  uint64_t skipped;
++  uint64_t decode_errors;
++  uint64_t decode_us_total;
++  uint64_t receive_to_present_us_total;
++};
++
++extern DECODER_RENDERER_CALLBACKS decoder_callbacks_wayland;
++void wayland_video_stats(struct wayland_video_stats *out);

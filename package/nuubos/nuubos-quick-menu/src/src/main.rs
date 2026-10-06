@@ -64,6 +64,7 @@ const STATUS_STATE: &str = "/run/nuubos/statusd.state";
 const STATUS_SOCKET: &str = "/run/nuubos/statusd.sock";
 const NOTIFY_SOCKET: &str = "/run/nuubos/notifyd.sock";
 const EMULATION_SOCKET: &str = "/run/nuubos/emud.sock";
+const STREAM_SOCKET: &str = "/run/nuubos/streamd.sock";
 
 
 const LINE_STAGE_MS: u64 = 220;
@@ -1364,6 +1365,8 @@ enum AppEvent {
     Input(LogicalEvent),
     /* Emulation Service session snapshot (nuubos-emud). */
     Game(GameSnapshot),
+    /* PC Game Streaming Service: a stream runs (nuubos-streamd). */
+    Stream(bool),
     StatusChanged,
     /* The output device changed its own volume (Bluetooth headset buttons). */
     DeviceVolume,
@@ -1698,6 +1701,35 @@ fn toast_view(ui: &QuickMenuWindow, n: &Notification) -> Option<ToastView> {
                 tr(ui, 430, "Fast-forward off")
             },
             String::new(),
+            -1,
+        ),
+        "stream.paired" => (
+            ICON_DONE,
+            SEVERITY_SUCCESS,
+            tr(ui, 462, "PC paired"),
+            n.text("name").to_owned(),
+            -1,
+        ),
+        "stream.pair.failed" => (
+            ICON_FAILED,
+            SEVERITY_ERROR,
+            tr(ui, 463, "Pairing failed"),
+            n.text("name").to_owned(),
+            -1,
+        ),
+        "stream.failed" => (
+            ICON_FAILED,
+            SEVERITY_ERROR,
+            match n.text("reason") {
+                "connection" => tr(ui, 465, "The stream was interrupted"),
+                _ => tr(ui, 464, "The stream could not be started"),
+            },
+            match n.text("reason") {
+                "unreachable" => tr(ui, 452, "The PC could not be reached"),
+                "unpaired" => tr(ui, 466, "The PC must be paired again"),
+                "app" => tr(ui, 467, "The application is not available on the PC"),
+                _ => n.text("name").to_owned(),
+            },
             -1,
         ),
         "game.failed" => (
@@ -2308,10 +2340,119 @@ fn start_game_subscription(tx: Sender<AppEvent>) {
     });
 }
 
+/* PC stream (EPIC-025). The stream runs while the menu is open: nothing
+ * pauses a PC game, so Resume only closes the menu. */
+fn stream_command(command: &str, timeout: Duration) -> std::io::Result<String> {
+    let mut stream = UnixStream::connect(STREAM_SOCKET)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.write_all(command.as_bytes())?;
+    stream.write_all(b"\n")?;
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply)?;
+    Ok(reply)
+}
+
+fn stream_running_from(reply: &str) -> bool {
+    reply.lines().any(|line| matches!(line, "state=streaming" | "state=starting"))
+}
+
+fn read_stream_running() -> bool {
+    let Ok(mut stream) = UnixStream::connect(STREAM_SOCKET) else { return false };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
+    if stream.write_all(b"STATUS\n").is_err() {
+        return false;
+    }
+    let mut reply = String::new();
+    for line in BufReader::new(stream).lines() {
+        let Ok(line) = line else { break };
+        reply.push_str(&line);
+        reply.push('\n');
+        if line == "end=1" {
+            break;
+        }
+    }
+    stream_running_from(&reply)
+}
+
+fn apply_stream_running(ui: &QuickMenuWindow, running: bool) {
+    if !running && ui.get_selected_index() >= 15 {
+        ui.set_selected_index(3);
+        ui.set_game_confirm_index(-1);
+    }
+    ui.set_stream_section_visible(running);
+}
+
+/* One sample of the stream statistics when the menu opens (they only
+ * exist while the stream runs; nothing is polled). */
+fn refresh_stream_stats(ui: &QuickMenuWindow) {
+    let reply = stream_command("STATS", Duration::from_millis(400)).unwrap_or_default();
+    let Some(fields) = reply.trim().strip_prefix("OK ") else {
+        ui.set_stream_latency_label("".into());
+        ui.set_stream_decode_label("".into());
+        ui.set_stream_video_label("".into());
+        return;
+    };
+    let value = |key: &str| -> i64 {
+        fields
+            .split(' ')
+            .find_map(|kv| kv.strip_prefix(key).and_then(|v| v.strip_prefix('=')))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-1)
+    };
+    let rtt = value("rtt");
+    ui.set_stream_latency_label(if rtt >= 0 { format!("{rtt} ms").into() } else { "".into() });
+    let decoded = value("decoded");
+    let decode_us = value("decode_us");
+    ui.set_stream_decode_label(if decoded > 0 && decode_us >= 0 {
+        format!("{:.1} ms", decode_us as f64 / decoded as f64 / 1000.0).into()
+    } else {
+        "".into()
+    });
+    let (width, height, fps) = (value("width"), value("height"), value("fps"));
+    ui.set_stream_video_label(if width > 0 && height > 0 {
+        format!("{width}×{height} • {}", format_arg(&tr(ui, 460, "{0} fps"), &fps.to_string())).into()
+    } else {
+        "".into()
+    });
+}
+
+fn start_stream_subscription(tx: Sender<AppEvent>) {
+    thread::spawn(move || loop {
+        if let Ok(mut stream) = UnixStream::connect(STREAM_SOCKET) {
+            if stream.write_all(b"SUBSCRIBE\n").is_ok() {
+                let mut reader = BufReader::new(stream);
+                let mut block = String::new();
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            block.push_str(&line);
+                            if line.trim_end() == "end=1" {
+                                let running = stream_running_from(&block);
+                                block.clear();
+                                if tx.send(AppEvent::Stream(running)).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        /* Only reached while streamd is absent or restarting. */
+        thread::sleep(Duration::from_secs(1));
+    });
+}
+
 fn selectable_menu_indices(ui: &QuickMenuWindow) -> Vec<i32> {
     let mut indices = Vec::new();
     if ui.get_game_section_visible() {
         indices.extend_from_slice(&[8, 9, 10, 11, 12, 13, 14]);
+    }
+    if ui.get_stream_section_visible() {
+        indices.extend_from_slice(&[15, 16, 17]);
     }
     indices.push(3);
     if ui.get_brightness_visible() {
@@ -2332,6 +2473,8 @@ fn first_selectable_index(ui: &QuickMenuWindow) -> i32 {
      * control, the first Display/Audio row. */
     if ui.get_game_section_visible() {
         8
+    } else if ui.get_stream_section_visible() {
+        15
     } else {
         3
     }
@@ -2499,7 +2642,12 @@ fn map_overlay(
     if game.running {
         game_action("PAUSE");
     }
-    ui.set_switch_user_visible(!game.running && switch_user_available());
+    let streaming = read_stream_running();
+    apply_stream_running(ui, streaming);
+    if streaming {
+        refresh_stream_stats(ui);
+    }
+    ui.set_switch_user_visible(!game.running && !streaming && switch_user_available());
     ui.set_selected_index(first_selectable_index(ui));
 
     state.create_overlay(qh, SurfaceKind::Full)?;
@@ -2858,6 +3006,40 @@ fn activate_selected(
     Ok(())
 }
 
+/* STREAM rows: 15 Resume, 16 Quit Stream (the application keeps running
+ * on the PC), 17 Quit and Close Application (second press). */
+fn activate_stream_row(
+    ui: &QuickMenuWindow,
+    mapped: &mut bool,
+    brightness_dirty: &mut bool,
+    queue: &mut EventQueue<WaylandState>,
+    state: &mut WaylandState,
+    qh: &QueueHandle<WaylandState>,
+    conn: &Connection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let index = ui.get_selected_index();
+    if index == 17 && ui.get_game_confirm_index() != index {
+        ui.set_game_confirm_index(index);
+        return redraw_overlay(ui, queue, state, qh, conn);
+    }
+    let command = match index {
+        15 => None,
+        16 => Some("QUIT"),
+        17 => Some("QUIT\tclose"),
+        _ => return Ok(()),
+    };
+    if let Some(command) = command {
+        if let Err(error) = stream_command(command, Duration::from_millis(700)) {
+            eprintln!("quick-menu: stream {command} failed={error}");
+        }
+        ui.set_stream_section_visible(false);
+    }
+    flush_brightness(ui, brightness_dirty)?;
+    unmap_overlay(ui, queue, state, conn);
+    *mapped = false;
+    Ok(())
+}
+
 /* GAME rows (8 Resume .. 14 Quit). Load State, Restart Game and Quit Game
  * lose unsaved progress and take a second press (EPIC-005 safety rules). */
 fn activate_game_row(
@@ -2994,7 +3176,8 @@ fn handle_event(
     match event.action.as_str() {
         /* Over a game Home (and its Power menu) is hidden: the power key
          * opens the Quick Menu on Sleep, next to Restart and Power Off. */
-        "power" if ui.get_game_section_visible() && !ui.get_lifecycle_active() => {
+        "power" if (ui.get_game_section_visible() || ui.get_stream_section_visible())
+            && !ui.get_lifecycle_active() => {
             if *mapped {
                 flush_brightness(ui, brightness_dirty)?;
                 unmap_overlay(ui, queue, state, conn);
@@ -3036,6 +3219,13 @@ fn handle_event(
             && ui.get_selected_index() >= 8 =>
         {
             activate_game_row(ui, mapped, brightness_dirty, queue, state, qh, conn)?;
+        }
+        "menu_confirm" if *mapped
+            && !ui.get_lifecycle_active()
+            && ui.get_stream_section_visible()
+            && ui.get_selected_index() >= 15 =>
+        {
+            activate_stream_row(ui, mapped, brightness_dirty, queue, state, qh, conn)?;
         }
         "menu_up" if *mapped && !ui.get_lifecycle_active() => {
             move_menu_selection(ui, -1);
@@ -3220,6 +3410,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     start_notify_subscription(tx.clone());
     start_audio_subscription(tx.clone());
     start_game_subscription(tx.clone());
+    start_stream_subscription(tx.clone());
     refresh_i18n(&ui);
 
     let mut mapped = false;
@@ -3344,6 +3535,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if was_mapped && !mapped {
                             dirty = true;
                         }
+                    }
+                }
+                AppEvent::Stream(running) => {
+                    apply_stream_running(&ui, running);
+                    if mapped {
+                        if !running {
+                            ui.set_switch_user_visible(switch_user_available());
+                        }
+                        dirty = true;
                     }
                 }
                 AppEvent::Game(snapshot) => {

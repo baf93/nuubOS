@@ -1,0 +1,50 @@
+From 55df3feb10a6e4651e206d71fa86aa674c73a69f Mon Sep 17 00:00:00 2001
+From: nuubOS Project <nuubos@localhost>
+Date: Tue, 6 Oct 2026 18:45:28 +0200
+Subject: [PATCH 3/5] audio: alsa: low latency buffering, drop on cleanup
+
+Use 10 ms periods and a 40 ms buffer (was 20/60 ms) and start once two
+periods are queued. Drop pending audio on cleanup instead of draining
+it: the stream has ended and PipeWire's ALSA plugin can block in drain.
+---
+ src/audio/alsa.c | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/src/audio/alsa.c b/src/audio/alsa.c
+index c63538c..42f3aba 100644
+--- a/src/audio/alsa.c
++++ b/src/audio/alsa.c
+@@ -57,8 +57,11 @@ static int alsa_renderer_init(int audioConfiguration, POPUS_MULTISTREAM_CONFIGUR
+ 
+   snd_pcm_hw_params_t *hw_params;
+   snd_pcm_sw_params_t *sw_params;
+-  snd_pcm_uframes_t period_size = (opusConfig->sampleRate * 20) / 1000; // 20 ms period
+-  snd_pcm_uframes_t buffer_size = 3 * period_size; // 60 ms buffer
++  /* Low latency: 10 ms periods and a 40 ms buffer bound the audio delay
++   * (a full buffer drops the packet instead of queueing it); playback
++   * starts once two periods are queued to absorb network jitter. */
++  snd_pcm_uframes_t period_size = (opusConfig->sampleRate * 10) / 1000; // 10 ms period
++  snd_pcm_uframes_t buffer_size = 4 * period_size; // 40 ms buffer
+   unsigned int sampleRate = opusConfig->sampleRate;
+ 
+   char* audio_device = (char*) context;
+@@ -84,7 +87,7 @@ static int alsa_renderer_init(int audioConfiguration, POPUS_MULTISTREAM_CONFIGUR
+   CHECK_RETURN(snd_pcm_sw_params_malloc(&sw_params));
+   CHECK_RETURN(snd_pcm_sw_params_current(handle, sw_params));
+   CHECK_RETURN(snd_pcm_sw_params_set_avail_min(handle, sw_params, period_size));
+-  CHECK_RETURN(snd_pcm_sw_params_set_start_threshold(handle, sw_params, period_size));
++  CHECK_RETURN(snd_pcm_sw_params_set_start_threshold(handle, sw_params, 2 * period_size));
+   CHECK_RETURN(snd_pcm_sw_params(handle, sw_params));
+   snd_pcm_sw_params_free(sw_params);
+ 
+@@ -100,7 +103,9 @@ static void alsa_renderer_cleanup() {
+   }
+ 
+   if (handle != NULL) {
+-    snd_pcm_drain(handle);
++    /* drain would wait for (and on PipeWire's ALSA plugin may hang on)
++     * audio nobody listens to anymore. */
++    snd_pcm_drop(handle);
+     snd_pcm_close(handle);
+     handle = NULL;
+   }

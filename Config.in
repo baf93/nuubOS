@@ -7,6 +7,7 @@ source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-status/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-users/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-library/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-emulation/Config.in"
+source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-streaming/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-regional/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-localization/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-wifi/Config.in"
@@ -25,5 +26,6 @@ source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-home-music/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-system/Config.in"
 
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/libretro/Config.in"
+source "$BR2_EXTERNAL_NUUBOS_PATH/package/streaming/Config.in"
 
 endmenu

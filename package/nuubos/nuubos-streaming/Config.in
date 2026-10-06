@@ -1,0 +1,12 @@
+config BR2_PACKAGE_NUUBOS_STREAMING
+	bool "nuubOS PC game streaming service"
+	depends on BR2_TOOLCHAIN_HAS_THREADS # moonlight-embedded
+	depends on BR2_PACKAGE_HAS_UDEV # moonlight-embedded
+	depends on BR2_PACKAGE_WAYLAND # moonlight-embedded
+	select BR2_PACKAGE_NUUBOS_NOTIFY
+	select BR2_PACKAGE_MOONLIGHT_EMBEDDED
+	help
+	  PC game streaming service (EPIC-025): per-user GameStream /
+	  Sunshine hosts, pairing, host applications, stream settings
+	  and the running Moonlight stream (gamepads, Quick Menu,
+	  lifecycle). Moonlight runs as a child process.

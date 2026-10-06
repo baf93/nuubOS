@@ -56,6 +56,16 @@ export struct WifiNetworkEntry {
     current: bool,
 }
 
+/* PC streaming host (nuubos-streamd snapshot). online: online|offline|unknown. */
+export struct MoonlightHostEntry {
+    id: string,
+    name: string,
+    address: string,
+    paired: bool,
+    online: string,
+    probing: bool,
+}
+
 export struct BluetoothDeviceEntry {
     address: string,
     name: string,
@@ -1142,7 +1152,7 @@ export component HomeWindow inherits Window {
     callback splash-size-changed();
     changed width => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
     changed height => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
-    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available"];
+    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming"];
 
     in-out property <string> topbar-time: "--:--";
     in-out property <string> current-user-name: root.i18n-strings[204];
@@ -1438,6 +1448,30 @@ export component HomeWindow inherits Window {
     property <int> oob-user-extra: root.user-count > 1 ? 2 : 0;
     property <int> oob-users-continue: root.user-count + 1 + root.oob-user-extra;
 
+    /* PC game streaming (EPIC-025). nuubos-streamd owns the user's PCs,
+     * pairing, their applications and the stream settings; this is its
+     * client. Like the OOB, Moonlight is the Settings shell with its own rail:
+     * settings-view 40 PCs (PCs, Search, Add by Address, Stream Settings),
+     * 41 one PC (paired: its applications; else Pair with the PIN; then
+     * Remove PC), 42 Stream Settings; the system keyboard (6) adds a PC. */
+    in-out property <bool> moonlight-active: false;
+    in-out property <int> moonlight-index: 0;
+    in-out property <int> moonlight-scroll: 0;
+    in-out property <string> moonlight-notice: "";
+    in-out property <[MoonlightHostEntry]> moonlight-hosts: [];
+    in-out property <bool> moonlight-discovering: false;
+    in-out property <MoonlightHostEntry> moonlight-host;
+    in-out property <[string]> moonlight-apps: [];
+    in-out property <string> moonlight-apps-state: "none";
+    in-out property <string> moonlight-pairing-pin: "";
+    in-out property <bool> moonlight-remove-confirm: false;
+    in-out property <string> moonlight-resolution-label: "";
+    in-out property <string> moonlight-fps-label: "";
+    in-out property <string> moonlight-codec-label: "";
+    in-out property <string> moonlight-bitrate-label: "";
+    /* Row of Remove PC on page 41 (Rust uses the same order). */
+    property <int> moonlight-remove-row: root.moonlight-host.paired ? root.moonlight-apps.length : 1;
+
     /* Global lifecycle overlays. Business logic remains in nuubos-systemd. */
     in-out property <bool> screensaver-active: false;
     in-out property <int> screensaver-x-permille: 110;
@@ -1455,7 +1489,8 @@ export component HomeWindow inherits Window {
      * 17 RGB Lighting, 18 Display & Audio,
      * 19 System, 20 Storage, 21 System Information, 22 Restore Defaults,
      * 23 General, 24 Profile, 25 Users, 26 User Detail,
-     * 30 OOB Date & Time, 31 OOB Wi-Fi, 32 OOB Users. */
+     * 30 OOB Date & Time, 31 OOB Wi-Fi, 32 OOB Users,
+     * 40 Moonlight PCs, 41 Moonlight PC, 42 Moonlight Stream Settings. */
     in-out property <int> settings-view: 0;
     /* Keep read-only/unavailable rows visually consistent with the rest of Settings.
      * The bottom action bar, not row opacity, communicates whether Confirm/Select
@@ -1594,6 +1629,9 @@ export component HomeWindow inherits Window {
         : root.settings-view == 30 ? root.i18n-strings[335]
         : root.settings-view == 31 ? root.i18n-strings[156]
         : root.settings-view == 32 ? root.i18n-strings[334]
+        : root.settings-view == 40 ? root.i18n-strings[436]
+        : root.settings-view == 41 ? (root.moonlight-host.paired ? root.i18n-strings[135] : root.i18n-strings[436])
+        : root.settings-view == 42 ? root.i18n-strings[473]
         : root.page-connectivity ? (root.connectivity-scroll-offset >= 3 ? root.i18n-strings[160] : root.i18n-strings[156])
         : root.settings-view >= 2 && root.settings-view <= 4 ? root.i18n-strings[156]
         : root.settings-view >= 7 && root.settings-view <= 9 ? root.i18n-strings[160]
@@ -1609,12 +1647,15 @@ export component HomeWindow inherits Window {
         root.page-general ? (root.general-scroll-offset >= 3 ? root.i18n-strings[313] : root.i18n-strings[312])
         : root.settings-view == 24 ? root.i18n-strings[312]
         : root.settings-view == 25 || root.settings-view == 26 ? root.i18n-strings[313]
+        /* PCs, their pairing and the stream settings are the user's. */
+        : root.settings-view >= 40 && root.settings-view <= 42 ? root.i18n-strings[312]
         : root.settings-section-label == "" ? ""
         : root.controllers-group ? root.i18n-strings[312]
         : root.i18n-strings[313];
 
     property <string> settings-notice:
-        root.settings-view >= 2 && root.settings-view <= 4 ? root.wifi-notice
+        root.moonlight-active && (root.settings-view >= 40 || root.settings-view == 6) ? root.moonlight-notice
+        : root.settings-view >= 2 && root.settings-view <= 4 ? root.wifi-notice
         : root.settings-view == 31 ? (root.wifi-notice != "" ? root.wifi-notice : root.oob-notice)
         : root.settings-view >= 30 ? root.oob-notice
         : root.settings-view >= 7 && root.settings-view <= 9 ? root.bluetooth-notice
@@ -2089,7 +2130,9 @@ export component HomeWindow inherits Window {
             Text {
                 x: 18px;
                 y: 14px;
-                text: root.oob-active ? root.i18n-strings[386] : root.i18n-strings[3];
+                text: root.oob-active ? root.i18n-strings[386]
+                    : root.moonlight-active ? root.i18n-strings[435]
+                    : root.i18n-strings[3];
                 color: #f5f6f8;
                 font-size: 29px;
                 font-weight: 700;
@@ -2113,7 +2156,18 @@ export component HomeWindow inherits Window {
                     height: root.settings-row-height;
                     label: root.i18n-strings[category];
                     selected: root.settings-selected-index == i;
-                    visible: !root.oob-active;
+                    visible: !root.oob-active && !root.moonlight-active;
+                }
+
+                /* Moonlight: where the user is; it never takes focus. */
+                for item[i] in [436, 437]: SettingsCategory {
+                    x: 8px;
+                    y: 8px + i * root.settings-row-step;
+                    width: parent.width - 16px;
+                    height: root.settings-row-height;
+                    label: root.i18n-strings[item];
+                    selected: (root.settings-view == 42 ? 1 : 0) == i;
+                    visible: root.moonlight-active;
                 }
 
                 /* OOB: the rail shows setup progress; it never takes focus. */
@@ -2182,6 +2236,9 @@ export component HomeWindow inherits Window {
                         : root.settings-view == 30 ? root.i18n-strings[46]
                         : root.settings-view == 31 ? root.i18n-strings[157]
                         : root.settings-view == 32 ? root.i18n-strings[275]
+                        : root.settings-view == 40 ? root.i18n-strings[436]
+                        : root.settings-view == 41 ? root.moonlight-host.name
+                        : root.settings-view == 42 ? root.i18n-strings[437]
                         : root.i18n-strings[3];
                     text-color: #f5f6f8;
                     text-size: 26px;
@@ -2432,6 +2489,127 @@ export component HomeWindow inherits Window {
                     selected: root.settings-view == 32 && root.oob-index == root.oob-users-continue;
                     visible: root.settings-view == 32
                         && root.srow-visible(root.oob-users-continue, root.oob-scroll, root.settings-list-visible-rows);
+                }
+
+                /* --------------------------------------------- Moonlight PCs (40) */
+                /* The user's PCs (paired, added or found on the network), then
+                 * the actions. Selecting a PC opens it (41). */
+                for host[i] in root.moonlight-hosts: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(i, root.moonlight-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: host.name;
+                    detail: host.address + " • " + (host.paired ? root.i18n-strings[442] : root.i18n-strings[443]);
+                    value: host.probing ? root.i18n-strings[446]
+                        : host.online == "online" ? root.i18n-strings[444]
+                        : host.online == "offline" ? root.i18n-strings[445]
+                        : "";
+                    emphasized: host.paired && host.online == "online";
+                    navigates: true;
+                    title-fraction: 0.55;
+                    selected: root.settings-view == 40 && root.moonlight-index == i;
+                    visible: root.settings-view == 40
+                        && root.srow-visible(i, root.moonlight-scroll, root.settings-list-visible-rows);
+                }
+                for row[k] in [
+                    { title: root.i18n-strings[438], detail: root.moonlight-discovering ? root.i18n-strings[440] : "", nav: false },
+                    { title: root.i18n-strings[439], detail: "", nav: true },
+                    { title: root.i18n-strings[437], detail: "", nav: true },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(root.moonlight-hosts.length + k, root.moonlight-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    detail: row.detail;
+                    navigates: row.nav;
+                    selected: root.settings-view == 40 && root.moonlight-index == root.moonlight-hosts.length + k;
+                    visible: root.settings-view == 40
+                        && root.srow-visible(root.moonlight-hosts.length + k, root.moonlight-scroll, root.settings-list-visible-rows);
+                }
+                SettingsHint {
+                    x: root.settings-content-x;
+                    y: root.srow-y(3, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    text: root.i18n-strings[458];
+                    visible: root.settings-view == 40 && root.moonlight-hosts.length == 0;
+                }
+
+                /* ---------------------------------------------- Moonlight PC (41) */
+                /* Paired: its applications, A starts the stream. Not paired: Pair
+                 * shows the PIN to enter on the PC. Remove PC comes last. */
+                for app[i] in root.moonlight-apps: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(i, root.moonlight-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: app;
+                    selected: root.settings-view == 41 && root.moonlight-index == i;
+                    visible: root.settings-view == 41 && root.moonlight-host.paired
+                        && root.srow-visible(i, root.moonlight-scroll, root.settings-list-visible-rows);
+                }
+                SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(0, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.moonlight-pairing-pin != "" ? root.i18n-strings[448] : root.i18n-strings[447];
+                    detail: root.moonlight-pairing-pin != "" ? root.i18n-strings[449]
+                        : root.moonlight-host.online == "offline" ? root.i18n-strings[452]
+                        : "";
+                    value: root.moonlight-pairing-pin != "" ? root.i18n-strings[474] + " " + root.moonlight-pairing-pin : "";
+                    emphasized: root.moonlight-pairing-pin != "";
+                    title-fraction: 0.5;
+                    selected: root.settings-view == 41 && root.moonlight-index == 0;
+                    visible: root.settings-view == 41 && !root.moonlight-host.paired;
+                }
+                SettingsActionButton {
+                    x: root.settings-content-x;
+                    y: root.srow-y(root.moonlight-remove-row, root.moonlight-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    label: root.moonlight-remove-confirm ? root.i18n-strings[191] : root.i18n-strings[450];
+                    danger: true;
+                    selected: root.settings-view == 41 && root.moonlight-index == root.moonlight-remove-row;
+                    visible: root.settings-view == 41
+                        && root.srow-visible(root.moonlight-remove-row, root.moonlight-scroll, root.settings-list-visible-rows);
+                }
+                SettingsHint {
+                    x: root.settings-content-x;
+                    y: root.srow-y(root.moonlight-remove-row + 1, root.moonlight-scroll, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    text: root.moonlight-apps-state == "loading" ? root.i18n-strings[451]
+                        : root.moonlight-apps-state == "error" ? root.i18n-strings[452]
+                        : root.i18n-strings[453];
+                    visible: root.settings-view == 41 && root.moonlight-host.paired && root.moonlight-apps.length == 0;
+                }
+                SettingsHint {
+                    x: root.settings-content-x;
+                    y: root.srow-y(2, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    text: root.i18n-strings[475];
+                    visible: root.settings-view == 41 && !root.moonlight-host.paired && root.moonlight-pairing-pin != "";
+                }
+
+                /* ----------------------------------- Moonlight Stream Settings (42) */
+                for row[k] in [
+                    { title: root.i18n-strings[454], value: root.moonlight-resolution-label },
+                    { title: root.i18n-strings[455], value: root.moonlight-fps-label },
+                    { title: root.i18n-strings[456], value: root.moonlight-codec-label },
+                    { title: root.i18n-strings[457], value: root.moonlight-bitrate-label },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.srow-y(k, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    selected: root.settings-view == 42 && root.moonlight-index == k;
+                    visible: root.settings-view == 42;
                 }
 
                 /* ----------------------------------------------------------- System */

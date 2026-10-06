@@ -1,0 +1,63 @@
+From e4b62409bf6afa33c1e544f4918c8a7de415e80d Mon Sep 17 00:00:00 2001
+From: nuubOS Project <nuubos@localhost>
+Date: Tue, 6 Oct 2026 18:45:06 +0200
+Subject: [PATCH 1/5] libgamestream: make avahi host discovery optional
+
+nuubOS has no avahi-daemon: its streaming service discovers hosts with a
+one-shot mDNS query and always passes the host address. Without avahi
+gs_discover_server() reports that discovery is unavailable.
+---
+ libgamestream/CMakeLists.txt |  8 +++++++-
+ libgamestream/discover.c     | 10 ++++++++++
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/libgamestream/CMakeLists.txt b/libgamestream/CMakeLists.txt
+index d8dd04e..5890645 100644
+--- a/libgamestream/CMakeLists.txt
++++ b/libgamestream/CMakeLists.txt
+@@ -6,7 +6,10 @@ find_package(CURL REQUIRED)
+ find_package(OpenSSL 1.1.0 REQUIRED)
+ find_package(EXPAT REQUIRED)
+ 
+-pkg_check_modules(AVAHI REQUIRED avahi-client)
++option(ENABLE_AVAHI "Compile mDNS host discovery through avahi-daemon" ON)
++if (ENABLE_AVAHI)
++  pkg_check_modules(AVAHI avahi-client)
++endif()
+ 
+ aux_source_directory(./ GAMESTREAM_SRC_LIST)
+ aux_source_directory(../third_party/h264bitstream GAMESTREAM_SRC_LIST)
+@@ -28,5 +31,8 @@ target_include_directories(moonlight-common PRIVATE ../third_party/moonlight-com
+ target_link_libraries(gamestream ${CURL_LIBRARIES} ${OPENSSL_LIBRARIES} ${EXPAT_LIBRARIES} ${AVAHI_LIBRARIES} ${LibUUID_LIBRARIES})
+ 
+ target_link_libraries(gamestream ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_DL_LIBS})
++if (AVAHI_FOUND)
++  target_compile_definitions(gamestream PRIVATE HAVE_AVAHI)
++endif()
+ 
+ install(TARGETS gamestream moonlight-common DESTINATION ${CMAKE_INSTALL_LIBDIR})
+diff --git a/libgamestream/discover.c b/libgamestream/discover.c
+index 28cc052..9e52fce 100644
+--- a/libgamestream/discover.c
++++ b/libgamestream/discover.c
+@@ -19,6 +19,7 @@
+ 
+ #include "errors.h"
+ 
++#ifdef HAVE_AVAHI
+ #include <avahi-client/client.h>
+ #include <avahi-client/lookup.h>
+ 
+@@ -116,3 +117,12 @@ void gs_discover_server(char* dest, unsigned short* port) {
+   if (simple_poll)
+     avahi_simple_poll_free(simple_poll);
+ }
++#else
++
++/* Built without avahi: the caller passes the host address explicitly. */
++void gs_discover_server(char* dest, unsigned short* port) {
++  gs_error = "Host discovery not available";
++  dest[0] = 0;
++}
++
++#endif

@@ -1,0 +1,6 @@
+#!/bin/sh
+# nuubOS lifecycle pre-power hook (CLAUDE §20): a PC stream cannot survive
+# Sleep (Wi-Fi goes down) nor Restart/Power Off, so it ends first; the
+# application keeps running on the host and the next stream resumes it.
+# nuubos-streamctl returns at once when no stream runs.
+exec /usr/bin/nuubos-streamctl pre-power "$1" >/dev/null

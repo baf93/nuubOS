@@ -999,7 +999,9 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
             match card.kind {
                 KIND_FAVORITES | KIND_COLLECTION | KIND_SYSTEM => open_grid(ui, &card),
                 KIND_GAME => launch_game(ui, &card),
-                /* Applications need the future application session
+                /* Built-in nuubUI application (EPIC-025). */
+                _ if card.key.as_str() == "moonlight" => crate::moonlight::open(ui),
+                /* Other applications need the future application session
                  * service. */
                 _ => show_notice(ui, tr(ui, 411, "Launching is not available yet")),
             }

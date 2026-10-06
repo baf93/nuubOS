@@ -38,6 +38,10 @@
  *   game.slot               slot=      (changed with a controller hotkey)
  *   game.fastforward        state=on|off
  *   game.failed             reason=start|crash
+ *   stream.paired           name=      (PC streaming host paired)
+ *   stream.pair.failed      name=
+ *   stream.failed           reason=unreachable|unpaired|app|start|connection
+ *                           [name=]    (stream could not start / was lost)
  *
  * Values are percent-encoded. Sending is fire-and-forget and never blocks:
  * a missing or busy router simply drops a transient notification.

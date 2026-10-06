@@ -85,6 +85,20 @@ fn quick_menu(win: &Rc<MinimalSoftwareWindow>) {
     }
     qm.set_game_section_visible(false);
     qm.set_game_confirm_index(-1);
+    /* PC stream (EPIC-025): STREAM section with the sampled statistics. */
+    qm.set_stream_section_visible(true);
+    qm.set_stream_latency_label("4 ms".into());
+    qm.set_stream_decode_label("1.6 ms".into());
+    qm.set_stream_video_label("640×480 • 60 fps".into());
+    for (name, sel, confirm) in [("qm_stream", 15, -1), ("qm_stream_close", 17, 17)] {
+        qm.set_selected_index(sel);
+        qm.set_game_confirm_index(confirm);
+        for (w, h) in sizes {
+            shot(win, w, h, name);
+        }
+    }
+    qm.set_stream_section_visible(false);
+    qm.set_game_confirm_index(-1);
     qm.set_switch_user_visible(true);
 
     /* Notifications: the copy drawn over the open Quick Menu, then the
@@ -266,8 +280,54 @@ fn main() {
         ui.set_user_count(1); ui.set_oob_index(1);
     })));
     scenes.push(("oob_ready", Box::new(|ui| { ui.set_oob_step(4); })));
+    /* Moonlight (EPIC-025): the Settings shell with the PCs rail. */
+    fn ml_host(id: &str, name: &str, address: &str, paired: bool, online: &str, probing: bool) -> MoonlightHostEntry {
+        MoonlightHostEntry { id: id.into(), name: name.into(), address: address.into(), paired, online: online.into(), probing }
+    }
+    fn ml_hosts() -> ModelRc<MoonlightHostEntry> {
+        ModelRc::from(Rc::new(VecModel::from(vec![
+            ml_host("a", "GAMING-PC", "192.168.1.20", true, "online", false),
+            ml_host("b", "Living Room Desktop With A Long Name", "192.168.1.31", false, "unknown", true),
+        ])))
+    }
+    scenes.push(("moonlight_hosts", Box::new(|ui| {
+        ui.set_oob_active(false);
+        ui.set_settings_open(true); ui.set_moonlight_active(true); ui.set_settings_view(40);
+        ui.set_moonlight_hosts(ml_hosts()); ui.set_moonlight_discovering(true);
+        ui.set_moonlight_index(0); ui.set_moonlight_scroll(0);
+    })));
+    scenes.push(("moonlight_empty", Box::new(|ui| {
+        ui.set_moonlight_hosts(ModelRc::from(Rc::new(VecModel::<MoonlightHostEntry>::default())));
+        ui.set_moonlight_discovering(false); ui.set_moonlight_index(1);
+    })));
+    scenes.push(("moonlight_pairing", Box::new(|ui| {
+        ui.set_moonlight_hosts(ml_hosts());
+        ui.set_moonlight_host(ml_host("b", "Living Room Desktop", "192.168.1.31", false, "online", false));
+        ui.set_settings_view(41); ui.set_moonlight_index(0); ui.set_moonlight_pairing_pin("4821".into());
+    })));
+    scenes.push(("moonlight_apps", Box::new(|ui| {
+        ui.set_moonlight_pairing_pin("".into());
+        ui.set_moonlight_host(ml_host("a", "GAMING-PC", "192.168.1.20", true, "online", false));
+        let apps: Vec<SharedString> = ["Desktop", "Steam Big Picture", "Cyberpunk 2077", "Elden Ring", "Hades II", "Forza Horizon 5", "Baldur's Gate 3"]
+            .iter().map(|a| SharedString::from(*a)).collect();
+        ui.set_moonlight_apps(ModelRc::from(Rc::new(VecModel::from(apps))));
+        ui.set_moonlight_apps_state("ready".into()); ui.set_moonlight_index(1);
+    })));
+    scenes.push(("moonlight_apps_loading", Box::new(|ui| {
+        ui.set_moonlight_apps(ModelRc::from(Rc::new(VecModel::<SharedString>::default())));
+        ui.set_moonlight_apps_state("loading".into()); ui.set_moonlight_index(0);
+    })));
+    scenes.push(("moonlight_settings", Box::new(|ui| {
+        ui.set_settings_view(42); ui.set_moonlight_index(2);
+        let s = ui.get_i18n_strings();
+        ui.set_moonlight_resolution_label(s.row_data(122).unwrap_or_default());
+        ui.set_moonlight_fps_label(s.row_data(460).unwrap_or_default().replace("{0}", "60").into());
+        ui.set_moonlight_codec_label("H.264".into());
+        ui.set_moonlight_bitrate_label(s.row_data(122).unwrap_or_default());
+    })));
     /* Top bar with connected controllers (battery dots) and BT headphones. */
     scenes.push(("topbar_controllers_2", Box::new(|ui| {
+        ui.set_moonlight_active(false);
         ui.set_oob_active(false);
         ui.set_settings_open(false);
         ui.set_audio_bluetooth_available(true);

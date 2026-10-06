@@ -1,0 +1,5 @@
+menu "Streaming"
+
+source "$BR2_EXTERNAL_NUUBOS_PATH/package/streaming/moonlight-embedded/Config.in"
+
+endmenu

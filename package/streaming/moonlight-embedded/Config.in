@@ -1,0 +1,26 @@
+config BR2_PACKAGE_MOONLIGHT_EMBEDDED
+	bool "moonlight-embedded"
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	depends on BR2_PACKAGE_HAS_UDEV
+	depends on BR2_PACKAGE_WAYLAND
+	select BR2_PACKAGE_ALSA_LIB
+	select BR2_PACKAGE_EXPAT
+	select BR2_PACKAGE_FFMPEG
+	select BR2_PACKAGE_LIBCURL
+	select BR2_PACKAGE_LIBDRM
+	select BR2_PACKAGE_LIBEVDEV
+	select BR2_PACKAGE_OPENSSL
+	select BR2_PACKAGE_OPUS
+	select BR2_PACKAGE_UTIL_LINUX
+	select BR2_PACKAGE_UTIL_LINUX_LIBUUID
+	select BR2_PACKAGE_WAYLAND_PROTOCOLS
+	help
+	  Moonlight Embedded, the C client for NVIDIA GameStream and
+	  Sunshine PC game streaming (EPIC-025), with the nuubOS
+	  Wayland platform: H.264/HEVC decoded by the VPU through
+	  FFmpeg's V4L2 request hwaccel (Cedrus on the H700) and shown
+	  as zero-copy dma-bufs, low latency ALSA (PipeWire) audio,
+	  nuubOS game gamepads and a control channel for the nuubOS
+	  streaming service. No SDL, X11, CEC, PulseAudio or avahi.
+
+	  https://github.com/moonlight-stream/moonlight-embedded
