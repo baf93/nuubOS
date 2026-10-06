@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_YABASANSHIRO
+	bool "libretro-yabasanshiro"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: YabaSanshiro (Sega Saturn), aarch64 dynarec + GLES3.

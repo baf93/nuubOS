@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_ATARI800
+	bool "libretro-atari800"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: Atari800 (Atari 400/800/XL/XE/5200).

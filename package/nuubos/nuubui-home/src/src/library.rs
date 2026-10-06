@@ -12,7 +12,7 @@
  * part of a library grid are kept in memory.
  */
 
-use crate::{play_ui_sound, tr, tr_arg, HomeCard, HomeWindow};
+use crate::{on_game_session, play_ui_sound, tr, tr_arg, HomeCard, HomeWindow};
 use slint::{Color, ComponentHandle, Image, Model, ModelRc, SharedPixelBuffer, Rgba8Pixel, Timer, VecModel};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -20,11 +20,17 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LIBRARY_SOCKET: &str = "/run/nuubos/libraryd.sock";
+const EMULATION_SOCKET: &str = "/run/nuubos/emud.sock";
+
+/* A game session runs (nuubos-emud): RetroArch is fullscreen above Home and
+ * owns the controllers through the nuubOS game gamepads. */
+pub static GAME_RUNNING: AtomicBool = AtomicBool::new(false);
 /* Decoded covers kept in memory (LRU). */
 const COVER_CACHE_LIMIT: usize = 64;
 /* Grid rows above/below the visible ones whose covers are loaded. */
@@ -692,6 +698,93 @@ pub fn relocalize(ui: &HomeWindow) {
     }
 }
 
+/* ---------------------------------------------------------------- */
+/* Game sessions (EPIC-013): launching belongs to nuubos-emud        */
+/* ---------------------------------------------------------------- */
+
+fn emulation_command(command: &str) -> std::io::Result<String> {
+    let mut stream = UnixStream::connect(EMULATION_SOCKET)?;
+    /* A launch resolves the game and starts RetroArch before replying. */
+    stream.set_read_timeout(Some(Duration::from_secs(8)))?;
+    stream.write_all(command.as_bytes())?;
+    stream.write_all(b"\n")?;
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply)?;
+    Ok(reply)
+}
+
+fn launch_game(ui: &HomeWindow, card: &HomeCard) {
+    if !card.available {
+        show_notice(ui, tr(ui, 434, "This game is not available"));
+        return;
+    }
+    if GAME_RUNNING.load(Ordering::SeqCst) {
+        return;
+    }
+    let command = format!("LAUNCH\t{}", card.key);
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let reason = match emulation_command(&command) {
+            Ok(reply) if reply.trim() == "OK" => return,
+            Ok(reply) => reply.trim().strip_prefix("ERR ").unwrap_or("").to_owned(),
+            Err(error) => {
+                eprintln!("home: launch failed={error}");
+                String::new()
+            }
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let text = match reason.as_str() {
+                /* A double press while the game is starting. */
+                "busy" => return,
+                "no-core" => tr(&ui, 433, "No emulator is installed for this system"),
+                "unavailable" | "game" => tr(&ui, 434, "This game is not available"),
+                _ => tr(&ui, 431, "The game could not be started"),
+            };
+            show_notice(&ui, text);
+        });
+    });
+}
+
+/* Follows the session state; Home reacts to start/end in on_game_session. */
+pub fn start_game_listener(ui: &HomeWindow) {
+    let weak = ui.as_weak();
+    thread::spawn(move || loop {
+        if let Ok(mut stream) = UnixStream::connect(EMULATION_SOCKET) {
+            if stream.write_all(b"SUBSCRIBE\n").is_ok() {
+                let mut running = false;
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    if let Some(state) = line.strip_prefix("state=") {
+                        /* "exiting" still covers Home until RetroArch is gone. */
+                        running = state != "idle";
+                        continue;
+                    }
+                    if line != "end=1" || GAME_RUNNING.swap(running, Ordering::SeqCst) == running {
+                        continue;
+                    }
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak.upgrade() {
+                            on_game_session(&ui, running);
+                        }
+                    });
+                }
+            }
+        }
+        /* emud restarted or not up yet: no session survives it. */
+        if GAME_RUNNING.swap(false, Ordering::SeqCst) {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    on_game_session(&ui, false);
+                }
+            });
+        }
+        thread::sleep(Duration::from_millis(500));
+    });
+}
+
 pub fn start_library_listener(ui: &HomeWindow) {
     let weak = ui.as_weak();
     thread::spawn(move || loop {
@@ -905,8 +998,9 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
             play_ui_sound(action);
             match card.kind {
                 KIND_FAVORITES | KIND_COLLECTION | KIND_SYSTEM => open_grid(ui, &card),
-                /* Launching belongs to the emulation milestone (RetroArch
-                 * hybrid model) and the application session service. */
+                KIND_GAME => launch_game(ui, &card),
+                /* Applications need the future application session
+                 * service. */
                 _ => show_notice(ui, tr(ui, 411, "Launching is not available yet")),
             }
             return;

@@ -1,0 +1,49 @@
+From: nuubOS
+Subject: [PATCH] libretro: insert the loaded disk
+
+retro_load_game() only copied the content path to RPATH, which nothing
+reads, so the core always stayed on the SAM Coupé startup screen. Insert
+the image in drive 1 and boot it at the startup screen, as the standalone
+build does for a disk named on the command line.
+
+--- a/libretro/libretro-simcp.c
++++ b/libretro/libretro-simcp.c
+@@ -13,6 +13,7 @@
+ extern int SHOWKEY,pauseg,SND ,SHIFTON,snd_sampler;
+ extern short signed int SNDBUF[1024*2];
+ extern char RPATH[512];
++extern void retro_simcp_insert_disk(const char *path);
+ 
+ extern void update_input(void);
+ extern void texture_init(void);
+@@ -218,6 +219,7 @@
+     	full_path = info->path;
+ 
+     	strcpy(RPATH,full_path); 
++    	retro_simcp_insert_disk(full_path);
+ //g_fPaused= true;
+ 
+     	return true;
+--- a/SimCoupe/Retro/OSD.cpp
++++ b/SimCoupe/Retro/OSD.cpp
+@@ -263,6 +263,20 @@
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+ #ifdef RETRO
++#include "IO.h"
++
++// Content given by the frontend: insert it in drive 1 and boot it once the
++// ROM reaches the startup screen, like a disk named on the command line.
++extern "C" void retro_simcp_insert_disk (const char* pcszPath_)
++{
++    if (!pcszPath_ || !*pcszPath_ || !pFloppy1)
++        return;
++
++    SetOption(disk1, pcszPath_);
++    if (pFloppy1->Insert(pcszPath_))
++        g_nAutoLoad = AUTOLOAD_DISK;
++}
++
+ extern "C" int Smain (int argc_, char* argv_[]);
+ 
+ int Smain (int argc_, char* argv_[])

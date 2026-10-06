@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_BLUEMSX
+	bool "libretro-bluemsx"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: blueMSX (MSX/MSX2/MSX2+/turboR, SVI, ColecoVision), with C-BIOS.

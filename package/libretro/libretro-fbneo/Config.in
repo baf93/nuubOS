@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_FBNEO
+	bool "libretro-fbneo"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: FinalBurn Neo (Arcade / Neo Geo). Licence restricts commercial redistribution.

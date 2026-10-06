@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_FAKE08
+	bool "libretro-fake08"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: FAKE-08 (PICO-8 compatible).

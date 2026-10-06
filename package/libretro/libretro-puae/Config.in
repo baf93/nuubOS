@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_PUAE
+	bool "libretro-puae"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: PUAE (Commodore Amiga), built-in AROS Kickstart replacement.

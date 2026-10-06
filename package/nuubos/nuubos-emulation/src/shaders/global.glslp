@@ -1,0 +1,5 @@
+# nuubOS default shader for every core (EPIC-013), copied once into the
+# user's RetroArch configuration; RetroArch Advanced can replace it.
+shaders = "1"
+shader0 = "/usr/share/nuubos/emulation/shaders/sharp-bilinear.glsl"
+filter_linear0 = "true"

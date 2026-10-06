@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_MELONDS
+	bool "libretro-melonds"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: melonDS (Nintendo DS), aarch64 JIT.

@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_NEOCD
+	bool "libretro-neocd"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: NeoCD (Neo Geo CD).

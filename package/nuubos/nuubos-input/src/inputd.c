@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <linux/uinput.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -33,9 +34,14 @@
 
 #define MAX_INPUTS 32
 #define MAX_CLIENTS 16
-#define MAX_LINE 256
+#define MAX_LINE 1024
 
 #define NAV_REPEAT_DELAY_MS 350
+
+/* Game gamepads: one uinput device per player while a game runs. */
+#define VPAD_NAME "nuubOS Gamepad"
+#define MAX_PADMAPS 16
+#define MAX_VPADS 8
 #define NAV_REPEAT_INTERVAL_MS 90
 
 #define BITS_PER_LONG (sizeof(unsigned long) * 8U)
@@ -126,6 +132,9 @@ enum client_role {
 struct client {
 	int fd;
 	bool subscribed;
+	/* This connection switched game gamepads on (Emulation Service);
+	 * they are switched off when it closes. */
+	bool owns_gamepads;
 	enum client_role role;
 	char buf[MAX_LINE];
 	size_t used;
@@ -152,6 +161,9 @@ static long long repeat_next_ms;
 static char raw_capture_controller[160];
 
 static void configure_input_mapping(struct input_dev *input);
+static void set_gamepads(bool enabled);
+static bool gamepads_forwarding(void);
+static bool input_is_pad(const struct input_dev *input);
 
 static void log_message(const char *fmt, ...)
 {
@@ -905,20 +917,22 @@ static bool capture_active(void)
 static void sync_input_grab(void)
 {
 	size_t i;
-	bool enabled = capture_active();
+	bool capture = capture_active();
 
 	log_message(
-		"capture-sync quick-menu=%d settings=%d enabled=%d inputs=%zu",
+		"capture-sync quick-menu=%d settings=%d capture=%d gamepads=%d inputs=%zu",
 		menu_open ? 1 : 0,
 		settings_open ? 1 : 0,
-		enabled ? 1 : 0,
+		capture ? 1 : 0,
+		gamepads_forwarding() ? 1 : 0,
 		input_count);
 
 	for (i = 0; i < input_count; i++) {
 		int rc;
-
-		if (!input_has_menu_capability(&inputs[i]))
-			continue;
+		/* While a game runs every controller is grabbed: its events
+		 * reach the game only through the player's game gamepad. */
+		bool enabled = (capture && input_has_menu_capability(&inputs[i])) ||
+			       (gamepads_forwarding() && input_is_pad(&inputs[i]));
 
 		if (inputs[i].grabbed == enabled)
 			continue;
@@ -936,15 +950,21 @@ static void sync_input_grab(void)
 			inputs[i].grabbed = enabled;
 	}
 
-	if (!enabled) {
+	if (!capture) {
 		repeat_action[0] = '\0';
 		repeat_next_ms = 0;
 	}
 }
 
+static void release_all_vpads(void);
+
 static void set_menu_grab(bool enabled)
 {
 	menu_open = enabled;
+	/* The Quick Menu takes the controllers: nothing stays held in the
+	 * game underneath it. */
+	if (enabled)
+		release_all_vpads();
 	sync_input_grab();
 }
 
@@ -972,7 +992,7 @@ static void rescan_inputs(void)
 {
 	DIR *dir;
 	struct dirent *entry;
-	bool restore_grab = capture_active();
+	bool restore_grab = capture_active() || gamepads_forwarding();
 
 	close_inputs();
 
@@ -1004,6 +1024,12 @@ static void rescan_inputs(void)
 
 		if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0)
 			snprintf(name, sizeof(name), "unknown");
+
+		/* Our own game gamepads are outputs, never inputs. */
+		if (strncmp(name, VPAD_NAME, strlen(VPAD_NAME)) == 0) {
+			close(fd);
+			continue;
+		}
 
 		memset(&inputs[input_count], 0, sizeof(inputs[input_count]));
 		inputs[input_count].fd = fd;
@@ -1258,6 +1284,598 @@ static void navigation_repeat_tick(void)
 	repeat_next_ms = now + NAV_REPEAT_INTERVAL_MS;
 }
 
+/*
+ * Game gamepads (EPIC-013 controller bridge).
+ *
+ * nuubos-controllersd owns mappings, defaults and player assignment and
+ * pushes the resolved table here (PADMAP). While the Emulation Service has
+ * gamepads on, every controller is grabbed and each assigned player gets
+ * one uinput "nuubOS Gamepad" with a fixed Linux gamepad layout: positional
+ * face buttons, shoulders, triggers, stick clicks, Start/Select, D-pad on
+ * hat 0 and both sticks. Games therefore see the user's mapping and player
+ * order without knowing physical devices; the Quick Menu button stays a
+ * nuubOS action and never reaches the game. While the Quick Menu is open
+ * nothing is forwarded and every game input is released.
+ */
+enum pad_control {
+	PAD_SOUTH, PAD_EAST, PAD_NORTH, PAD_WEST,
+	PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT,
+	PAD_L1, PAD_R1, PAD_L2, PAD_R2, PAD_L3, PAD_R3,
+	PAD_START, PAD_SELECT, PAD_MODE,
+	PAD_LX, PAD_LY, PAD_RX, PAD_RY,
+	PAD_CONTROL_COUNT
+};
+
+#define PAD_AXIS_FIRST PAD_LX
+#define PAD_AXIS_MAX 32767
+
+struct pad_control_def {
+	const char *name; /* nuubos-controllersd control id */
+	int code;         /* output EV_KEY / EV_ABS code, -1 = hat or none */
+};
+
+static const struct pad_control_def pad_controls[PAD_CONTROL_COUNT] = {
+	{ "menu_back", BTN_SOUTH },
+	{ "menu_confirm", BTN_EAST },
+	{ "face_north", BTN_NORTH },
+	{ "face_west", BTN_WEST },
+	{ "menu_up", -1 },
+	{ "menu_down", -1 },
+	{ "menu_left", -1 },
+	{ "menu_right", -1 },
+	{ "l1", BTN_TL },
+	{ "r1", BTN_TR },
+	{ "l2", BTN_TL2 },
+	{ "r2", BTN_TR2 },
+	{ "l3", BTN_THUMBL },
+	{ "r3", BTN_THUMBR },
+	{ "settings", BTN_START },
+	{ "select", BTN_SELECT },
+	{ "quick_menu", -1 },
+	{ "left_x", ABS_X },
+	{ "left_y", ABS_Y },
+	{ "right_x", ABS_RX },
+	{ "right_y", ABS_RY },
+};
+
+struct pad_source {
+	bool is_key;
+	int code; /* -1 = unassigned */
+	int dir;
+};
+
+struct padmap {
+	char id[160];
+	int player;
+	int deadzone[2];
+	struct pad_source src[PAD_CONTROL_COUNT];
+};
+
+struct vpad {
+	int fd;
+	int player;
+	bool pressed[PAD_CONTROL_COUNT];
+	int axis[4];
+	int hat_x;
+	int hat_y;
+	bool dirty;
+};
+
+static struct padmap padmaps[MAX_PADMAPS];
+static size_t padmap_count;
+static struct padmap padmaps_next[MAX_PADMAPS];
+static size_t padmap_next_count;
+static bool padmap_receiving;
+static struct vpad vpads[MAX_VPADS];
+static bool gamepads_on;
+/*
+ * Game hotkeys (CLAUDE §18.2): the Quick Menu button is a modifier while a
+ * game runs. Held with a chord control it triggers an Emulation Service
+ * action; released alone it opens the Quick Menu (on release, so a chord
+ * never flashes the menu).
+ */
+static bool hotkey_held;
+static bool hotkey_used;
+
+struct game_hotkey {
+	enum pad_control control;
+	const char *action;
+};
+
+static const struct game_hotkey game_hotkeys[] = {
+	{ PAD_R1, "save_state" },
+	{ PAD_L1, "load_state" },
+	{ PAD_RIGHT, "slot_next" },
+	{ PAD_LEFT, "slot_prev" },
+	{ PAD_R2, "fast_forward" },
+};
+
+static bool gamepads_forwarding(void)
+{
+	return gamepads_on;
+}
+
+static bool input_is_pad(const struct input_dev *input)
+{
+	size_t i;
+
+	for (i = 0; i < padmap_count; i++)
+		if (strcmp(padmaps[i].id, input->controller_id) == 0)
+			return true;
+	return false;
+}
+
+static const struct padmap *padmap_for(const char *controller_id)
+{
+	size_t i;
+
+	for (i = 0; i < padmap_count; i++)
+		if (strcmp(padmaps[i].id, controller_id) == 0)
+			return &padmaps[i];
+	return NULL;
+}
+
+static struct vpad *vpad_for_player(int player)
+{
+	size_t i;
+
+	for (i = 0; i < MAX_VPADS; i++)
+		if (vpads[i].fd >= 0 && vpads[i].player == player)
+			return &vpads[i];
+	return NULL;
+}
+
+static void vpad_write(struct vpad *pad, int type, int code, int value)
+{
+	struct input_event ev;
+
+	memset(&ev, 0, sizeof(ev));
+	ev.type = (unsigned short)type;
+	ev.code = (unsigned short)code;
+	ev.value = value;
+	if (write(pad->fd, &ev, sizeof(ev)) != (ssize_t)sizeof(ev))
+		log_message("vpad write failed player=%d errno=%d", pad->player, errno);
+	if (type != EV_SYN)
+		pad->dirty = true;
+}
+
+static void vpad_sync(struct vpad *pad)
+{
+	if (!pad->dirty)
+		return;
+	vpad_write(pad, EV_SYN, SYN_REPORT, 0);
+	pad->dirty = false;
+}
+
+static int vpad_create(int player)
+{
+	static const int keys[] = {
+		BTN_SOUTH, BTN_EAST, BTN_NORTH, BTN_WEST, BTN_TL, BTN_TR,
+		BTN_TL2, BTN_TR2, BTN_SELECT, BTN_START, BTN_THUMBL, BTN_THUMBR,
+	};
+	static const int axes[] = { ABS_X, ABS_Y, ABS_RX, ABS_RY };
+	struct uinput_setup setup;
+	struct uinput_abs_setup abs;
+	size_t i;
+	int fd;
+
+	fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0)
+		return -1;
+
+	(void)ioctl(fd, UI_SET_EVBIT, EV_KEY);
+	(void)ioctl(fd, UI_SET_EVBIT, EV_ABS);
+	for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+		(void)ioctl(fd, UI_SET_KEYBIT, keys[i]);
+
+	memset(&abs, 0, sizeof(abs));
+	abs.absinfo.minimum = -PAD_AXIS_MAX;
+	abs.absinfo.maximum = PAD_AXIS_MAX;
+	for (i = 0; i < sizeof(axes) / sizeof(axes[0]); i++) {
+		abs.code = (unsigned short)axes[i];
+		(void)ioctl(fd, UI_SET_ABSBIT, axes[i]);
+		(void)ioctl(fd, UI_ABS_SETUP, &abs);
+	}
+	abs.absinfo.minimum = -1;
+	abs.absinfo.maximum = 1;
+	abs.code = ABS_HAT0X;
+	(void)ioctl(fd, UI_SET_ABSBIT, ABS_HAT0X);
+	(void)ioctl(fd, UI_ABS_SETUP, &abs);
+	abs.code = ABS_HAT0Y;
+	(void)ioctl(fd, UI_SET_ABSBIT, ABS_HAT0Y);
+	(void)ioctl(fd, UI_ABS_SETUP, &abs);
+
+	/* The product id is the player number: RetroArch reserves port N
+	 * for 0000:000N, so its player order never depends on enumeration. */
+	memset(&setup, 0, sizeof(setup));
+	setup.id.bustype = BUS_VIRTUAL;
+	setup.id.vendor = 0;
+	setup.id.product = (unsigned short)player;
+	setup.id.version = 1;
+	snprintf(setup.name, sizeof(setup.name), "%s", VPAD_NAME);
+
+	if (ioctl(fd, UI_DEV_SETUP, &setup) < 0 ||
+	    ioctl(fd, UI_DEV_CREATE) < 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+/* Releases every game input (Quick Menu opened, controller lost, end). */
+static void vpad_release(struct vpad *pad)
+{
+	size_t c;
+	int a;
+
+	for (c = 0; c < PAD_CONTROL_COUNT; c++) {
+		if (!pad->pressed[c])
+			continue;
+		pad->pressed[c] = false;
+		if (pad_controls[c].code >= 0 && c < PAD_AXIS_FIRST)
+			vpad_write(pad, EV_KEY, pad_controls[c].code, 0);
+	}
+	for (a = 0; a < 4; a++) {
+		if (pad->axis[a] == 0)
+			continue;
+		pad->axis[a] = 0;
+		vpad_write(pad, EV_ABS, pad_controls[PAD_AXIS_FIRST + a].code, 0);
+	}
+	if (pad->hat_x) {
+		pad->hat_x = 0;
+		vpad_write(pad, EV_ABS, ABS_HAT0X, 0);
+	}
+	if (pad->hat_y) {
+		pad->hat_y = 0;
+		vpad_write(pad, EV_ABS, ABS_HAT0Y, 0);
+	}
+	vpad_sync(pad);
+}
+
+static void release_all_vpads(void)
+{
+	size_t i;
+
+	for (i = 0; i < MAX_VPADS; i++)
+		if (vpads[i].fd >= 0)
+			vpad_release(&vpads[i]);
+}
+
+static void destroy_vpads(void)
+{
+	size_t i;
+
+	for (i = 0; i < MAX_VPADS; i++) {
+		if (vpads[i].fd < 0)
+			continue;
+		(void)ioctl(vpads[i].fd, UI_DEV_DESTROY);
+		close(vpads[i].fd);
+		vpads[i].fd = -1;
+	}
+}
+
+/*
+ * One game gamepad per assigned player, created in player order. Pads of
+ * players whose controller disappeared stay, so a reconnecting controller
+ * finds its player again; pads are only destroyed when gamepads go off.
+ */
+static void sync_vpads(void)
+{
+	int player;
+
+	if (!gamepads_on)
+		return;
+
+	for (player = 1; player <= MAX_VPADS; player++) {
+		bool wanted = false;
+		size_t i;
+
+		for (i = 0; i < padmap_count; i++)
+			if (padmaps[i].player == player)
+				wanted = true;
+		if (!wanted || vpad_for_player(player))
+			continue;
+		for (i = 0; i < MAX_VPADS; i++) {
+			if (vpads[i].fd >= 0)
+				continue;
+			memset(&vpads[i], 0, sizeof(vpads[i]));
+			vpads[i].fd = vpad_create(player);
+			vpads[i].player = player;
+			log_message("vpad create player=%d fd=%d errno=%d", player,
+				    vpads[i].fd, vpads[i].fd < 0 ? errno : 0);
+			break;
+		}
+	}
+}
+
+static void set_gamepads(bool enabled)
+{
+	if (gamepads_on == enabled)
+		return;
+	gamepads_on = enabled;
+	hotkey_held = false;
+	hotkey_used = false;
+	log_message("gamepads %s", enabled ? "on" : "off");
+	if (enabled)
+		sync_vpads();
+	else
+		destroy_vpads();
+	sync_input_grab();
+}
+
+/* -32767..32767 around the device centre, from its EVIOCGABS range. */
+static int scale_abs(const struct input_dev *input, int code, int value)
+{
+	const struct input_absinfo *info = &input->absinfo[code];
+	long long center;
+	long long span;
+	long long scaled;
+
+	if (!bit_is_set(input->abs_bits, (unsigned int)code) ||
+	    info->maximum <= info->minimum)
+		return 0;
+
+	center = info->minimum + ((long long)info->maximum - info->minimum) / 2;
+	span = value >= center ? info->maximum - center : center - info->minimum;
+	if (span <= 0)
+		return 0;
+	scaled = ((long long)value - center) * PAD_AXIS_MAX / span;
+	if (scaled > PAD_AXIS_MAX)
+		scaled = PAD_AXIS_MAX;
+	if (scaled < -PAD_AXIS_MAX)
+		scaled = -PAD_AXIS_MAX;
+	return (int)scaled;
+}
+
+/* Per-axis deadzone with the remaining travel rescaled to full range. */
+static int apply_deadzone(int value, int percent)
+{
+	long long dz = (long long)PAD_AXIS_MAX * percent / 100;
+	long long magnitude = value < 0 ? -(long long)value : value;
+
+	if (magnitude <= dz || dz >= PAD_AXIS_MAX)
+		return 0;
+	magnitude = (magnitude - dz) * PAD_AXIS_MAX / (PAD_AXIS_MAX - dz);
+	return (int)(value < 0 ? -magnitude : magnitude);
+}
+
+static void vpad_set_button(struct vpad *pad, size_t c, bool pressed)
+{
+	if (pad->pressed[c] == pressed)
+		return;
+	pad->pressed[c] = pressed;
+
+	if (c >= PAD_UP && c <= PAD_RIGHT) {
+		int x = (pad->pressed[PAD_RIGHT] ? 1 : 0) - (pad->pressed[PAD_LEFT] ? 1 : 0);
+		int y = (pad->pressed[PAD_DOWN] ? 1 : 0) - (pad->pressed[PAD_UP] ? 1 : 0);
+
+		if (x != pad->hat_x) {
+			pad->hat_x = x;
+			vpad_write(pad, EV_ABS, ABS_HAT0X, x);
+		}
+		if (y != pad->hat_y) {
+			pad->hat_y = y;
+			vpad_write(pad, EV_ABS, ABS_HAT0Y, y);
+		}
+		return;
+	}
+	if (pad_controls[c].code >= 0)
+		vpad_write(pad, EV_KEY, pad_controls[c].code, pressed ? 1 : 0);
+}
+
+static void emit_action_state(const char *action, const char *state);
+
+/* Hotkey actions go to the connection that owns the game gamepads (the
+ * Emulation Service), the same API the Quick Menu uses. */
+static void send_game_hotkey(const char *action)
+{
+	char message[64];
+	size_t i;
+
+	snprintf(message, sizeof(message), "HOTKEY %s\n", action);
+	log_message("game-hotkey action=%s", action);
+	for (i = 0; i < MAX_CLIENTS; i++) {
+		if (clients[i].fd < 0 || !clients[i].owns_gamepads)
+			continue;
+		(void)write_all(clients[i].fd, message);
+	}
+}
+
+/* The Quick Menu button of a game controller. Returns true if consumed. */
+static bool game_modifier_event(const struct input_dev *input,
+				const struct input_event *ev)
+{
+	const struct padmap *map = padmap_for(input->controller_id);
+	const struct pad_source *src;
+
+	if (!map || ev->type != EV_KEY)
+		return false;
+	src = &map->src[PAD_MODE];
+	if (!src->is_key || src->code != ev->code)
+		return false;
+
+	if (ev->value == 1) {
+		hotkey_held = true;
+		hotkey_used = false;
+		release_all_vpads();
+	} else if (ev->value == 0 && hotkey_held) {
+		hotkey_held = false;
+		if (!hotkey_used) {
+			mapped_press_count++;
+			emit_action_state("quick_menu", "pressed");
+			emit_action_state("quick_menu", "released");
+		}
+	}
+	return true;
+}
+
+/* While the modifier is held, game controls are chords and never reach the
+ * game. Returns true if consumed. */
+static bool game_hotkey_event(const struct input_dev *input,
+			      const struct input_event *ev)
+{
+	const struct padmap *map = padmap_for(input->controller_id);
+	size_t i;
+
+	if (!hotkey_held || !map)
+		return false;
+	if (ev->type != EV_KEY || ev->value != 1)
+		return true;
+	for (i = 0; i < sizeof(game_hotkeys) / sizeof(game_hotkeys[0]); i++) {
+		const struct pad_source *src = &map->src[game_hotkeys[i].control];
+
+		if (src->is_key && src->code == ev->code) {
+			hotkey_used = true;
+			send_game_hotkey(game_hotkeys[i].action);
+		}
+	}
+	return true;
+}
+
+/*
+ * Routes one physical event to the player's game gamepad. Returns true
+ * when the event belongs to a game control (consumed); the Quick Menu
+ * control and unmapped inputs fall through to the nuubOS action path.
+ */
+static bool forward_game_event(const struct input_dev *input,
+			       const struct input_event *ev)
+{
+	const struct padmap *map;
+	struct vpad *pad;
+	bool consumed = false;
+	size_t c;
+
+	if (ev->type != EV_KEY && ev->type != EV_ABS)
+		return false;
+	map = padmap_for(input->controller_id);
+	if (!map)
+		return false;
+	pad = vpad_for_player(map->player);
+
+	for (c = 0; c < PAD_CONTROL_COUNT; c++) {
+		const struct pad_source *src = &map->src[c];
+
+		if (src->code < 0 || src->code != ev->code ||
+		    src->is_key != (ev->type == EV_KEY))
+			continue;
+		if (c == PAD_MODE)
+			return false;
+		consumed = true;
+		if (!pad)
+			continue;
+
+		if (ev->type == EV_KEY) {
+			if (ev->value != 2 && c < PAD_AXIS_FIRST)
+				vpad_set_button(pad, c, ev->value != 0);
+			continue;
+		}
+
+		if (c >= PAD_AXIS_FIRST) {
+			int value = scale_abs(input, ev->code, ev->value);
+			int a = (int)(c - PAD_AXIS_FIRST);
+
+			if (src->dir == 2)
+				value = (value + PAD_AXIS_MAX) / 2;
+			else if (src->dir == -2)
+				value = (PAD_AXIS_MAX - value) / 2;
+			else if (src->dir < 0)
+				value = -value;
+			value = apply_deadzone(value, map->deadzone[a / 2]);
+			if (value != pad->axis[a]) {
+				pad->axis[a] = value;
+				vpad_write(pad, EV_ABS, pad_controls[c].code, value);
+			}
+		} else {
+			/* Half axis or trigger bound to a button/D-pad. */
+			int n = normalize_abs(input, ev->code, ev->value);
+			int travel = src->dir == 1 ? n : src->dir == -1 ? -n :
+				     src->dir == 2 ? (n + 100) / 2 : (100 - n) / 2;
+			bool pressed = pad->pressed[c] ? travel >= 30 : travel >= 50;
+
+			vpad_set_button(pad, c, pressed);
+		}
+	}
+	return consumed;
+}
+
+static void flush_vpads(void)
+{
+	size_t i;
+
+	for (i = 0; i < MAX_VPADS; i++)
+		if (vpads[i].fd >= 0)
+			vpad_sync(&vpads[i]);
+}
+
+/* PADMAP <controller-id> player=<n> left_deadzone=<n> right_deadzone=<n>
+ * <control>=<source> ... (nuubos-controllersd format) */
+static bool parse_padmap(const char *line, struct padmap *map)
+{
+	char copy[MAX_LINE];
+	char *save = NULL;
+	char *token;
+	size_t c;
+
+	memset(map, 0, sizeof(*map));
+	for (c = 0; c < PAD_CONTROL_COUNT; c++)
+		map->src[c].code = -1;
+	map->deadzone[0] = 20;
+	map->deadzone[1] = 20;
+
+	snprintf(copy, sizeof(copy), "%s", line);
+	token = strtok_r(copy, " ", &save);
+	if (!token)
+		return false;
+	snprintf(map->id, sizeof(map->id), "%s", token);
+
+	while ((token = strtok_r(NULL, " ", &save)) != NULL) {
+		char *value = strchr(token, '=');
+		bool is_key;
+		int code;
+		int dir;
+
+		if (!value)
+			continue;
+		*value++ = '\0';
+		if (strcmp(token, "player") == 0) {
+			map->player = atoi(value);
+			continue;
+		}
+		if (strcmp(token, "left_deadzone") == 0 ||
+		    strcmp(token, "right_deadzone") == 0) {
+			int percent = atoi(value);
+
+			if (percent >= 0 && percent <= 50)
+				map->deadzone[token[0] == 'l' ? 0 : 1] = percent;
+			continue;
+		}
+		for (c = 0; c < PAD_CONTROL_COUNT; c++) {
+			if (strcmp(token, pad_controls[c].name) != 0)
+				continue;
+			if (parse_mapping_source(value, &is_key, &code, &dir)) {
+				map->src[c].is_key = is_key;
+				map->src[c].code = code;
+				map->src[c].dir = dir;
+			}
+			break;
+		}
+	}
+	return map->id[0] != '\0' && map->player >= 1 && map->player <= MAX_VPADS;
+}
+
+static void commit_padmaps(void)
+{
+	memcpy(padmaps, padmaps_next, sizeof(padmaps));
+	padmap_count = padmap_next_count;
+	log_message("padmaps updated count=%zu", padmap_count);
+	if (gamepads_on) {
+		/* A remapped or reassigned control must not stay held. */
+		release_all_vpads();
+		sync_vpads();
+		sync_input_grab();
+	}
+}
+
 static void status_reply(int fd)
 {
 	char reply[1024];
@@ -1283,7 +1901,9 @@ static void status_reply(int fd)
 		 "menu_right=%d\n"
 		 "menu_confirm=%d\n"
 		 "menu_back=%d\n"
-		 "power=%d\n",
+		 "power=%d\n"
+		 "gamepads=%d\n"
+		 "padmaps=%zu\n",
 		 menu_open ? 1 : 0,
 		 settings_open ? 1 : 0,
 		 input_count,
@@ -1303,7 +1923,9 @@ static void status_reply(int fd)
 		 binding_by_name("menu_right")->code,
 		 binding_by_name("menu_confirm")->code,
 		 binding_by_name("menu_back")->code,
-		 binding_by_name("power")->code);
+		 binding_by_name("power")->code,
+		 gamepads_on ? 1 : 0,
+		 padmap_count);
 
 	(void)write_all(fd, reply);
 }
@@ -1380,6 +2002,43 @@ static void handle_command(struct client *client, const char *line)
 
 	if (strcmp(line, "STATUS") == 0) {
 		status_reply(client->fd);
+		return;
+	}
+
+	/* Emulation Service: game gamepads for the lifetime of this
+	 * connection (a crashed session never leaves controllers grabbed). */
+	if (strcmp(line, "GAMEPADS ON") == 0) {
+		client->owns_gamepads = true;
+		set_gamepads(true);
+		(void)write_all(client->fd, "OK\n");
+		return;
+	}
+
+	if (strcmp(line, "GAMEPADS OFF") == 0) {
+		client->owns_gamepads = false;
+		set_gamepads(false);
+		(void)write_all(client->fd, "OK\n");
+		return;
+	}
+
+	/* nuubos-controllersd: resolved mapping + player table. */
+	if (strcmp(line, "PADMAP BEGIN") == 0) {
+		padmap_next_count = 0;
+		padmap_receiving = true;
+		return;
+	}
+
+	if (strcmp(line, "PADMAP END") == 0) {
+		if (padmap_receiving)
+			commit_padmaps();
+		padmap_receiving = false;
+		return;
+	}
+
+	if (strncmp(line, "PADMAP ", 7) == 0) {
+		if (padmap_receiving && padmap_next_count < MAX_PADMAPS &&
+		    parse_padmap(line + 7, &padmaps_next[padmap_next_count]))
+			padmap_next_count++;
 		return;
 	}
 
@@ -1504,9 +2163,11 @@ static void process_client(struct client *client)
 
 	if (n <= 0) {
 		enum client_role role = client->role;
+		bool owned_gamepads = client->owns_gamepads;
 
 		close(client->fd);
 		client->fd = -1;
+		client->owns_gamepads = false;
 		client->subscribed = false;
 		client->role = CLIENT_ROLE_GENERIC;
 		client->used = 0;
@@ -1520,6 +2181,9 @@ static void process_client(struct client *client)
 		    role_subscriber_count(CLIENT_ROLE_HOME) == 0 &&
 		    settings_open)
 			set_settings_grab(false);
+
+		if (owned_gamepads)
+			set_gamepads(false);
 
 		return;
 	}
@@ -1587,6 +2251,7 @@ static void accept_client(int server_fd)
 		if (clients[i].fd < 0) {
 			clients[i].fd = fd;
 			clients[i].subscribed = false;
+			clients[i].owns_gamepads = false;
 			clients[i].role = CLIENT_ROLE_GENERIC;
 			clients[i].used = 0;
 			return;
@@ -1789,6 +2454,32 @@ static void process_input(struct input_dev *input)
 		    strcmp(raw_capture_controller, input->controller_id) == 0)
 			continue;
 
+		/*
+		 * A running game owns the controllers: game controls go to
+		 * the game gamepads (nothing while the Quick Menu is open) and
+		 * never navigate the nuubUI underneath it. Only the Quick Menu
+		 * button, power and volume keys stay nuubOS actions.
+		 */
+		if (gamepads_on && input_is_pad(input) &&
+		    !(events[i].type == EV_KEY && events[i].code == BTN_START &&
+		      suppress_start_marker_present())) {
+			if (!menu_open) {
+				if (game_modifier_event(input, &events[i]) ||
+				    game_hotkey_event(input, &events[i]) ||
+				    forward_game_event(input, &events[i]) ||
+				    events[i].type == EV_ABS)
+					continue;
+			} else if (events[i].type == EV_ABS) {
+				process_navigation_abs(input, &events[i]);
+				continue;
+			}
+			if (events[i].type == EV_KEY && !menu_open) {
+				action = action_for_code(input, events[i].code);
+				if (!action || strcmp(action, "quick_menu") != 0)
+					continue;
+			}
+		}
+
 		if (events[i].type == EV_ABS) {
 			process_navigation_abs(input, &events[i]);
 			continue;
@@ -1878,6 +2569,8 @@ static void process_input(struct input_dev *input)
 			emit_action_state(action, "released");
 		}
 	}
+
+	flush_vpads();
 }
 
 static void cleanup_runtime(int server_fd,
@@ -1888,6 +2581,8 @@ static void cleanup_runtime(int server_fd,
 
 	menu_open = false;
 	settings_open = false;
+	gamepads_on = false;
+	destroy_vpads();
 	sync_input_grab();
 	close_inputs();
 
@@ -1968,6 +2663,8 @@ int main(int argc, char **argv)
 		clients[i].fd = -1;
 		clients[i].role = CLIENT_ROLE_GENERIC;
 	}
+	for (i = 0; i < MAX_VPADS; i++)
+		vpads[i].fd = -1;
 
 	signal(SIGTERM, handle_signal);
 	signal(SIGINT, handle_signal);

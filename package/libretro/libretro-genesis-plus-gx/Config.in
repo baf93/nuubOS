@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_GENESIS_PLUS_GX
+	bool "libretro-genesis-plus-gx"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: Genesis Plus GX (Master System / Game Gear / Mega Drive / Mega-CD). Licence restricts commercial redistribution.

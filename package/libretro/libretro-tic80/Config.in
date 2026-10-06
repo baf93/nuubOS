@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_TIC80
+	bool "libretro-tic80"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: TIC-80 fantasy console.

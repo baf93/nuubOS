@@ -1,0 +1,6 @@
+#!/bin/sh
+# nuubOS lifecycle pre-power hook (CLAUDE §20.1): before Sleep, Restart and
+# Power Off the running game's progress is saved to its automatic state
+# slot; before Restart/Power Off RetroArch also quits and writes its save
+# files. nuubos-emuctl returns at once when no game runs.
+exec /usr/bin/nuubos-emuctl pre-power "$1" >/dev/null

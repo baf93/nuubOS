@@ -63,6 +63,7 @@ const DISPLAYCTL: &str = "/usr/bin/nuubos-displayctl";
 const STATUS_STATE: &str = "/run/nuubos/statusd.state";
 const STATUS_SOCKET: &str = "/run/nuubos/statusd.sock";
 const NOTIFY_SOCKET: &str = "/run/nuubos/notifyd.sock";
+const EMULATION_SOCKET: &str = "/run/nuubos/emud.sock";
 
 
 const LINE_STAGE_MS: u64 = 220;
@@ -1361,6 +1362,8 @@ struct DisplaySnapshot {
 #[derive(Debug)]
 enum AppEvent {
     Input(LogicalEvent),
+    /* Emulation Service session snapshot (nuubos-emud). */
+    Game(GameSnapshot),
     StatusChanged,
     /* The output device changed its own volume (Bluetooth headset buttons). */
     DeviceVolume,
@@ -1480,6 +1483,7 @@ const ICON_WIFI: i32 = 8;
 const ICON_STORAGE: i32 = 9;
 const ICON_DONE: i32 = 10;
 const ICON_FAILED: i32 = 11;
+const ICON_FAST_FORWARD: i32 = 12;
 
 #[derive(Debug, Clone)]
 struct ToastView {
@@ -1640,6 +1644,71 @@ fn toast_view(ui: &QuickMenuWindow, n: &Notification) -> Option<ToastView> {
             SEVERITY_WARNING,
             tr(ui, 385, "Wi-Fi connection lost"),
             n.text("ssid").to_owned(),
+            -1,
+        ),
+        "game.state.saved" | "game.state.loaded" => (
+            ICON_DONE,
+            SEVERITY_SUCCESS,
+            if n.event == "game.state.saved" {
+                tr(ui, 424, "State saved")
+            } else {
+                tr(ui, 425, "State loaded")
+            },
+            n.int("slot")
+                .map(|slot| format_arg(&tr(ui, 423, "Slot {0}"), &slot.to_string()))
+                .unwrap_or_default(),
+            -1,
+        ),
+        "game.state.empty" => (
+            ICON_FAILED,
+            SEVERITY_WARNING,
+            format_arg(
+                &tr(ui, 426, "Slot {0} is empty"),
+                &n.int("slot").unwrap_or(0).to_string(),
+            ),
+            String::new(),
+            -1,
+        ),
+        "game.state.failed" => (
+            ICON_FAILED,
+            SEVERITY_ERROR,
+            if n.text("op") == "load" {
+                tr(ui, 428, "The state could not be loaded")
+            } else {
+                tr(ui, 427, "The state could not be saved")
+            },
+            n.int("slot")
+                .map(|slot| format_arg(&tr(ui, 423, "Slot {0}"), &slot.to_string()))
+                .unwrap_or_default(),
+            -1,
+        ),
+        "game.slot" => (
+            ICON_CONTROLLER,
+            SEVERITY_INFO,
+            tr(ui, 419, "State Slot"),
+            format_arg(&tr(ui, 423, "Slot {0}"), &n.int("slot").unwrap_or(0).to_string()),
+            -1,
+        ),
+        "game.fastforward" => (
+            ICON_FAST_FORWARD,
+            SEVERITY_INFO,
+            if n.text("state") == "on" {
+                tr(ui, 429, "Fast-forward on")
+            } else {
+                tr(ui, 430, "Fast-forward off")
+            },
+            String::new(),
+            -1,
+        ),
+        "game.failed" => (
+            ICON_FAILED,
+            SEVERITY_ERROR,
+            if n.text("reason") == "crash" {
+                tr(ui, 432, "The game closed unexpectedly")
+            } else {
+                tr(ui, 431, "The game could not be started")
+            },
+            String::new(),
             -1,
         ),
         "storage.job" => {
@@ -2142,8 +2211,109 @@ fn flush_brightness(
     Ok(())
 }
 
+/* Running game as reported by nuubos-emud (EPIC-013). */
+#[derive(Debug, Clone, Default)]
+struct GameSnapshot {
+    running: bool,
+    slot: i32,
+}
+
+fn parse_game_snapshot(reply: &str) -> GameSnapshot {
+    let mut snapshot = GameSnapshot::default();
+    for line in reply.lines() {
+        match line.split_once('=') {
+            Some(("state", value)) => snapshot.running = value == "running",
+            Some(("slot", value)) => snapshot.slot = value.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    snapshot
+}
+
+fn emulation_command(command: &str) -> std::io::Result<String> {
+    let mut stream = UnixStream::connect(EMULATION_SOCKET)?;
+    stream.set_read_timeout(Some(Duration::from_millis(700)))?;
+    stream.write_all(command.as_bytes())?;
+    stream.write_all(b"\n")?;
+    let mut reader = BufReader::new(stream);
+    let mut reply = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        let done = command != "STATUS" || line.trim_end() == "end=1";
+        reply.push_str(&line);
+        if done {
+            break;
+        }
+    }
+    Ok(reply)
+}
+
+/* Fire-and-forget game action: the outcome the user must see comes back as
+ * a notification from the Emulation Service. */
+fn game_action(command: &'static str) {
+    if let Err(error) = emulation_command(command) {
+        eprintln!("quick-menu: game {command} failed={error}");
+    }
+}
+
+fn read_game_snapshot() -> GameSnapshot {
+    emulation_command("STATUS")
+        .map(|reply| parse_game_snapshot(&reply))
+        .unwrap_or_default()
+}
+
+fn apply_game_snapshot(ui: &QuickMenuWindow, snapshot: &GameSnapshot) {
+    if !snapshot.running && ui.get_selected_index() >= 8 {
+        ui.set_selected_index(3);
+    }
+    if !snapshot.running {
+        ui.set_game_confirm_index(-1);
+    }
+    ui.set_game_section_visible(snapshot.running);
+    ui.set_game_slot_label(
+        format_arg(&tr(ui, 423, "Slot {0}"), &snapshot.slot.to_string()).into(),
+    );
+}
+
+fn start_game_subscription(tx: Sender<AppEvent>) {
+    thread::spawn(move || loop {
+        if let Ok(mut stream) = UnixStream::connect(EMULATION_SOCKET) {
+            if stream.write_all(b"SUBSCRIBE\n").is_ok() {
+                let mut reader = BufReader::new(stream);
+                let mut block = String::new();
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            block.push_str(&line);
+                            if line.trim_end() == "end=1" {
+                                let snapshot = parse_game_snapshot(&block);
+                                block.clear();
+                                if tx.send(AppEvent::Game(snapshot)).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        /* Only reached while emud is absent or restarting. */
+        thread::sleep(Duration::from_secs(1));
+    });
+}
+
 fn selectable_menu_indices(ui: &QuickMenuWindow) -> Vec<i32> {
-    let mut indices = vec![3];
+    let mut indices = Vec::new();
+    if ui.get_game_section_visible() {
+        indices.extend_from_slice(&[8, 9, 10, 11, 12, 13, 14]);
+    }
+    indices.push(3);
     if ui.get_brightness_visible() {
         indices.push(5);
     }
@@ -2157,9 +2327,14 @@ fn selectable_menu_indices(ui: &QuickMenuWindow) -> Vec<i32> {
     indices
 }
 
-fn first_selectable_index(_ui: &QuickMenuWindow) -> i32 {
-    /* The single Audio control is always the first Display/Audio row. */
-    3
+fn first_selectable_index(ui: &QuickMenuWindow) -> i32 {
+    /* Resume is the safest default over a game; otherwise the single Audio
+     * control, the first Display/Audio row. */
+    if ui.get_game_section_visible() {
+        8
+    } else {
+        3
+    }
 }
 
 fn move_menu_selection(ui: &QuickMenuWindow, delta: i32) {
@@ -2172,6 +2347,7 @@ fn move_menu_selection(ui: &QuickMenuWindow, delta: i32) {
     let position = indices.iter().position(|value| *value == current).unwrap_or(0) as i32;
     let next = (position + delta).rem_euclid(indices.len() as i32) as usize;
     ui.set_selected_index(indices[next]);
+    ui.set_game_confirm_index(-1);
 }
 
 fn write_menu_state(ui: &QuickMenuWindow, mapped: bool) {
@@ -2314,7 +2490,16 @@ fn map_overlay(
     apply_battery_snapshot(ui, read_battery_snapshot());
     apply_audio_snapshot(ui, &read_audio_snapshot());
     refresh_system_profile(ui);
-    ui.set_switch_user_visible(switch_user_available());
+    let game = read_game_snapshot();
+    apply_game_snapshot(ui, &game);
+    ui.set_game_confirm_index(-1);
+    /* The game waits underneath the menu (EPIC-005); every way out of the
+     * menu resumes it (unmap_overlay). Switch User is not offered over a
+     * game. */
+    if game.running {
+        game_action("PAUSE");
+    }
+    ui.set_switch_user_visible(!game.running && switch_user_available());
     ui.set_selected_index(first_selectable_index(ui));
 
     state.create_overlay(qh, SurfaceKind::Full)?;
@@ -2603,6 +2788,9 @@ fn unmap_overlay(
     state.destroy_overlay();
     let _ = ui.hide();
     set_menu_capture(false);
+    if ui.get_game_section_visible() {
+        game_action("RESUME");
+    }
 
     eprintln!("quick-menu: unmapped");
 }
@@ -2667,6 +2855,53 @@ fn activate_selected(
         _ => {}
     }
 
+    Ok(())
+}
+
+/* GAME rows (8 Resume .. 14 Quit). Load State, Restart Game and Quit Game
+ * lose unsaved progress and take a second press (EPIC-005 safety rules). */
+fn activate_game_row(
+    ui: &QuickMenuWindow,
+    mapped: &mut bool,
+    brightness_dirty: &mut bool,
+    queue: &mut EventQueue<WaylandState>,
+    state: &mut WaylandState,
+    qh: &QueueHandle<WaylandState>,
+    conn: &Connection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let index = ui.get_selected_index();
+    if matches!(index, 10 | 12 | 14) && ui.get_game_confirm_index() != index {
+        ui.set_game_confirm_index(index);
+        return redraw_overlay(ui, queue, state, qh, conn);
+    }
+    let mut resume = true;
+    match index {
+        8 => {}
+        9 => game_action("SAVE_STATE"),
+        10 => game_action("LOAD_STATE"),
+        11 => {
+            game_action("SLOT\t+1");
+            apply_game_snapshot(ui, &read_game_snapshot());
+            return redraw_overlay(ui, queue, state, qh, conn);
+        }
+        12 => game_action("RESET"),
+        13 => {
+            /* RetroArch's own menu takes over; it pauses the game. */
+            game_action("ADVANCED");
+            resume = false;
+        }
+        14 => {
+            game_action("QUIT");
+            resume = false;
+        }
+        _ => return Ok(()),
+    }
+    if !resume {
+        ui.set_game_section_visible(false);
+    }
+    flush_brightness(ui, brightness_dirty)?;
+    unmap_overlay(ui, queue, state, conn);
+    *mapped = false;
     Ok(())
 }
 
@@ -2757,6 +2992,20 @@ fn handle_event(
     }
 
     match event.action.as_str() {
+        /* Over a game Home (and its Power menu) is hidden: the power key
+         * opens the Quick Menu on Sleep, next to Restart and Power Off. */
+        "power" if ui.get_game_section_visible() && !ui.get_lifecycle_active() => {
+            if *mapped {
+                flush_brightness(ui, brightness_dirty)?;
+                unmap_overlay(ui, queue, state, conn);
+                *mapped = false;
+            } else {
+                map_overlay(ui, queue, state, qh, conn)?;
+                *mapped = true;
+                ui.set_selected_index(0);
+                redraw_overlay(ui, queue, state, qh, conn)?;
+            }
+        }
         "quick_menu" => {
             if *mapped {
                 flush_brightness(ui, brightness_dirty)?;
@@ -2771,6 +3020,22 @@ fn handle_event(
             flush_brightness(ui, brightness_dirty)?;
             unmap_overlay(ui, queue, state, conn);
             *mapped = false;
+        }
+        "menu_left" | "menu_right" if *mapped
+            && !ui.get_lifecycle_active()
+            && ui.get_game_section_visible()
+            && ui.get_selected_index() == 11 =>
+        {
+            game_action(if event.action == "menu_left" { "SLOT\t-1" } else { "SLOT\t+1" });
+            apply_game_snapshot(ui, &read_game_snapshot());
+            redraw_overlay(ui, queue, state, qh, conn)?;
+        }
+        "menu_confirm" if *mapped
+            && !ui.get_lifecycle_active()
+            && ui.get_game_section_visible()
+            && ui.get_selected_index() >= 8 =>
+        {
+            activate_game_row(ui, mapped, brightness_dirty, queue, state, qh, conn)?;
         }
         "menu_up" if *mapped && !ui.get_lifecycle_active() => {
             move_menu_selection(ui, -1);
@@ -2954,6 +3219,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     start_status_subscription(tx.clone());
     start_notify_subscription(tx.clone());
     start_audio_subscription(tx.clone());
+    start_game_subscription(tx.clone());
     refresh_i18n(&ui);
 
     let mut mapped = false;
@@ -3078,6 +3344,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if was_mapped && !mapped {
                             dirty = true;
                         }
+                    }
+                }
+                AppEvent::Game(snapshot) => {
+                    apply_game_snapshot(&ui, &snapshot);
+                    if mapped {
+                        if !snapshot.running {
+                            ui.set_switch_user_visible(switch_user_available());
+                        }
+                        dirty = true;
                     }
                 }
                 AppEvent::DeviceVolume => {

@@ -1,0 +1,29 @@
+From: nuubOS <noreply@nuubos.invalid>
+Subject: [PATCH] libretro: allow dependencies provided by the build system
+
+The libretro backend clones libretro-deps and libretro-common with git at
+build time. With DEPS_PROVIDED=1 it uses the copies already present in
+DEPS_PATH (downloaded and pinned by the build system) instead.
+
+Upstream-Status: Inappropriate [nuubOS packaging]
+---
+--- a/backends/platform/libretro/dependencies.mk
++++ b/backends/platform/libretro/dependencies.mk
+@@ -13,6 +13,9 @@
+ DEPS_URL_libretro-common    := https://github.com/libretro/libretro-common
+ DEPS_COMMIT_libretro-common := 879c8d507b0b52e77e27d759239c2b5df1e26dfd
+ 
++# A packaged build provides libretro-deps and libretro-common in
++# $(DEPS_PATH) (pinned downloads) and must not clone them with git.
++ifneq ($(DEPS_PROVIDED),1)
+ submodule_test  = $(if $(shell result=$$($(SCRIPTS_PATH)/configure_submodules.sh $(DEPS_URL_$(1)) $(DEPS_COMMIT_$(1)) $(DEPS_PATH) $(DEBUG_ALLOW_DIRTY_SUBMODULES) $(DEPS_FOLDER_$(1))) ; { [ -z $$result ] || [ ! $$result = 0 ] ; } && printf error),$(1))
+ $(info Configuring submodules...)
+ SUBMODULE_FAILED = $(strip $(findstring $(foreach SUBMODULE,$(DEPS_SUBMODULES),$(call submodule_test,$(SUBMODULE))),$(DEPS_SUBMODULES)))
+@@ -22,6 +25,7 @@
+ else
+    $(info - Submodules configured)
+ endif
++endif
+ 
+ # Shared libs functions
+ this_lib_available := no

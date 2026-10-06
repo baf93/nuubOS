@@ -1,0 +1,33 @@
+From: nuubOS <noreply@nuubos.invalid>
+Subject: [PATCH] wayland: EGL config for GLES2 contexts in GLES3 builds
+
+A build with --enable-opengles3 defines HAVE_OPENGLES3 but not
+HAVE_OPENGLES2, so the Wayland context selected no EGL config attributes
+when the gl driver asks for a GLES 2 context and egl_init_context()
+dereferenced a NULL attribute list (SIGSEGV at startup). Use the ES2
+renderable-type attributes for every GLES context below version 3.
+
+Upstream-Status: Pending
+---
+--- a/gfx/drivers_context/wayland_ctx.c
++++ b/gfx/drivers_context/wayland_ctx.c
+@@ -175,7 +175,7 @@
+    };
+ 
+ #ifdef HAVE_OPENGLES
+-#ifdef HAVE_OPENGLES2
++#if defined(HAVE_OPENGLES2) || defined(HAVE_OPENGLES3)
+    static const EGLint egl_attribs_gles[] = {
+       WL_EGL_ATTRIBS_BASE,
+       EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+@@ -221,10 +221,8 @@
+          else
+ #endif
+ #endif
+-#ifdef HAVE_OPENGLES2
+             attrib_ptr = egl_attribs_gles;
+ #endif
+-#endif
+          break;
+       case GFX_CTX_OPENVG_API:
+ #ifdef HAVE_VG

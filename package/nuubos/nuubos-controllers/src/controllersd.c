@@ -441,6 +441,11 @@ static bool looks_like_controller(int fd, const char *name)
 	    strcmp(name, "gpio-keys-gamepad") == 0)
 		return true;
 
+	/* inputd's game gamepads are outputs of this mapping, not
+	 * controllers. */
+	if (strncmp(name, "nuubOS Gamepad", 14) == 0)
+		return false;
+
 	memset(evbits, 0, sizeof(evbits));
 	if (ioctl(fd, EVIOCGBIT(0, sizeof(evbits)), evbits) < 0)
 		return false;
@@ -1568,12 +1573,60 @@ static bool append_assignments_array(DBusMessageIter *parent)
 	return dbus_message_iter_close_container(parent, &array);
 }
 
+/*
+ * Game gamepads: inputd builds one virtual gamepad per player while a game
+ * runs and needs the resolved mapping (defaults + the active user's
+ * overrides) and player of every connected controller. The whole table is
+ * re-sent on any device, user, mapping, deadzone or assignment change.
+ */
+static void push_padmaps(void)
+{
+	char line[1024];
+	size_t i;
+	size_t c;
+
+	if (input_fd < 0)
+		return;
+	if (write(input_fd, "PADMAP BEGIN\n", 13) < 0)
+		return;
+	for (i = 0; i < device_count; i++) {
+		struct source map[CONTROL_COUNT];
+		int left;
+		int right;
+		size_t used;
+
+		if (!devices[i].connected || devices[i].effective_player < 1)
+			continue;
+		load_mapping(devices[i].id, map);
+		load_deadzones(devices[i].id, &left, &right);
+		used = (size_t)snprintf(line, sizeof(line),
+					"PADMAP %s player=%d left_deadzone=%d right_deadzone=%d",
+					devices[i].id, devices[i].effective_player,
+					left, right);
+		for (c = 0; c < CONTROL_COUNT && used < sizeof(line); c++) {
+			char text[48];
+
+			format_source(&map[c], text, sizeof(text));
+			used += (size_t)snprintf(line + used, sizeof(line) - used,
+						 " %s=%s", controls[c].id, text);
+		}
+		if (used + 1 >= sizeof(line))
+			continue;
+		line[used++] = '\n';
+		if (write(input_fd, line, used) < 0)
+			return;
+	}
+	if (write(input_fd, "PADMAP END\n", 11) < 0)
+		return;
+}
+
 static void emit_devices_changed(DBusConnection *conn)
 {
 	DBusMessage *signal = dbus_message_new_signal(OBJECT_PATH, INTERFACE_NAME, "DevicesChanged");
 	DBusMessageIter iter;
 	if (!signal)
 		return;
+	push_padmaps();
 	dbus_message_iter_init_append(signal, &iter);
 	if (append_devices_array(&iter)) {
 		dbus_connection_send(conn, signal, NULL);
@@ -1588,6 +1641,7 @@ static void emit_assignments_changed(DBusConnection *conn)
 	DBusMessageIter iter;
 	if (!signal)
 		return;
+	push_padmaps();
 	dbus_message_iter_init_append(signal, &iter);
 	if (append_assignments_array(&iter)) {
 		dbus_connection_send(conn, signal, NULL);
@@ -1599,6 +1653,8 @@ static void emit_assignments_changed(DBusConnection *conn)
 static void emit_mapping_changed(DBusConnection *conn, const char *id)
 {
 	DBusMessage *signal = dbus_message_new_signal(OBJECT_PATH, INTERFACE_NAME, "MappingChanged");
+
+	push_padmaps();
 	if (!signal)
 		return;
 	dbus_message_append_args(signal, DBUS_TYPE_STRING, &id, DBUS_TYPE_INVALID);
@@ -2467,8 +2523,10 @@ int main(void)
 					emit_assignments_changed(conn);
 				}
 
-				if (runtime_changed && input_fd < 0)
+				if (runtime_changed && input_fd < 0) {
 					input_fd = connect_inputd();
+					push_padmaps();
+				}
 			}
 		}
 

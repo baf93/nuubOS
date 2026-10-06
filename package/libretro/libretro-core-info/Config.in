@@ -1,0 +1,8 @@
+config BR2_PACKAGE_LIBRETRO_CORE_INFO
+	bool "libretro-core-info"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core information files (*.info) for every core, so
+	  RetroArch can describe bundled cores and the ones a user
+	  downloads with the Online Updater (firmware list, display
+	  name, supported extensions).

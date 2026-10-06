@@ -1,0 +1,7 @@
+config BR2_PACKAGE_RETROARCH_ASSETS
+	bool "retroarch-assets"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  The subset of libretro/retroarch-assets needed by the Ozone
+	  menu (RetroArch Advanced): Ozone icons/fonts, XMB monochrome
+	  content icons and the western fallback/OSD fonts. CC-BY-4.0.

@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_MAME2003_PLUS
+	bool "libretro-mame2003-plus"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: MAME 2003-Plus (arcade, MAME 0.78 sets).

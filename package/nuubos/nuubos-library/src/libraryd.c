@@ -71,7 +71,7 @@
 #define CATALOG_HEADER "# nuubOS library catalog v2"
 #define MAX_CLIENTS 16
 #define MAX_LINE 1024
-#define MAX_SYSTEMS 64
+#define MAX_SYSTEMS 128
 #define MAX_APPS 64
 #define MAX_SCAN_DEPTH 6
 #define RECENT_LIMIT 10
@@ -1708,6 +1708,24 @@ static void handle_command(struct client *c, char *line)
 			send_text(c, b.data, b.len);
 		else
 			reply(c, "ERR scope\n");
+		free(b.data);
+	} else if (!strcmp(line, "RESOLVE") && arg) {
+		/* Launch lookup for the Emulation Service: system and
+		 * absolute content path of an available game. */
+		long idx = valid_game_id(arg) ? find_game(arg) : -1;
+		struct strbuf b = { 0 };
+
+		if (idx < 0) {
+			reply(c, "ERR game\n");
+			return;
+		}
+		if (!games[idx].available) {
+			reply(c, "ERR unavailable\n");
+			return;
+		}
+		sb_append(&b, "OK %s\t%s/%s\n", systems[games[idx].sys].id,
+			  ROMS_ROOT, games[idx].rel);
+		send_text(c, b.data, b.len);
 		free(b.data);
 	} else if (!active_user[0] &&
 		   (!strncmp(line, "SESSION_", 8) || !strncmp(line, "FAVORITE", 8) ||

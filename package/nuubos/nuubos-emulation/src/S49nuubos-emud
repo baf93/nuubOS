@@ -1,0 +1,48 @@
+#!/bin/sh
+# nuubOS Emulation Service: game sessions in RetroArch. Starts after the
+# Game Library and input services, before the UI.
+
+DAEMON=/usr/sbin/nuubos-emud
+PIDFILE=/run/nuubos/emud.pid
+SOCKET=/run/nuubos/emud.sock
+
+emud_running()
+{
+    [ -r "$PIDFILE" ] || return 1
+    PID="$(cat "$PIDFILE" 2>/dev/null)"
+    [ -n "$PID" ] || return 1
+    [ "$(tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p')" = "$DAEMON" ]
+}
+
+start_service()
+{
+    mkdir -p /run/nuubos
+    emud_running && return 0
+    rm -f "$PIDFILE" "$SOCKET"
+    "$DAEMON" >>/run/nuubos/emud.log 2>&1 &
+    return 0
+}
+
+stop_service()
+{
+    if emud_running; then
+        PID="$(cat "$PIDFILE" 2>/dev/null)"
+        kill -TERM "$PID" 2>/dev/null || true
+        # A running game is asked to quit and write its saves first.
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            [ -d "/proc/$PID" ] || break
+            sleep 1
+        done
+    fi
+    rm -f "$PIDFILE" "$SOCKET"
+    return 0
+}
+
+case "${1:-}" in
+    start) start_service ;;
+    stop) stop_service ;;
+    restart) stop_service; start_service ;;
+    *) echo "Usage: $0 {start|stop|restart}" >&2; exit 1 ;;
+esac
+
+exit 0

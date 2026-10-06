@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_PX68K
+	bool "libretro-px68k"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: PX68K (Sharp X68000).

@@ -1,0 +1,4 @@
+config BR2_PACKAGE_EMUTOS
+	bool "emutos"
+	help
+	  EmuTOS, free Atari ST operating system ROM for Hatari.

@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_NP2KAI
+	bool "libretro-np2kai"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: Neko Project II kai (NEC PC-9801).

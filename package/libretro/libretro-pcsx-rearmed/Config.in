@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_PCSX_REARMED
+	bool "libretro-pcsx-rearmed"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: PCSX ReARMed (PlayStation), ARM64 dynarec + NEON GPU.

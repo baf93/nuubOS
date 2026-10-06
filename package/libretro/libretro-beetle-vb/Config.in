@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_BEETLE_VB
+	bool "libretro-beetle-vb"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: Beetle VB (Virtual Boy).

@@ -2076,6 +2076,30 @@ fn refresh_audio(ui: &HomeWindow) {
     });
 }
 
+fn start_home_music_session() {
+    if let Ok(connection) = zbus::blocking::Connection::system() {
+        if let Ok(proxy) = audio_proxy(&connection) {
+            let result: zbus::Result<()> = proxy.call("StartHomeMusic", &());
+            if let Err(error) = result {
+                eprintln!("home: StartHomeMusic failed={error}");
+            }
+        }
+    }
+}
+
+/* A game session started or ended (nuubos-emud). Home Music belongs to Home
+ * being foreground; the game owns audio while it runs. Controllers need
+ * nothing here: inputd routes them to the game gamepads by itself. */
+fn on_game_session(ui: &HomeWindow, running: bool) {
+    eprintln!("home: game session running={running}");
+    let _ = ui;
+    if running {
+        thread::spawn(stop_home_music_session);
+    } else {
+        thread::spawn(start_home_music_session);
+    }
+}
+
 fn stop_home_music_session() {
     if let Ok(connection) = zbus::blocking::Connection::system() {
         if let Ok(proxy) = audio_proxy(&connection) {
@@ -5075,6 +5099,12 @@ fn start_input_listener(
                             }
 
                             if user_picker_active.load(Ordering::SeqCst) && matches!(fields[2],"menu_left"|"menu_right"|"menu_up"|"menu_down"|"menu_confirm"|"menu_back"){let a=fields[2].to_owned();let w=weak.clone();let p=user_picker_active.clone();let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){handle_user_picker(&ui,&a,&p);});continue;}
+                            /* Over a game the Quick Menu shows the power actions;
+                             * Home is hidden underneath. */
+                            if library::GAME_RUNNING.load(Ordering::SeqCst) {
+                                continue;
+                            }
+
                             if matches!(fields[2], "power" | "power_menu" | "power_button" | "sleep") {
                                 let open = !power_active.swap(true, Ordering::SeqCst);
                                 let weak = weak.clone();
@@ -5581,6 +5611,7 @@ fn main() -> Result<(), slint::PlatformError> {
     start_audio_product_listener(&ui);
     library::start_cover_loader(&ui);
     library::start_library_listener(&ui);
+    library::start_game_listener(&ui);
     let system_info_gate = Arc::new((Mutex::new(false), Condvar::new()));
     let _ = SYSTEM_INFO_GATE.set(system_info_gate.clone());
     start_system_info_live(&ui, system_info_gate);

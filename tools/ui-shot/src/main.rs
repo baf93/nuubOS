@@ -69,6 +69,24 @@ fn quick_menu(win: &Rc<MinimalSoftwareWindow>) {
         }
     }
 
+    /* Over a running game: GAME section first (Resume selected), the
+     * State Slot row (adjustable) and Quit waiting for its second press. */
+    qm.set_audio_output_dropdown_open(false);
+    qm.set_home_music_playing(false);
+    qm.set_switch_user_visible(false);
+    qm.set_game_section_visible(true);
+    qm.set_game_slot_label("Slot 3".into());
+    for (name, sel, confirm) in [("qm_game", 8, -1), ("qm_game_slot", 11, -1), ("qm_game_quit", 14, 14)] {
+        qm.set_selected_index(sel);
+        qm.set_game_confirm_index(confirm);
+        for (w, h) in sizes {
+            shot(win, w, h, name);
+        }
+    }
+    qm.set_game_section_visible(false);
+    qm.set_game_confirm_index(-1);
+    qm.set_switch_user_visible(true);
+
     /* Notifications: the copy drawn over the open Quick Menu, then the
      * persistent 416x88 notification surface (NotificationWindow). */
     let s = strings();
@@ -91,7 +109,7 @@ fn quick_menu(win: &Rc<MinimalSoftwareWindow>) {
     let card = NotificationWindow::new().unwrap();
     card.show().unwrap();
     let pct = |i: usize, v: &str| SharedString::from(t(i).replace("{0}", v));
-    let cards: [(&str, i32, i32, SharedString, SharedString, i32, f32); 8] = [
+    let cards: [(&str, i32, i32, SharedString, SharedString, i32, f32); 9] = [
         ("music", 1, 0, t(369), "Airport Lounge — Kevin MacLeod".into(), -1, -1.0),
         ("headphones", 3, 0, t(372), "Beats Studio3 Wireless".into(), 80, -1.0),
         ("saver", 6, 0, t(376), pct(377, "20"), -1, -1.0),
@@ -100,6 +118,7 @@ fn quick_menu(win: &Rc<MinimalSoftwareWindow>) {
         ("pad_low", 2, 2, t(378), "8BitDo Ultimate 2C Wireless Controller".into(), 12, -1.0),
         ("wifi_lost", 8, 2, t(385), "CasaBaf-5G".into(), -1, -1.0),
         ("backup", 9, 0, t(97), t(91), -1, 0.42),
+        ("game_saved", 10, 1, t(424), pct(423, "3"), -1, -1.0),
     ];
     for (name, icon, severity, title, detail, battery, progress) in cards {
         card.set_toast_icon(icon);

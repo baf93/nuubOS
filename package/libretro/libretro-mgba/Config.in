@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_MGBA
+	bool "libretro-mgba"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: mGBA (Game Boy Advance).

@@ -31,6 +31,13 @@
  *   wifi.lost               ssid=
  *   storage.job             action=backup|move-back|adopt
  *                           state=running|succeeded|failed [progress=]
+ *   game.state.saved        [slot=]   (no slot: automatic slot)
+ *   game.state.loaded       [slot=]
+ *   game.state.empty        slot=
+ *   game.state.failed       op=save|load [slot=]
+ *   game.slot               slot=      (changed with a controller hotkey)
+ *   game.fastforward        state=on|off
+ *   game.failed             reason=start|crash
  *
  * Values are percent-encoded. Sending is fire-and-forget and never blocks:
  * a missing or busy router simply drops a transient notification.

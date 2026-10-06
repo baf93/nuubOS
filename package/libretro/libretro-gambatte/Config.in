@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_GAMBATTE
+	bool "libretro-gambatte"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: Gambatte (Game Boy / Game Boy Color).

@@ -266,6 +266,7 @@ component NotificationCard inherits Rectangle {
                 : root.icon == 9 ? @image-url("assets/icons/hard-drive.svg")
                 : root.icon == 10 ? @image-url("assets/icons/circle-check.svg")
                 : root.icon == 11 ? @image-url("assets/icons/circle-xmark.svg")
+                : root.icon == 12 ? @image-url("assets/icons/forward-step.svg")
                 : @image-url("assets/icons/triangle-exclamation.svg");
         }
     }
@@ -445,7 +446,7 @@ component QmSliderRow inherits Rectangle {
 }
 
 export component QuickMenuWindow inherits Window {
-    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open"];
+    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available"];
     in-out property <int> selected-index: 0;
     in-out property <bool> brightness-visible: false;
     in-out property <bool> switch-user-visible: false;
@@ -494,6 +495,12 @@ export component QuickMenuWindow inherits Window {
      */
     in-out property <int> surface-mode: 0;
 
+    /* Running game (nuubos-emud): its actions come first (CLAUDE §18.1).
+     * game-confirm-index is the row waiting for its second press. */
+    in-out property <bool> game-section-visible: false;
+    in-out property <string> game-slot-label: "";
+    in-out property <int> game-confirm-index: -1;
+
     in-out property <bool> context-section-visible: false;
     in-out property <string> context-section-title: root.i18n-strings[231];
     in-out property <string> context-primary-label: "";
@@ -528,10 +535,16 @@ export component QuickMenuWindow inherits Window {
     property <length> footer-height: 58px;
     property <length> content-top: root.header-height + 12px;
 
-    property <length> context-y: root.content-top;
+    property <length> game-y: root.content-top;
+    property <length> game-row0-y: root.game-y + root.section-header;
+    property <length> game-step: root.row-height + root.row-gap;
+    property <length> game-end: root.game-row0-y + 6 * root.game-step + root.row-height;
+    property <length> context-y: root.game-section-visible
+        ? root.game-end + root.section-gap
+        : root.content-top;
     property <length> display-y: root.context-section-visible
         ? root.context-y + root.section-header + root.row-height + root.section-gap
-        : root.content-top;
+        : root.context-y;
     property <length> audio-row-y: root.display-y + root.section-header;
     property <length> brightness-row-y: root.audio-row-y + root.slider-row-height + root.row-gap;
     property <length> skip-row-y: root.brightness-visible
@@ -551,7 +564,8 @@ export component QuickMenuWindow inherits Window {
     property <length> poweroff-row-y: root.restart-row-y + root.row-height + root.row-gap;
 
     property <length> focus-top:
-        root.selected-index == 3 ? root.audio-row-y
+        root.selected-index >= 8 ? root.game-row0-y + (root.selected-index - 8) * root.game-step
+        : root.selected-index == 3 ? root.audio-row-y
         : root.selected-index == 5 ? root.brightness-row-y
         : root.selected-index == 7 ? root.skip-row-y
         : root.selected-index == 6 ? root.user-row-y
@@ -567,10 +581,12 @@ export component QuickMenuWindow inherits Window {
      * section stays visible when scrolled to the top. */
     property <length> scroll: min(
         max(0px, root.focus-bottom - root.viewport-bottom),
-        max(0px, root.focus-top - root.viewport-top - (root.focus-top == root.audio-row-y ? root.section-header : 0px)));
+        max(0px, root.focus-top - root.viewport-top
+            - (root.focus-top == root.audio-row-y || root.selected-index == 8 ? root.section-header : 0px)));
 
     property <bool> selected-adjustable:
-        (root.selected-index == 3 && root.audio-volume-visible)
+        (root.selected-index == 11 && root.game-section-visible)
+        || (root.selected-index == 3 && root.audio-volume-visible)
         || (root.selected-index == 5 && root.brightness-visible);
 
     title: root.i18n-strings[232];
@@ -602,6 +618,67 @@ export component QuickMenuWindow inherits Window {
             height: parent.height;
             background: #2c3036;
             z: 90;
+        }
+
+        /* GAME: actions of the running game, first in the menu. */
+        QmSectionHeader {
+            x: 16px; y: root.game-y - root.scroll; width: parent.width - 32px;
+            label: root.i18n-strings[415];
+            visible: root.game-section-visible;
+        }
+        QmRow {
+            x: 16px; y: root.game-row0-y - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[416];
+            selected: root.selected-index == 8;
+            visible: root.game-section-visible;
+        }
+        QmRow {
+            x: 16px; y: root.game-row0-y + root.game-step - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[417];
+            value: root.game-slot-label;
+            selected: root.selected-index == 9;
+            visible: root.game-section-visible;
+        }
+        QmRow {
+            x: 16px; y: root.game-row0-y + 2 * root.game-step - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[418];
+            value: root.game-confirm-index == 10 ? root.i18n-strings[191] : root.game-slot-label;
+            selected: root.selected-index == 10;
+            visible: root.game-section-visible;
+        }
+        QmRow {
+            x: 16px; y: root.game-row0-y + 3 * root.game-step - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[419];
+            value: root.game-slot-label;
+            selected: root.selected-index == 11;
+            visible: root.game-section-visible;
+        }
+        QmRow {
+            x: 16px; y: root.game-row0-y + 4 * root.game-step - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[420];
+            value: root.game-confirm-index == 12 ? root.i18n-strings[191] : "";
+            selected: root.selected-index == 12;
+            visible: root.game-section-visible;
+        }
+        QmRow {
+            x: 16px; y: root.game-row0-y + 5 * root.game-step - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[421];
+            selected: root.selected-index == 13;
+            visible: root.game-section-visible;
+        }
+        QmRow {
+            x: 16px; y: root.game-row0-y + 6 * root.game-step - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[422];
+            value: root.game-confirm-index == 14 ? root.i18n-strings[191] : "";
+            selected: root.selected-index == 14;
+            visible: root.game-section-visible;
         }
 
         /* Optional context block. Sections remain independent, so future

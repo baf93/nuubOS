@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_QUASI88
+	bool "libretro-quasi88"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: QUASI88 (NEC PC-8801).

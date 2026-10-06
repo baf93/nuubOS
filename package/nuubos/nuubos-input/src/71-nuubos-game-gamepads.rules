@@ -1,0 +1,12 @@
+# nuubOS game gamepads (EPIC-013 / EPIC-022).
+#
+# Applications and games see controllers only through the "nuubOS Gamepad"
+# devices that nuubos-inputd creates (/devices/virtual/input) while a game
+# runs: they carry the active user's mapping and player order and keep the
+# Quick Menu button for nuubOS. Physical controllers are therefore not
+# advertised as joysticks (RetroArch/SDL would otherwise take them as extra
+# players) and stay away from libinput. nuubos-inputd and
+# nuubos-controllersd read them directly through evdev.
+SUBSYSTEM=="input", ENV{ID_INPUT_JOYSTICK}=="1", DEVPATH!="/devices/virtual/input/*", \
+    ENV{ID_INPUT_JOYSTICK}="", ENV{NUUBOS_PHYSICAL_CONTROLLER}="1", \
+    ENV{LIBINPUT_IGNORE_DEVICE}="1"

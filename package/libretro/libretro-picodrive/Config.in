@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_PICODRIVE
+	bool "libretro-picodrive"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: PicoDrive (Sega 32X), ARM64 dynarec. Licence restricts commercial redistribution.

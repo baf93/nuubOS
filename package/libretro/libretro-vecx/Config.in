@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_VECX
+	bool "libretro-vecx"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: vecx (GCE Vectrex).

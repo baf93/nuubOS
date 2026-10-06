@@ -1,0 +1,6 @@
+config BR2_PACKAGE_LIBRETRO_MAME
+	bool "libretro-mame"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: current MAME, reduced to computers/consoles without
+	  another core in nuubOS.

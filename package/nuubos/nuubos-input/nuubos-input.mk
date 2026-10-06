@@ -1,7 +1,7 @@
 ################################################################################
 # nuubos-input
 ################################################################################
-NUUBOS_INPUT_VERSION = 0.4.0
+NUUBOS_INPUT_VERSION = 0.5.0
 NUUBOS_INPUT_SITE = $(BR2_EXTERNAL_NUUBOS_PATH)/package/nuubos/nuubos-input/src
 NUUBOS_INPUT_SITE_METHOD = local
 NUUBOS_INPUT_LICENSE = MIT
@@ -19,5 +19,7 @@ define NUUBOS_INPUT_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/nuubos-inputctl $(TARGET_DIR)/usr/bin/nuubos-inputctl
 	$(INSTALL) -D -m 0755 $(@D)/S47nuubos-inputd $(TARGET_DIR)/etc/init.d/S47nuubos-inputd
 	$(INSTALL) -D -m 0644 $(@D)/input-bindings.conf $(TARGET_DIR)/etc/nuubos/input-bindings.conf
+	$(INSTALL) -D -m 0644 $(@D)/71-nuubos-game-gamepads.rules \
+		$(TARGET_DIR)/etc/udev/rules.d/71-nuubos-game-gamepads.rules
 endef
 $(eval $(generic-package))

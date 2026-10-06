@@ -37,5 +37,58 @@ File name mapping (nuubOS id <- original file):
   wonderswan.png <- Bandai - WonderSwan.png
   lynx.png <- Atari - Lynx.png
   atari2600.png <- Atari - 2600.png
+  c64.png <- Commodore - 64.png
+  amiga.png <- Commodore - Amiga.png
+  scummvm.png <- ScummVM.png
+  dos.png <- DOS.png
+  amstradcpc.png <- Amstrad - CPC.png
+  atari5200.png <- Atari - 5200.png
+  atari7800.png <- Atari - 7800.png
+  atari800.png <- Atari - 8-bit Family.png
+  atarixe.png <- Atari - XEGS.png
+  atarist.png <- Atari - ST.png
+  c128.png <- Commodore - 128.png
+  plus4.png <- Commodore - Plus-4.png
+  vic20.png <- Commodore - VIC-20.png
+  channelf.png <- Fairchild - Channel F.png
+  coleco.png <- Coleco - ColecoVision.png
+  cps1.png <- Capcom - CP System I.png
+  cps2.png <- Capcom - CP System II.png
+  cps3.png <- Capcom - CP System III.png
+  fbneo.png <- FBNeo - Arcade Games.png
+  mame.png <- MAME 2003-Plus.png
+  fds.png <- Nintendo - Family Computer Disk System.png
+  geolith.png <- SNK - Neo Geo.png
+  intellivision.png <- Mattel - Intellivision.png
+  lutro.png <- Lutro.png
+  macintosh.png <- Apple - Macintosh.png
+  megaduck.png <- Welback - Mega-Duck.png
+  msx.png <- Microsoft - MSX.png
+  neogeocd.png <- SNK - Neo Geo CD.png
+  odyssey2.png <- Magnavox - Odyssey2.png
+  palm.png <- Mobile - Palm OS.png
+  pc88.png <- NEC - PC-88.png
+  pc98.png <- NEC - PC-98.png
+  pcecd.png <- NEC - PC Engine CD - TurboGrafx-CD.png
+  pokemini.png <- Nintendo - Pokemon Mini.png
+  satellaview.png <- Nintendo - Satellaview.png
+  sufami.png <- Nintendo - Sufami Turbo.png
+  sg1000.png <- Sega - SG-1000.png
+  supervision.png <- Watara - Supervision.png
+  tic80.png <- TIC-80.png
+  vectrex.png <- GCE - Vectrex.png
+  x1.png <- Sharp - X1.png
+  x68000.png <- Sharp - X68000.png
+  zxspectrum.png <- Sinclair - ZX Spectrum.png
+  apple2.png <- Apple - II.png
+  gamate.png <- Bit Corporation - Gamate.png
+  gamecom.png <- Tiger - Game.com.png
+  supervision8000.png <- Bandai - Super Vision 8000.png
+  ti99.png <- Texas Instruments - TI 99 4A.png
+  vtech.png <- VTech - V.Smile.png
+  cassettevision.png <- Epoch - Super Cassette Vision.png
+  oric.png <- Tangerine Computer Systems - Oric.png
+  fmtowns.png <- Fujitsu - FM Towns.png
 
-pico8 has no icon in this set; the UI shows its generic gamepad glyph.
+pico8, atomiswave, naomi, samcoupe, coco, dragon32, sordm5 and trs80 have no icon in this set; the UI shows
+its generic gamepad glyph.

@@ -1,0 +1,5 @@
+config BR2_PACKAGE_LIBRETRO_HATARI
+	bool "libretro-hatari"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: Hatari (Atari ST/STE/TT/Falcon).
