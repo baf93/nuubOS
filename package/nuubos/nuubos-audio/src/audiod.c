@@ -90,7 +90,10 @@ struct audio_state {
 	bool power_sounds_enabled;
 
 	pid_t test_pid;
+	/* Persistent system-sound player (wav-player "sfx-server") and the
+	 * write end of its command pipe. */
 	pid_t system_pid;
+	int system_ctl_fd;
 	pid_t music_pid;
 	/* Write end of the running Home Music player control pipe. */
 	int music_ctl_fd;
@@ -130,6 +133,7 @@ static void service_owned_streams(struct audio_state *state);
 static bool start_music_new(struct audio_state *state);
 static void stop_music(struct audio_state *state);
 static void stop_child(pid_t *pid);
+static void stop_system_sound(struct audio_state *state);
 static void stop_test(struct audio_state *state);
 static void ensure_ui_anchor(struct audio_state *state);
 static void restart_ui_anchor(struct audio_state *state);
@@ -662,6 +666,7 @@ static void load_config(struct audio_state *state)
 	state->power_sounds_enabled = DEFAULT_POWER_SOUNDS;
 	state->test_pid = -1;
 	state->system_pid = -1;
+	state->system_ctl_fd = -1;
 	state->music_pid = -1;
 	state->music_ctl_fd = -1;
 	state->ui_anchor_pid = -1;
@@ -1040,7 +1045,7 @@ static int set_selected_volume(struct audio_state *state,
 	 * step. Only the hard-mute boundary changes stream scheduling. */
 	if (volume == 0 && old_volume > 0) {
 		stop_test(state);
-		stop_child(&state->system_pid);
+		stop_system_sound(state);
 		stop_music(state);
 	} else if (volume > 0 && old_volume == 0 &&
 		   state->music_requested && state->volume_home_music > 0) {
@@ -1446,11 +1451,13 @@ static pid_t launch_wav(const struct audio_state *state,
 			const char *path,
 			int volume,
 			unsigned long long skip_ms,
-			const char *profile)
+			const char *profile,
+			int *ctl_fd)
 {
 	char route[128];
 	char vol[16];
 	char skip[32];
+	int ctl[2] = { -1, -1 };
 	pid_t pid;
 
 	if (volume <= 0 || path == NULL || path[0] == '\0' ||
@@ -1463,11 +1470,20 @@ static pid_t launch_wav(const struct audio_state *state,
 	snprintf(vol, sizeof(vol), "%d", volume);
 	snprintf(skip, sizeof(skip), "%llu", skip_ms);
 
-	pid = fork();
-	if (pid < 0)
+	/* Optional command pipe on the player's stdin (sfx-server). */
+	if (ctl_fd != NULL && pipe2(ctl, O_CLOEXEC) != 0)
 		return -1;
 
+	pid = fork();
+	if (pid < 0) {
+		if (ctl[0] >= 0) close(ctl[0]);
+		if (ctl[1] >= 0) close(ctl[1]);
+		return -1;
+	}
+
 	if (pid == 0) {
+		if (ctl[0] >= 0)
+			(void)dup2(ctl[0], STDIN_FILENO);
 		execl(WAV_PLAYER, WAV_PLAYER,
 		      route, vol, skip,
 		      profile != NULL ? profile : "stream",
@@ -1475,6 +1491,12 @@ static pid_t launch_wav(const struct audio_state *state,
 		_exit(127);
 	}
 
+	if (ctl[0] >= 0)
+		close(ctl[0]);
+	if (ctl_fd != NULL) {
+		(void)fcntl(ctl[1], F_SETFL, O_NONBLOCK);
+		*ctl_fd = ctl[1];
+	}
 	return pid;
 }
 
@@ -1618,7 +1640,7 @@ static void start_test(struct audio_state *state,
 	stop_child(&state->test_pid);
 
 	state->test_pid = launch_wav(
-		state, TEST_SOUND_PATH, 100, offset_ms, "stream");
+		state, TEST_SOUND_PATH, 100, offset_ms, "stream", NULL);
 
 	if (state->test_pid > 0) {
 		state->test_offset_ms = offset_ms;
@@ -1658,14 +1680,44 @@ static void start_system_sound(struct audio_state *state,
 	snprintf(path, sizeof(path), "%s/%s.wav",
 		 SYSTEM_SOUND_DIR, name);
 
-	stop_child(&state->system_pid);
-
 	if (!copy_string(state->system_file,
 			 sizeof(state->system_file), path))
 		return;
 
-	state->system_pid = launch_wav(
-		state, state->system_file, state->volume_system, 0, "sfx");
+	/* One persistent player/stream for all cues: spawning a player per cue
+	 * made WirePlumber set up and link a new stream node every time. A new
+	 * cue interrupts the playing one inside the player. Retried once with
+	 * a fresh player if the old one has gone away. */
+	for (int attempt = 0; attempt < 2; attempt++) {
+		char line[320];
+		int n;
+
+		if (state->system_pid <= 0 || state->system_ctl_fd < 0) {
+			stop_system_sound(state);
+			state->system_pid = launch_wav(
+				state, "-", state->volume_system, 0,
+				"sfx-server", &state->system_ctl_fd);
+			if (state->system_pid <= 0)
+				return;
+		}
+
+		n = snprintf(line, sizeof(line), "PLAY %d %s\n",
+			     state->volume_system, state->system_file);
+		if (n > 0 && (size_t)n < sizeof(line) &&
+		    write(state->system_ctl_fd, line, (size_t)n) == n)
+			return;
+
+		stop_system_sound(state);
+	}
+}
+
+static void stop_system_sound(struct audio_state *state)
+{
+	if (state->system_ctl_fd >= 0) {
+		close(state->system_ctl_fd);
+		state->system_ctl_fd = -1;
+	}
+	stop_child(&state->system_pid);
 }
 
 static bool start_music_current(struct audio_state *state)
@@ -1939,7 +1991,7 @@ static void reroute_owned_streams(struct audio_state *state)
 
 	if (!product_audio_master_enabled(state)) {
 		stop_test(state);
-		stop_child(&state->system_pid);
+		stop_system_sound(state);
 		stop_music(state);
 		return;
 	}
@@ -1949,12 +2001,10 @@ static void reroute_owned_streams(struct audio_state *state)
 		start_test(state, state->test_offset_ms);
 	}
 
-	if (state->system_pid > 0) {
-		stop_child(&state->system_pid);
-		state->system_pid = launch_wav(
-			state, state->system_file,
-			state->volume_system, 0, "sfx");
-	}
+	/* The system-sound player starts again with the next cue, on a stream
+	 * bound to the new route; at most the tail of a cue in flight is cut. */
+	if (state->system_pid > 0)
+		stop_system_sound(state);
 
 	if (state->music_requested &&
 	    state->volume_home_music > 0) {
@@ -2009,7 +2059,7 @@ static int persist_stream_volume(struct audio_state *state,
 		state->volume_system = volume;
 
 		if (volume == 0)
-			stop_child(&state->system_pid);
+			stop_system_sound(state);
 	}
 
 	ensure_ui_anchor(state);
@@ -2094,8 +2144,13 @@ static void service_owned_streams(struct audio_state *state)
 	if (state->system_pid > 0) {
 		rc = waitpid(state->system_pid, &status, WNOHANG);
 
-		if (rc == state->system_pid)
+		if (rc == state->system_pid) {
 			state->system_pid = -1;
+			if (state->system_ctl_fd >= 0) {
+				close(state->system_ctl_fd);
+				state->system_ctl_fd = -1;
+			}
+		}
 	}
 
 	if (state->music_pid > 0) {
@@ -3406,7 +3461,7 @@ int main(int argc, char **argv)
 	state.home_session_active = false;
 	state.music_requested = false;
 	stop_music(&state);
-	stop_child(&state.system_pid);
+	stop_system_sound(&state);
 	stop_child(&state.ui_anchor_pid);
 	if (state.volume_config_dirty)
 		(void)flush_volume_config(&state);

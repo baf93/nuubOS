@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include <alsa/asoundlib.h>
 #include <errno.h>
+#include <poll.h>
 #include <stdint.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -151,6 +152,247 @@ out:
 	return rc;
 }
 
+/*
+ * Persistent system-sound player ("sfx-server").
+ *
+ * Opening a PCM on the PipeWire ALSA plugin creates a new PipeWire client
+ * and stream node, which WirePlumber then has to set up and link: ~60 ms of
+ * WirePlumber CPU per navigation cue when a player process was spawned per
+ * cue. The server keeps one PCM (one stream node) open for its lifetime and
+ * plays cues sent by nuubos-audiod on stdin, one per line:
+ *
+ *   PLAY <volume 1..100> <path to S16_LE mono/stereo WAV>
+ *
+ * Between cues the PCM is left prepared: the stream is inactive (no
+ * processing, no wakeups) and the process sleeps in read(). A new cue
+ * interrupts the one playing, as the previous kill-and-respawn did. EOF on
+ * stdin (audiod closed the pipe) ends the server.
+ */
+static char line_buf[1024];
+static size_t line_len;
+
+/* 1: a complete command line is buffered; 0: timeout; -1: EOF/error. */
+static int wait_line(int timeout_ms)
+{
+	for (;;) {
+		struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
+		ssize_t n;
+		int rc;
+
+		if (memchr(line_buf, '\n', line_len) != NULL)
+			return 1;
+		if (line_len >= sizeof(line_buf))
+			line_len = 0; /* overlong garbage: drop it */
+
+		rc = poll(&pfd, 1, timeout_ms);
+		if (rc < 0 && errno == EINTR)
+			continue;
+		if (rc < 0)
+			return -1;
+		if (rc == 0)
+			return 0;
+
+		n = read(STDIN_FILENO, line_buf + line_len,
+			 sizeof(line_buf) - line_len);
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0)
+			return -1;
+		line_len += (size_t)n;
+	}
+}
+
+static void take_line(char *out, size_t size)
+{
+	char *nl = memchr(line_buf, '\n', line_len);
+	size_t n = nl != NULL ? (size_t)(nl - line_buf) : line_len;
+	size_t copy = n < size - 1 ? n : size - 1;
+
+	memcpy(out, line_buf, copy);
+	out[copy] = '\0';
+	if (nl != NULL)
+		n++;
+	memmove(line_buf, line_buf + n, line_len - n);
+	line_len -= n;
+}
+
+/* Open (or reopen for a new format) the server PCM. */
+static int server_pcm(snd_pcm_t **pcm, const char *device,
+		      unsigned int *rate, unsigned int *channels,
+		      const struct wav_info *info)
+{
+	if (*pcm != NULL && *rate == info->rate && *channels == info->channels)
+		return 0;
+
+	if (*pcm != NULL) {
+		snd_pcm_close(*pcm);
+		*pcm = NULL;
+	}
+	if (snd_pcm_open(pcm, device, SND_PCM_STREAM_PLAYBACK, 0) < 0) {
+		fprintf(stderr, "sfx-server: cannot open PCM %s\n", device);
+		*pcm = NULL;
+		return -1;
+	}
+	if (snd_pcm_set_params(*pcm, SND_PCM_FORMAT_S16_LE,
+			       SND_PCM_ACCESS_RW_INTERLEAVED,
+			       info->channels, info->rate, 1, 15000U) < 0) {
+		fprintf(stderr, "sfx-server: cannot configure PCM %s\n", device);
+		snd_pcm_close(*pcm);
+		*pcm = NULL;
+		return -1;
+	}
+	*rate = info->rate;
+	*channels = info->channels;
+	return 0;
+}
+
+/* Play one cue. Returns early, with the PCM dropped, when a new command
+ * arrives; -1 only when stdin is gone. */
+static int server_play(snd_pcm_t **pcm, const char *device,
+		       unsigned int *rate, unsigned int *channels,
+		       int volume, const char *path)
+{
+	struct wav_info info = {0};
+	unsigned char buffer[4096];
+	unsigned long long total_frames, fade_frames, played = 0;
+	uint32_t remaining;
+	size_t frame_bytes, chunk;
+	FILE *fp = fopen(path, "rb");
+	int rc = 0;
+
+	if (fp == NULL)
+		return 0;
+	if (parse_wav(fp, &info) != 0 || info.bits != 16 ||
+	    (info.channels != 1 && info.channels != 2) ||
+	    info.rate < 8000 || info.rate > 192000 ||
+	    fseek(fp, info.data_offset, SEEK_SET) != 0 ||
+	    server_pcm(pcm, device, rate, channels, &info) != 0) {
+		fclose(fp);
+		return 0;
+	}
+
+	frame_bytes = info.channels * 2U;
+	remaining = info.data_size;
+	total_frames = remaining / frame_bytes;
+	fade_frames = ((unsigned long long)info.rate * 4ULL) / 1000ULL;
+	if (fade_frames * 2ULL > total_frames)
+		fade_frames = total_frames / 2ULL;
+	/* ~10 ms per write, so a new command is noticed quickly. */
+	chunk = (info.rate / 100U) * frame_bytes;
+	if (chunk == 0 || chunk > sizeof(buffer))
+		chunk = sizeof(buffer) - sizeof(buffer) % frame_bytes;
+
+	(void)snd_pcm_prepare(*pcm);
+
+	while (remaining > 0) {
+		size_t want = remaining < chunk ? remaining : chunk;
+		size_t got = fread(buffer, 1, want, fp);
+		size_t i;
+		snd_pcm_sframes_t frames;
+		unsigned char *p = buffer;
+		int pending = wait_line(0);
+
+		if (pending != 0) {
+			snd_pcm_drop(*pcm);
+			rc = pending < 0 ? -1 : 0;
+			goto out;
+		}
+		if (got < frame_bytes)
+			break;
+
+		for (i = 0; i < got / 2; i++) {
+			unsigned long long frame = played + i / info.channels;
+			unsigned int envelope = 1000U;
+			long long scaled;
+			int16_t sample;
+
+			if (fade_frames > 0 && frame < fade_frames)
+				envelope = (unsigned int)((frame * 1000ULL) / fade_frames);
+			if (fade_frames > 0 && frame + fade_frames >= total_frames) {
+				unsigned long long left = total_frames > frame
+					? total_frames - frame - 1ULL : 0ULL;
+				unsigned int tail =
+					(unsigned int)((left * 1000ULL) / fade_frames);
+				if (tail < envelope)
+					envelope = tail;
+			}
+			memcpy(&sample, buffer + i * 2, sizeof(sample));
+			scaled = ((long long)sample * volume * envelope) / 100000LL;
+			if (scaled > 32767)
+				scaled = 32767;
+			if (scaled < -32768)
+				scaled = -32768;
+			sample = (int16_t)scaled;
+			memcpy(buffer + i * 2, &sample, sizeof(sample));
+		}
+
+		frames = (snd_pcm_sframes_t)(got / frame_bytes);
+		while (frames > 0) {
+			snd_pcm_sframes_t written =
+				snd_pcm_writei(*pcm, p, (snd_pcm_uframes_t)frames);
+
+			if (written < 0)
+				written = snd_pcm_recover(*pcm, (int)written, 1);
+			if (written < 0)
+				goto out;
+			p += (size_t)written * frame_bytes;
+			frames -= written;
+		}
+		played += got / frame_bytes;
+		remaining -= (uint32_t)got;
+	}
+
+	/* Let the buffered tail play out, then stop the stream. snd_pcm_drain
+	 * on the PipeWire plugin keeps the stream (and this thread) waking for
+	 * a long time, and its delay never reaches zero while running: read
+	 * the delay once (time until the last written frame is heard), wait
+	 * that long while still accepting a new cue, then drop, which leaves
+	 * nothing unplayed and makes the stream inactive. */
+	if (snd_pcm_state(*pcm) == SND_PCM_STATE_PREPARED)
+		(void)snd_pcm_start(*pcm);
+	{
+		snd_pcm_sframes_t delay = 0;
+		int pending;
+
+		if (snd_pcm_delay(*pcm, &delay) < 0 || delay < 0)
+			delay = 0;
+		pending = wait_line((int)((delay * 1000) / (snd_pcm_sframes_t)info.rate) + 5);
+		if (pending < 0)
+			rc = -1;
+	}
+	snd_pcm_drop(*pcm);
+out:
+	fclose(fp);
+	return rc;
+}
+
+static int run_sfx_server(const char *device)
+{
+	snd_pcm_t *pcm = NULL;
+	unsigned int rate = 0, channels = 0;
+	char line[sizeof(line_buf)];
+
+	for (;;) {
+		char path[512];
+		int volume;
+
+		if (wait_line(-1) < 0)
+			break;
+		take_line(line, sizeof(line));
+		if (sscanf(line, "PLAY %d %511s", &volume, path) != 2 ||
+		    volume <= 0 || volume > 100)
+			continue;
+		if (server_play(&pcm, device, &rate, &channels, volume, path) < 0)
+			break;
+	}
+
+	if (pcm != NULL) {
+		snd_pcm_drop(pcm);
+		snd_pcm_close(pcm);
+	}
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	const char *device;
@@ -192,6 +434,8 @@ int main(int argc, char **argv)
 
 	if (strcmp(profile, "anchor") == 0)
 		return run_anchor(device);
+	if (strcmp(profile, "sfx-server") == 0)
+		return run_sfx_server(device);
 
 	if (volume < 0 || volume > 100)
 		return 2;
