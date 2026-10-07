@@ -10,8 +10,13 @@
  *     content is added, missing content becomes UNAVAILABLE, nothing is
  *     deleted;
  *   - the active user's library state under /userdata/users/<id>/library:
- *     play history (Last Played, Time Played, sessions), favorites and
- *     custom collections;
+ *     play history (Last Played, Time Played, sessions), favorites, hidden
+ *     games and custom collections;
+ *   - safe Delete Game (EPIC-011/012): the ROM and the files its .m3u/.cue
+ *     owns, never content another game references, never user saves;
+ *   - the Game Details view (EPIC-016), aggregating the catalog, the user's
+ *     history and the provider-neutral metadata store
+ *     /userdata/library/metadata/<system>/<rom name>.txt (EPIC-015);
  *   - the installed application registry (*.app manifests).
  *
  * Clients send one command per line on /run/nuubos/libraryd.sock. STATUS
@@ -63,6 +68,7 @@
 #define ACTIVE_FILE ACTIVE_DIR "/active"
 #define SYSTEM_ICONS_DIR SHARE_ROOT "/systems"
 #define COVERS_ROOT CATALOG_DIR "/covers"
+#define METADATA_ROOT CATALOG_DIR "/metadata"
 #define SYSTEM_APPS_DIR SHARE_ROOT "/applications"
 #define USER_APPS_DIR USERDATA_ROOT "/applications"
 
@@ -168,6 +174,8 @@ static size_t history_count;
 static size_t history_cap;
 static char (*favorites)[17];
 static size_t favorite_count;
+static char (*hidden)[17];
+static size_t hidden_count;
 static struct collection *collections;
 static size_t collection_count;
 
@@ -1255,6 +1263,9 @@ static void clear_user_state(void)
 	free(favorites);
 	favorites = NULL;
 	favorite_count = 0;
+	free(hidden);
+	hidden = NULL;
+	hidden_count = 0;
 	for (size_t i = 0; i < collection_count; i++)
 		free(collections[i].games);
 	free(collections);
@@ -1353,6 +1364,16 @@ static void load_user_state(void)
 		fclose(fp);
 	}
 
+	user_file("hidden.txt", path, sizeof(path));
+	if ((fp = fopen(path, "r")) != NULL) {
+		while (fgets(line, sizeof(line), fp)) {
+			trim(line);
+			if (valid_game_id(line) && !id_list_has(hidden, hidden_count, line))
+				id_list_add(&hidden, &hidden_count, line);
+		}
+		fclose(fp);
+	}
+
 	user_file("collections.tsv", path, sizeof(path));
 	if ((fp = fopen(path, "r")) != NULL) {
 		while (fgets(line, sizeof(line), fp)) {
@@ -1420,6 +1441,20 @@ static int save_favorites(void)
 	for (size_t i = 0; i < favorite_count; i++)
 		sb_append(&b, "%s\n", favorites[i]);
 	return save_user_file("favorites.txt", &b);
+}
+
+static int save_hidden(void)
+{
+	struct strbuf b = { 0 };
+
+	for (size_t i = 0; i < hidden_count; i++)
+		sb_append(&b, "%s\n", hidden[i]);
+	return save_user_file("hidden.txt", &b);
+}
+
+static bool is_hidden(const char *id)
+{
+	return id_list_has(hidden, hidden_count, id);
 }
 
 static int save_collections(void)
@@ -1503,7 +1538,7 @@ static void append_recent(struct strbuf *b, const char *key, size_t limit)
 	for (size_t i = 0; i < n && (!limit || shown < limit); i++) {
 		long idx = find_game(order[i]->id);
 
-		if (idx < 0)
+		if (idx < 0 || is_hidden(order[i]->id))
 			continue;
 		append_game(b, key, &games[idx]);
 		shown++;
@@ -1517,7 +1552,7 @@ static void build_status(struct strbuf *b)
 	int per_system[MAX_SYSTEMS] = { 0 };
 
 	for (size_t i = 0; i < game_count; i++) {
-		if (!games[i].available)
+		if (!games[i].available || is_hidden(games[i].id))
 			continue;
 		available++;
 		per_system[games[i].sys]++;
@@ -1566,25 +1601,32 @@ static const struct game **sorted_games(bool (*keep)(const struct game *, const 
 	return list;
 }
 
+/* Hidden games leave every browsing scope except "hidden" (EPIC-011). */
 static bool keep_system(const struct game *g, const void *arg)
 {
-	return g->sys == *(const int *)arg;
+	return g->sys == *(const int *)arg && !is_hidden(g->id);
 }
 
 static bool keep_favorite(const struct game *g, const void *arg)
 {
 	(void)arg;
-	return is_favorite(g->id);
+	return is_favorite(g->id) && !is_hidden(g->id);
 }
 
 static bool keep_collection(const struct game *g, const void *arg)
 {
 	const struct collection *c = arg;
 
-	return id_list_has(c->games, c->count, g->id);
+	return id_list_has(c->games, c->count, g->id) && !is_hidden(g->id);
 }
 
-/* GAMES <scope>: system:<id> | favorites | collection:<id> | recent */
+static bool keep_hidden(const struct game *g, const void *arg)
+{
+	(void)arg;
+	return is_hidden(g->id);
+}
+
+/* GAMES <scope>: system:<id> | favorites | collection:<id> | recent | hidden */
 static bool build_games(struct strbuf *b, const char *scope)
 {
 	const struct game **list = NULL;
@@ -1604,6 +1646,8 @@ static bool build_games(struct strbuf *b, const char *scope)
 		if (!c)
 			return false;
 		list = sorted_games(keep_collection, c, &n);
+	} else if (!strcmp(scope, "hidden")) {
+		list = sorted_games(keep_hidden, NULL, &n);
 	} else if (!strcmp(scope, "recent")) {
 		append_recent(b, "game", 0);
 		sb_append(b, "end=1\n");
@@ -1616,6 +1660,150 @@ static bool build_games(struct strbuf *b, const char *scope)
 	free(list);
 	sb_append(b, "end=1\n");
 	return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* Game Details and Delete Game                                       */
+/* ------------------------------------------------------------------ */
+
+static void rom_stem(const char *rel, char *out, size_t size)
+{
+	const char *base = strrchr(rel, '/');
+	char *dot;
+
+	copy_text(out, size, base ? base + 1 : rel);
+	dot = strrchr(out, '.');
+	if (dot && dot != out)
+		*dot = '\0';
+}
+
+/*
+ * Provider-neutral metadata (EPIC-015): one "key=value" per line, values on
+ * one line ("\n" escaped by the writer). Unknown keys are passed through as
+ * meta_<key> so a new provider field needs no libraryd change.
+ */
+static void append_metadata(struct strbuf *b, const struct game *g)
+{
+	char stem[512];
+	char path[PATH_MAX];
+	char line[4096];
+	FILE *fp;
+
+	rom_stem(g->rel, stem, sizeof(stem));
+	if (!pathf(path, sizeof(path), METADATA_ROOT "/%s/%s.txt", systems[g->sys].id, stem))
+		return;
+	fp = fopen(path, "r");
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp)) {
+		char *eq;
+
+		line[strcspn(line, "\r\n")] = '\0';
+		if (line[0] == '#' || !(eq = strchr(line, '=')) || eq == line)
+			continue;
+		*eq++ = '\0';
+		if (!tsv_safe(eq) || strspn(line, "abcdefghijklmnopqrstuvwxyz_0123456789") != strlen(line))
+			continue;
+		sb_append(b, "meta_%s=%s\n", line, eq);
+	}
+	fclose(fp);
+}
+
+static void build_details(struct strbuf *b, const struct game *g)
+{
+	const struct history_entry *h = history_for(g->id, false);
+
+	append_game(b, "game", g);
+	sb_append(b, "system_name=%s\nsessions=%d\npath=%s\nsize=%lld\nadded=%lld\nhidden=%d\n",
+		  systems[g->sys].name, h ? h->sessions : 0, g->rel, g->size, g->added,
+		  is_hidden(g->id) ? 1 : 0);
+	for (size_t i = 0; i < collection_count; i++)
+		sb_append(b, "member=%s\t%s\t%d\n", collections[i].id, collections[i].name,
+			  id_list_has(collections[i].games, collections[i].count, g->id) ? 1 : 0);
+	append_metadata(b, g);
+	sb_append(b, "end=1\n");
+}
+
+/* True when another catalog game's descriptor references rel. */
+static bool referenced_elsewhere(const char *rel, const struct game *self)
+{
+	static char entries[64][PATH_MAX];
+
+	for (size_t i = 0; i < game_count; i++) {
+		const struct game *o = &games[i];
+		size_t n;
+
+		if (o == self || !o->available)
+			continue;
+		if (!strcmp(o->rel, rel))
+			return true;
+		n = descriptor_entries(o->rel, entries, 64);
+		for (size_t j = 0; j < n; j++)
+			if (!strcmp(entries[j], rel))
+				return true;
+	}
+	return false;
+}
+
+/*
+ * Delete Game: the ROM file and the files its descriptor owns; the shared
+ * cover and metadata derived from it. Saves, states and the users' history
+ * are kept (explicit cleanup only). Returns NULL on success, else the
+ * error; the main file is removed last so a failure leaves a launchable
+ * game rather than a dangling entry.
+ */
+static const char *delete_game(long idx)
+{
+	static char owned[128][PATH_MAX];
+	static char sub[64][PATH_MAX];
+	struct game *g = &games[idx];
+	char path[PATH_MAX];
+	char stem[512];
+	size_t n, top;
+	bool failed = false;
+
+	if (!g->available)
+		return "unavailable";
+	/* .m3u -> discs (.cue) -> tracks (.bin): two descriptor levels. */
+	n = top = descriptor_entries(g->rel, owned, 64);
+	for (size_t i = 0; i < top; i++) {
+		size_t m = descriptor_entries(owned[i], sub, 64);
+
+		for (size_t j = 0; j < m && n < 128; j++)
+			memcpy(owned[n++], sub[j], PATH_MAX);
+	}
+	/* Tracks first, then the descriptors that listed them. */
+	for (size_t k = n; k-- > 0;) {
+		if (referenced_elsewhere(owned[k], g))
+			continue;
+		if (!pathf(path, sizeof(path), ROMS_ROOT "/%s", owned[k]))
+			continue;
+		if (unlink(path) != 0 && errno != ENOENT) {
+			log_msg("delete %s: %s", path, strerror(errno));
+			failed = true;
+		}
+	}
+	if (failed)
+		return "io";
+	if (!pathf(path, sizeof(path), ROMS_ROOT "/%s", g->rel) ||
+	    (unlink(path) != 0 && errno != ENOENT)) {
+		log_msg("delete %s: %s", path, strerror(errno));
+		return "io";
+	}
+	sync();
+	rom_stem(g->rel, stem, sizeof(stem));
+	if (g->cover && !strncmp(g->cover, COVERS_ROOT "/", strlen(COVERS_ROOT) + 1))
+		unlink(g->cover);
+	if (pathf(path, sizeof(path), METADATA_ROOT "/%s/%s.txt", systems[g->sys].id, stem))
+		unlink(path);
+	log_msg("deleted game %s (%s)", g->id, g->rel);
+	free(g->rel);
+	free(g->title);
+	free(g->cover);
+	memmove(&games[idx], &games[idx + 1], (game_count - (size_t)idx - 1) * sizeof(*games));
+	game_count--;
+	save_catalog();
+	return NULL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1729,8 +1917,70 @@ static void handle_command(struct client *c, char *line)
 		free(b.data);
 	} else if (!active_user[0] &&
 		   (!strncmp(line, "SESSION_", 8) || !strncmp(line, "FAVORITE", 8) ||
-		    !strncmp(line, "COLLECTION_", 11))) {
+		    !strncmp(line, "COLLECTION_", 11) || !strcmp(line, "HIDE") ||
+		    !strcmp(line, "STATS_RESET") || !strcmp(line, "DETAILS"))) {
 		reply(c, "ERR no active user\n");
+	} else if (!strcmp(line, "DETAILS") && arg) {
+		long idx = valid_game_id(arg) ? find_game(arg) : -1;
+		struct strbuf b = { 0 };
+
+		if (idx < 0) {
+			reply(c, "ERR game\n");
+			return;
+		}
+		build_details(&b, &games[idx]);
+		send_text(c, b.data, b.len);
+		free(b.data);
+	} else if (!strcmp(line, "HIDE") && arg && arg2) {
+		bool on = !strcmp(arg2, "1");
+
+		if (!known_game(arg) || (!on && strcmp(arg2, "0"))) {
+			reply(c, "ERR args\n");
+			return;
+		}
+		if (on && !is_hidden(arg))
+			id_list_add(&hidden, &hidden_count, arg);
+		else if (!on)
+			id_list_remove(hidden, &hidden_count, arg);
+		reply(c, save_hidden() ? "ERR persistence\n" : "OK\n");
+		notify_all();
+	} else if (!strcmp(line, "STATS_RESET") && arg) {
+		/* One game, or "all" of the active user's statistics (EPIC-020). */
+		if (!strcmp(arg, "all")) {
+			history_count = 0;
+		} else if (known_game(arg)) {
+			struct history_entry *h = history_for(arg, false);
+
+			if (h) {
+				size_t i = (size_t)(h - history);
+
+				memmove(&history[i], &history[i + 1],
+					(history_count - i - 1) * sizeof(*history));
+				history_count--;
+			}
+		} else {
+			reply(c, "ERR args\n");
+			return;
+		}
+		reply(c, save_history() ? "ERR persistence\n" : "OK\n");
+		notify_all();
+	} else if (!strcmp(line, "DELETE") && arg && arg2) {
+		long idx = valid_game_id(arg) ? find_game(arg) : -1;
+		const char *error;
+		char text[48];
+
+		if (idx < 0 || strcmp(arg2, "CONFIRM")) {
+			reply(c, "ERR args\n");
+			return;
+		}
+		if (session_game[0] && !strcmp(session_game, arg)) {
+			reply(c, "ERR busy\n");
+			return;
+		}
+		error = delete_game(idx);
+		snprintf(text, sizeof(text), error ? "ERR %s\n" : "OK\n", error);
+		reply(c, text);
+		notify_all();
 	} else if (!strcmp(line, "SESSION_BEGIN") && arg) {
 		struct history_entry *h;
 

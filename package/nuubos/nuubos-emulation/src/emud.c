@@ -25,8 +25,23 @@
  * arguments): STATUS and SUBSCRIBE return the session snapshot (SUBSCRIBE
  * pushes a new one on every change); LAUNCH <game>, PAUSE, RESUME,
  * SAVE_STATE, LOAD_STATE, SLOT <n|+1|-1>, RESET, FAST_FORWARD, ADVANCED,
- * QUIT reply OK or ERR <reason>; PRE_POWER <sleep|restart|poweroff> replies
- * once the game state is safe. Outcomes the user must see (state saved,
+ * QUIT, SCREENSHOT reply OK or ERR <reason>; PRE_POWER <sleep|restart|poweroff>
+ * replies once the game state is safe.
+ *
+ * Per-game configuration (EPIC-018): GAME_SETTINGS <game> <system> lists the
+ * effective values and the user's explicit overrides; GAME_SET <game>
+ * <system> <key> <value> (empty value = inherit) and GAME_RESET <game>
+ * change them. Only overrides are stored, per user, in
+ * /userdata/users/<id>/appdata/nuubos-emulation/games/<game>.conf. They
+ * apply at the next launch: core choice, aspect ratio and video filter on
+ * top of the user's RetroArch configuration. RetroArch saves its whole
+ * configuration on exit, so the keys a session overrode are put back to
+ * the user's own values when it ends.
+ *
+ * RetroAchievements (EPIC-017): a user logged in with
+ * nuubos-achievementsctl has /state/users/<id>/secrets/retroachievements.conf
+ * (user name and API token, never the password); the session enables
+ * RetroArch's achievements with that token, and hardcore mode when chosen. Outcomes the user must see (state saved,
  * empty slot, launch failure...) are typed notifications (EPIC-006).
  *
  * Idle: poll() without timeout. A timeout is armed only while a save or a
@@ -57,7 +72,10 @@
 
 #include <nuubos/notify.h>
 
+/* Roots are overridable at build time for host tests. */
+#ifndef RUN_ROOT
 #define RUN_ROOT "/run/nuubos"
+#endif
 #define SOCKET_PATH RUN_ROOT "/emud.sock"
 #define PIDFILE RUN_ROOT "/emud.pid"
 #define SESSION_DIR RUN_ROOT "/emulation"
@@ -69,8 +87,12 @@
 #define WAYLAND_RUNTIME RUN_ROOT "/wayland-runtime"
 #define PIPEWIRE_RUNTIME RUN_ROOT "/pipewire"
 
+#ifndef RETROARCH_BIN
 #define RETROARCH_BIN "/usr/bin/retroarch"
+#endif
+#ifndef SHARE_DIR
 #define SHARE_DIR "/usr/share/nuubos/emulation"
+#endif
 #define CORES_CONF SHARE_DIR "/cores.conf"
 #define DEFAULT_RA_CFG SHARE_DIR "/retroarch.cfg"
 #define DEFAULT_CORE_OPTIONS SHARE_DIR "/retroarch-core-options.cfg"
@@ -79,18 +101,26 @@
 /* Support files some cores load from the system directory (PPSSPP fonts
  * and UI atlas, ScummVM engine data and themes). */
 #define SYSTEM_FILES SHARE_DIR "/system"
+#ifndef BUNDLED_CORES
 #define BUNDLED_CORES "/usr/lib/libretro"
+#endif
 #define CORE_INFO_DIR "/usr/share/libretro/info"
 #define RA_ASSETS_DIR "/usr/share/retroarch/assets"
 #define RA_AUTOCONFIG_DIR "/usr/share/retroarch/autoconfig"
 
+#ifndef USERDATA
 #define USERDATA "/userdata"
+#endif
 #define DOWNLOADED_CORES USERDATA "/retroarch/cores"
 #define BIOS_DIR USERDATA "/bios"
 #define CHEATS_DIR USERDATA "/cheats"
 #define CACHE_DIR USERDATA "/cache/retroarch"
 #define USERS_DIR USERDATA "/users"
+#ifndef STATE_USERS
 #define STATE_USERS "/state/users"
+#endif
+#define GAME_SETTINGS_SUBDIR "appdata/nuubos-emulation/games"
+#define ACHIEVEMENTS_FILE "secrets/retroachievements.conf"
 
 #define MAX_CLIENTS 16
 #define MAX_LINE 1024
@@ -104,6 +134,8 @@
 /* A session ending this early with an error never really started. */
 #define START_FAILURE_MS 5000
 #define LIBRARY_TIMEOUT_MS 3000
+#define SCREENSHOT_TIMEOUT_MS 5000
+#define MAX_RESTORE_KEYS 16
 
 enum session_state {
 	SESSION_IDLE = 0,
@@ -161,6 +193,23 @@ struct session {
 	/* A lifecycle hook waiting for PRE_POWER completion. */
 	int power_client;
 	char power_action[16];
+	/* Screenshot confirmation: a new PNG closed in the screenshot folder. */
+	int shot_fd;
+	long long shot_deadline_ms;
+	char screenshots_dir[PATH_MAX];
+	/* User RetroArch keys this session overrode, restored at exit
+	 * (value NULL = the key was absent). */
+	char ra_cfg[PATH_MAX];
+	int restore_count;
+	char restore_key[MAX_RESTORE_KEYS][48];
+	char *restore_value[MAX_RESTORE_KEYS];
+};
+
+/* Explicit per-game overrides; empty = inherited. */
+struct game_overrides {
+	char core[64];
+	char aspect[16];
+	char filter[16];
 };
 
 static volatile sig_atomic_t stop_requested;
@@ -403,6 +452,15 @@ static void notify_slot(int slot)
 
 	nuubos_notify_begin(&n, "POST", "game.state", "game.slot");
 	nuubos_notify_int(&n, "slot", slot);
+	(void)nuubos_notify_send(&n);
+}
+
+static void notify_screenshot(bool ok)
+{
+	struct nuubos_notify n;
+
+	nuubos_notify_begin(&n, "POST", "game.screenshot",
+			    ok ? "game.screenshot.saved" : "game.screenshot.failed");
 	(void)nuubos_notify_send(&n);
 }
 
@@ -699,6 +757,361 @@ static bool resolve_core(const char *system, char *core, size_t core_size,
 }
 
 /* ------------------------------------------------------------------ */
+/* Per-game overrides (EPIC-018)                                       */
+/* ------------------------------------------------------------------ */
+
+static bool valid_game(const char *game)
+{
+	size_t len = strlen(game);
+
+	if (!len || len >= 32)
+		return false;
+	for (const char *p = game; *p; p++)
+		if (!isxdigit((unsigned char)*p))
+			return false;
+	return true;
+}
+
+static void overrides_path(const char *user, const char *game, char *out, size_t size)
+{
+	snprintf(out, size, USERS_DIR "/%s/" GAME_SETTINGS_SUBDIR "/%s.conf", user, game);
+}
+
+static void load_overrides(const char *user, const char *game, struct game_overrides *o)
+{
+	char path[PATH_MAX];
+	char line[256];
+	FILE *fp;
+
+	memset(o, 0, sizeof(*o));
+	overrides_path(user, game, path, sizeof(path));
+	fp = fopen(path, "r");
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp)) {
+		char *eq;
+
+		trim(line);
+		if (!(eq = strchr(line, '=')))
+			continue;
+		*eq++ = '\0';
+		if (!strcmp(line, "core"))
+			copy_text(o->core, sizeof(o->core), eq);
+		else if (!strcmp(line, "aspect"))
+			copy_text(o->aspect, sizeof(o->aspect), eq);
+		else if (!strcmp(line, "filter"))
+			copy_text(o->filter, sizeof(o->filter), eq);
+	}
+	fclose(fp);
+}
+
+static int save_overrides(const char *user, const char *game, const struct game_overrides *o)
+{
+	char path[PATH_MAX];
+	char tmp[PATH_MAX + 8];
+	char dir[PATH_MAX];
+	FILE *fp;
+	int rc = 0;
+
+	overrides_path(user, game, path, sizeof(path));
+	/* Nothing overridden: no file, the game inherits everything. */
+	if (!o->core[0] && !o->aspect[0] && !o->filter[0])
+		return unlink(path) == 0 || errno == ENOENT ? 0 : -1;
+	snprintf(dir, sizeof(dir), USERS_DIR "/%s/" GAME_SETTINGS_SUBDIR, user);
+	if (mkdir_p(dir) != 0)
+		return -1;
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	fp = fopen(tmp, "w");
+	if (!fp)
+		return -1;
+	if (o->core[0])
+		fprintf(fp, "core=%s\n", o->core);
+	if (o->aspect[0])
+		fprintf(fp, "aspect=%s\n", o->aspect);
+	if (o->filter[0])
+		fprintf(fp, "filter=%s\n", o->filter);
+	if (ferror(fp))
+		rc = -1;
+	if (fclose(fp) != 0)
+		rc = -1;
+	if (rc == 0 && rename(tmp, path) != 0)
+		rc = -1;
+	if (rc != 0)
+		unlink(tmp);
+	return rc;
+}
+
+static bool valid_aspect(const char *v)
+{
+	return !strcmp(v, "core") || !strcmp(v, "4:3") || !strcmp(v, "16:9") ||
+	       !strcmp(v, "full") || !strcmp(v, "integer");
+}
+
+static bool valid_filter(const char *v)
+{
+	return !strcmp(v, "sharp") || !strcmp(v, "smooth") || !strcmp(v, "pixel");
+}
+
+/* Cores of a system that can be loaded (bundled or downloaded), in
+ * cores.conf preference order, as "a,b,c". */
+static void available_cores(const char *system, char *out, size_t size)
+{
+	static const char *const roots[] = { BUNDLED_CORES, DOWNLOADED_CORES };
+	char line[512];
+	FILE *fp = fopen(CORES_CONF, "r");
+
+	out[0] = '\0';
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp)) {
+		char *sep, *end, *save = NULL;
+
+		trim(line);
+		if (!line[0] || line[0] == '#' || !(sep = strchr(line, '|')))
+			continue;
+		*sep++ = '\0';
+		if (strcmp(line, system) != 0)
+			continue;
+		if ((end = strchr(sep, '|')))
+			*end = '\0';
+		for (char *name = strtok_r(sep, ",", &save); name; name = strtok_r(NULL, ",", &save)) {
+			char path[PATH_MAX];
+			bool ok = false;
+
+			for (size_t r = 0; r < 2 && !ok; r++) {
+				snprintf(path, sizeof(path), "%s/%s_libretro.so", roots[r], name);
+				ok = file_exists(path);
+			}
+			if (ok && strlen(out) + strlen(name) + 2 < size) {
+				if (out[0])
+					strcat(out, ",");
+				strcat(out, name);
+			}
+		}
+		break;
+	}
+	fclose(fp);
+}
+
+static bool list_has(const char *list, const char *name)
+{
+	size_t len = strlen(name);
+
+	for (const char *p = list; *p;) {
+		const char *comma = strchr(p, ',');
+		size_t n = comma ? (size_t)(comma - p) : strlen(p);
+
+		if (n == len && !strncmp(p, name, len))
+			return true;
+		if (!comma)
+			break;
+		p = comma + 1;
+	}
+	return false;
+}
+
+static void core_file(const char *core, char *out, size_t size)
+{
+	snprintf(out, size, BUNDLED_CORES "/%s_libretro.so", core);
+	if (!file_exists(out))
+		snprintf(out, size, DOWNLOADED_CORES "/%s_libretro.so", core);
+}
+
+/* ------------------------------------------------------------------ */
+/* RetroAchievements (EPIC-017)                                        */
+/* ------------------------------------------------------------------ */
+
+struct achievements {
+	bool enabled;
+	bool hardcore;
+	char username[64];
+	char token[128];
+};
+
+static bool cfg_value_safe(const char *v)
+{
+	return strpbrk(v, "\"\\\r\n") == NULL;
+}
+
+static void load_achievements(const char *user, struct achievements *a)
+{
+	char path[PATH_MAX];
+	char line[256];
+	FILE *fp;
+
+	memset(a, 0, sizeof(*a));
+	snprintf(path, sizeof(path), STATE_USERS "/%s/" ACHIEVEMENTS_FILE, user);
+	fp = fopen(path, "r");
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp)) {
+		char *eq;
+
+		trim(line);
+		if (!(eq = strchr(line, '=')))
+			continue;
+		*eq++ = '\0';
+		if (!strcmp(line, "USERNAME"))
+			copy_text(a->username, sizeof(a->username), eq);
+		else if (!strcmp(line, "TOKEN"))
+			copy_text(a->token, sizeof(a->token), eq);
+		else if (!strcmp(line, "ENABLED"))
+			a->enabled = !strcmp(eq, "1");
+		else if (!strcmp(line, "HARDCORE"))
+			a->hardcore = !strcmp(eq, "1");
+	}
+	fclose(fp);
+	if (!a->username[0] || !a->token[0] || !cfg_value_safe(a->username) ||
+	    !cfg_value_safe(a->token))
+		a->enabled = false;
+}
+
+/* ------------------------------------------------------------------ */
+/* User RetroArch keys restored after a session                         */
+/* ------------------------------------------------------------------ */
+
+static void free_restore(void)
+{
+	for (int i = 0; i < session.restore_count; i++)
+		free(session.restore_value[i]);
+	session.restore_count = 0;
+}
+
+/* Remember the user's value of key before the session overrides it. */
+static void remember_key(const char *key)
+{
+	char line[1024];
+	FILE *fp;
+	size_t klen = strlen(key);
+	int i;
+
+	for (i = 0; i < session.restore_count; i++)
+		if (!strcmp(session.restore_key[i], key))
+			return;
+	if (session.restore_count >= MAX_RESTORE_KEYS)
+		return;
+	i = session.restore_count++;
+	copy_text(session.restore_key[i], sizeof(session.restore_key[i]), key);
+	session.restore_value[i] = NULL;
+	fp = fopen(session.ra_cfg, "r");
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp)) {
+		char *p = line;
+
+		if (strncmp(p, key, klen) != 0)
+			continue;
+		p += klen;
+		while (*p == ' ')
+			p++;
+		if (*p != '=')
+			continue;
+		free(session.restore_value[i]);
+		session.restore_value[i] = strdup(line);
+	}
+	fclose(fp);
+}
+
+/* Put the remembered keys back into the user's retroarch.cfg. */
+static void restore_user_keys(void)
+{
+	char tmp[PATH_MAX + 8];
+	char line[2048];
+	bool written[MAX_RESTORE_KEYS] = { false };
+	FILE *in, *out;
+
+	if (!session.restore_count || !session.ra_cfg[0])
+		return;
+	in = fopen(session.ra_cfg, "r");
+	if (!in) {
+		free_restore();
+		return;
+	}
+	snprintf(tmp, sizeof(tmp), "%s.tmp", session.ra_cfg);
+	out = fopen(tmp, "w");
+	if (!out) {
+		fclose(in);
+		free_restore();
+		return;
+	}
+	while (fgets(line, sizeof(line), in)) {
+		int match = -1;
+
+		for (int i = 0; i < session.restore_count && match < 0; i++) {
+			size_t klen = strlen(session.restore_key[i]);
+			const char *p = line + klen;
+
+			if (strncmp(line, session.restore_key[i], klen) != 0)
+				continue;
+			while (*p == ' ')
+				p++;
+			if (*p == '=')
+				match = i;
+		}
+		if (match < 0) {
+			fputs(line, out);
+		} else if (session.restore_value[match] && !written[match]) {
+			fputs(session.restore_value[match], out);
+			written[match] = true;
+		}
+	}
+	fclose(in);
+	if (fclose(out) == 0 && rename(tmp, session.ra_cfg) == 0)
+		log_msg("emud: restored %d user RetroArch keys", session.restore_count);
+	else
+		unlink(tmp);
+	free_restore();
+}
+
+/* Per-game overrides and achievements, appended to the session config. */
+static void write_session_overrides(FILE *fp, const struct game_overrides *o,
+				    const struct achievements *a)
+{
+	if (o->aspect[0]) {
+		int index = !strcmp(o->aspect, "4:3") ? 0
+			  : !strcmp(o->aspect, "16:9") ? 1
+			  : !strcmp(o->aspect, "full") ? 24
+			  : 22; /* core and integer: core-provided aspect */
+
+		remember_key("aspect_ratio_index");
+		remember_key("video_scale_integer");
+		fprintf(fp, "aspect_ratio_index = \"%d\"\n", index);
+		fprintf(fp, "video_scale_integer = \"%s\"\n",
+			!strcmp(o->aspect, "integer") ? "true" : "false");
+	}
+	if (o->filter[0]) {
+		bool sharp = !strcmp(o->filter, "sharp");
+
+		remember_key("video_shader_enable");
+		remember_key("video_smooth");
+		fprintf(fp, "video_shader_enable = \"%s\"\n", sharp ? "true" : "false");
+		fprintf(fp, "video_smooth = \"%s\"\n",
+			!strcmp(o->filter, "smooth") ? "true" : "false");
+	}
+	/* The token is written for every session of a logged-in user and
+	 * removed from the user's file afterwards: USERDATA is exFAT and has
+	 * no permissions, the token lives only in STATE. */
+	remember_key("cheevos_enable");
+	remember_key("cheevos_username");
+	remember_key("cheevos_token");
+	remember_key("cheevos_password");
+	remember_key("cheevos_hardcore_mode_enable");
+	if (a->enabled) {
+		fprintf(fp,
+			"cheevos_enable = \"true\"\n"
+			"cheevos_username = \"%s\"\n"
+			"cheevos_token = \"%s\"\n"
+			"cheevos_password = \"\"\n"
+			"cheevos_hardcore_mode_enable = \"%s\"\n",
+			a->username, a->token, a->hardcore ? "true" : "false");
+	} else {
+		fprintf(fp, "cheevos_enable = \"false\"\n"
+			    "cheevos_token = \"\"\n"
+			    "cheevos_password = \"\"\n");
+	}
+}
+
+/* ------------------------------------------------------------------ */
 /* RetroArch session                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -741,6 +1154,7 @@ static void stop_watch(void)
 }
 
 static void finish_power_wait(void);
+static void finish_screenshot(bool ok);
 
 static void finish_pending(bool ok)
 {
@@ -886,7 +1300,8 @@ static void process_watch(void)
 /* Writes the settings nuubOS enforces at every launch; RetroArch appends
  * them over the user's configuration (--appendconfig). */
 static int write_session_cfg(const char *ra_dir, const char *saves,
-			     const char *states, const char *screenshots)
+			     const char *states, const char *screenshots,
+			     const struct game_overrides *o, const struct achievements *a)
 {
 	char tmp[] = SESSION_CFG ".tmp";
 	FILE *fp;
@@ -950,6 +1365,7 @@ static int write_session_cfg(const char *ra_dir, const char *saves,
 			"input_player%d_device_reservation_type = \"2\"\n"
 			"input_player%d_reserved_device = \"0000:%04x\"\n",
 			player, player, player);
+	write_session_overrides(fp, o, a);
 	rc = ferror(fp) ? -1 : 0;
 	if (fclose(fp) != 0)
 		rc = -1;
@@ -1013,6 +1429,9 @@ static void content_base_name(const char *content, char *out, size_t size)
 static void reset_session(void)
 {
 	stop_watch();
+	if (session.shot_fd > 0)
+		close(session.shot_fd);
+	free_restore();
 	if (session.stdin_fd >= 0)
 		close(session.stdin_fd);
 	if (session.stdout_fd >= 0)
@@ -1028,6 +1447,7 @@ static void reset_session(void)
 	session.inotify_fd = -1;
 	session.inotify_wd = -1;
 	session.power_client = -1;
+	session.shot_fd = -1;
 }
 
 static const char *launch(const char *game)
@@ -1044,6 +1464,8 @@ static const char *launch(const char *game)
 	int in_pipe[2];
 	int out_pipe[2];
 	pid_t pid;
+	struct game_overrides overrides;
+	struct achievements achievements;
 
 	if (session.state != SESSION_IDLE)
 		return "busy";
@@ -1071,6 +1493,21 @@ static const char *launch(const char *game)
 	if (!resolve_core(session.system, session.core, sizeof(session.core),
 			  core_path, sizeof(core_path)))
 		return "no-core";
+	load_overrides(session.user, game, &overrides);
+	load_achievements(session.user, &achievements);
+	if (overrides.core[0] && strcmp(overrides.core, session.core)) {
+		char cores[512];
+
+		/* An override naming a core that is gone falls back to the
+		 * system default instead of failing the launch. */
+		available_cores(session.system, cores, sizeof(cores));
+		if (list_has(cores, overrides.core)) {
+			copy_text(session.core, sizeof(session.core), overrides.core);
+			core_file(session.core, core_path, sizeof(core_path));
+		} else {
+			log_msg("emud: core override %s unavailable", overrides.core);
+		}
+	}
 	if (!strcmp(session.core, "mame") && resolved_machine[0]) {
 		char cmd[PATH_MAX];
 
@@ -1106,12 +1543,15 @@ static const char *launch(const char *game)
 	snprintf(path, sizeof(path), "%s/retroarch.cfg", ra_dir);
 	if (seed_file(DEFAULT_RA_CFG, path) != 0)
 		return "storage";
+	copy_text(session.ra_cfg, sizeof(session.ra_cfg), path);
+	copy_text(session.screenshots_dir, sizeof(session.screenshots_dir), screenshots);
 	snprintf(path, sizeof(path), "%s/retroarch-core-options.cfg", ra_dir);
 	if (seed_file(DEFAULT_CORE_OPTIONS, path) == 0)
 		merge_missing_keys(DEFAULT_CORE_OPTIONS, path);
 	snprintf(path, sizeof(path), "%s/config/global.glslp", ra_dir);
 	(void)seed_file(DEFAULT_SHADER_PRESET, path);
-	if (write_session_cfg(ra_dir, saves, session.states_dir, screenshots) != 0)
+	if (write_session_cfg(ra_dir, saves, session.states_dir, screenshots,
+			      &overrides, &achievements) != 0)
 		return "storage";
 	content_base_name(session.content, path, sizeof(path));
 	snprintf(session.state_base, sizeof(session.state_base), "%s/%s",
@@ -1242,6 +1682,9 @@ static void child_exited(int status)
 	library_session("SESSION_END", session.game);
 	if (failed && session.state == SESSION_RUNNING)
 		notify_failed(ran < START_FAILURE_MS ? "start" : "crash");
+	if (session.shot_fd > 0)
+		notify_screenshot(false);
+	restore_user_keys();
 	reset_session();
 	notify_subscribers();
 	if (power_client >= 0 && clients[power_client].fd >= 0)
@@ -1272,6 +1715,8 @@ static int session_timeout_ms(void)
 	if (session.state == SESSION_EXITING &&
 	    (deadline < 0 || session.quit_deadline_ms < deadline))
 		deadline = session.quit_deadline_ms;
+	if (session.shot_fd > 0 && (deadline < 0 || session.shot_deadline_ms < deadline))
+		deadline = session.shot_deadline_ms;
 	if (deadline < 0)
 		return -1;
 	if (deadline <= now)
@@ -1283,6 +1728,8 @@ static void session_timers(void)
 {
 	long long now = monotonic_ms();
 
+	if (session.shot_fd > 0 && now >= session.shot_deadline_ms)
+		finish_screenshot(false);
 	if (session.pending != PENDING_NONE && now >= session.pending_deadline_ms) {
 		log_msg("emud: state operation slot %d timed out", session.pending_slot);
 		finish_pending(false);
@@ -1300,6 +1747,61 @@ static void session_timers(void)
 			session.quit_deadline_ms = now + KILL_TIMEOUT_MS;
 		}
 	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Screenshots (EPIC-021)                                              */
+/* ------------------------------------------------------------------ */
+
+static void finish_screenshot(bool ok)
+{
+	if (session.shot_fd > 0)
+		close(session.shot_fd);
+	session.shot_fd = -1;
+	notify_screenshot(ok);
+	log_msg("emud: screenshot %s", ok ? "saved" : "failed");
+}
+
+/* RetroArch writes the PNG of its own rendering (never the composited
+ * screen, so the Quick Menu is not in it); success is reported only once a
+ * new PNG is closed in the user's screenshot folder. */
+static bool begin_screenshot(void)
+{
+	if (session.state != SESSION_RUNNING || session.shot_fd > 0)
+		return false;
+	session.shot_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if (session.shot_fd < 0 ||
+	    inotify_add_watch(session.shot_fd, session.screenshots_dir,
+			      IN_CLOSE_WRITE | IN_MOVED_TO) < 0) {
+		if (session.shot_fd >= 0)
+			close(session.shot_fd);
+		session.shot_fd = -1;
+		notify_screenshot(false);
+		return false;
+	}
+	session.shot_deadline_ms = monotonic_ms() + SCREENSHOT_TIMEOUT_MS;
+	ra_command("SCREENSHOT");
+	return true;
+}
+
+static void process_shot_watch(void)
+{
+	char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+	ssize_t n;
+	bool done = false;
+
+	while ((n = read(session.shot_fd, buf, sizeof(buf))) > 0) {
+		for (char *p = buf; p < buf + n;) {
+			struct inotify_event *ev = (struct inotify_event *)p;
+			size_t len = ev->len ? strlen(ev->name) : 0;
+
+			if (len > 4 && !strcasecmp(ev->name + len - 4, ".png"))
+				done = true;
+			p += sizeof(*ev) + ev->len;
+		}
+	}
+	if (done)
+		finish_screenshot(true);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1334,6 +1836,8 @@ static void handle_hotkey(const char *action)
 					 !strcmp(action, "slot_next") ? 1 : -1);
 		notify_slot(session.slot);
 		notify_subscribers();
+	} else if (!strcmp(action, "screenshot")) {
+		(void)begin_screenshot();
 	} else if (!strcmp(action, "fast_forward")) {
 		session.fast_forward = !session.fast_forward;
 		ra_command("FAST_FORWARD");
@@ -1374,6 +1878,76 @@ static bool running(struct client *c)
 		return true;
 	reply(c, "ERR no-session\n");
 	return false;
+}
+
+/* GAME_SETTINGS <game> <system> | GAME_SET <game> <system> <key> <value> |
+ * GAME_RESET <game>, for the active user. */
+static void handle_game_settings(struct client *c, const char *verb, char *arg)
+{
+	char *fields[4] = { arg, NULL, NULL, NULL };
+	char user[64];
+	char cores[512];
+	char def_core[64];
+	char def_path[PATH_MAX];
+	struct game_overrides o;
+	int n = 1;
+
+	for (char *p = arg; *p && n < 4; p++)
+		if (*p == '\t') {
+			*p = '\0';
+			fields[n++] = p + 1;
+		}
+	if (!valid_game(fields[0])) {
+		reply(c, "ERR game\n");
+		return;
+	}
+	if (!read_active_user(user, sizeof(user))) {
+		reply(c, "ERR no-user\n");
+		return;
+	}
+	load_overrides(user, fields[0], &o);
+	if (!strcmp(verb, "GAME_RESET")) {
+		memset(&o, 0, sizeof(o));
+		reply(c, save_overrides(user, fields[0], &o) == 0 ? "OK\n" : "ERR storage\n");
+		return;
+	}
+	if (!fields[1] || !fields[1][0] || strchr(fields[1], '/')) {
+		reply(c, "ERR system\n");
+		return;
+	}
+	available_cores(fields[1], cores, sizeof(cores));
+	if (!strcmp(verb, "GAME_SETTINGS")) {
+		char out[1024];
+		const char *effective;
+		int len;
+
+		def_core[0] = '\0';
+		(void)resolve_core(fields[1], def_core, sizeof(def_core), def_path, sizeof(def_path));
+		effective = o.core[0] && list_has(cores, o.core) ? o.core : def_core;
+		len = snprintf(out, sizeof(out),
+			       "core=%s\ncore_default=%s\ncore_override=%s\ncores=%s\n"
+			       "aspect=%s\nfilter=%s\nend=1\n",
+			       effective, def_core, o.core, cores, o.aspect, o.filter);
+		if (len > 0 && write_all(c->fd, out, (size_t)len) != 0)
+			close_client(c);
+		return;
+	}
+	/* GAME_SET */
+	if (!fields[2] || !fields[3]) {
+		reply(c, "ERR args\n");
+		return;
+	}
+	if (!strcmp(fields[2], "core") && (!fields[3][0] || list_has(cores, fields[3])))
+		copy_text(o.core, sizeof(o.core), fields[3]);
+	else if (!strcmp(fields[2], "aspect") && (!fields[3][0] || valid_aspect(fields[3])))
+		copy_text(o.aspect, sizeof(o.aspect), fields[3]);
+	else if (!strcmp(fields[2], "filter") && (!fields[3][0] || valid_filter(fields[3])))
+		copy_text(o.filter, sizeof(o.filter), fields[3]);
+	else {
+		reply(c, "ERR value\n");
+		return;
+	}
+	reply(c, save_overrides(user, fields[0], &o) == 0 ? "OK\n" : "ERR storage\n");
 }
 
 static void handle_command(struct client *c, char *line)
@@ -1470,6 +2044,13 @@ static void handle_command(struct client *c, char *line)
 			return;
 		request_quit();
 		reply(c, "OK\n");
+	} else if (!strcmp(line, "SCREENSHOT")) {
+		if (!running(c))
+			return;
+		reply(c, begin_screenshot() ? "OK\n" : "ERR busy\n");
+	} else if ((!strcmp(line, "GAME_SETTINGS") || !strcmp(line, "GAME_SET") ||
+		    !strcmp(line, "GAME_RESET")) && arg) {
+		handle_game_settings(c, line, arg);
 	} else if (!strcmp(line, "PRE_POWER") && arg) {
 		if (strcmp(arg, "sleep") && strcmp(arg, "restart") &&
 		    strcmp(arg, "poweroff")) {
@@ -1596,8 +2177,8 @@ int main(void)
 	log_msg("emud: started pid=%ld", (long)getpid());
 
 	while (!stop_requested) {
-		struct pollfd pfd[5 + MAX_CLIENTS];
-		int who[5 + MAX_CLIENTS];
+		struct pollfd pfd[6 + MAX_CLIENTS];
+		int who[6 + MAX_CLIENTS];
 		nfds_t count = 0;
 		int rc;
 
@@ -1616,6 +2197,10 @@ int main(void)
 		if (session.input_fd >= 0) {
 			pfd[count] = (struct pollfd){ session.input_fd, POLLIN, 0 };
 			who[count++] = -5;
+		}
+		if (session.shot_fd > 0) {
+			pfd[count] = (struct pollfd){ session.shot_fd, POLLIN, 0 };
+			who[count++] = -6;
 		}
 		for (int i = 0; i < MAX_CLIENTS; i++) {
 			if (clients[i].fd < 0)
@@ -1652,6 +2237,10 @@ int main(void)
 			case -5:
 				if (session.input_fd >= 0)
 					process_input_link();
+				break;
+			case -6:
+				if (session.shot_fd > 0)
+					process_shot_watch();
 				break;
 			default:
 				if (clients[who[i]].fd >= 0)

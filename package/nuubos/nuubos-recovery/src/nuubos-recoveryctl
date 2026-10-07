@@ -1,0 +1,259 @@
+#!/bin/sh
+# nuubOS recovery operations (EPIC-049, EPIC-050).
+#
+#   reset-user ID            reset one user's preferences and app data
+#   reset-system             Reset System Settings (same path as Settings)
+#   repair                   repair/recreate damaged mutable configuration
+#   factory-reset SCOPE      schedule a factory reset, applied at next boot
+#                              settings  STATE wiped (users, config, Wi-Fi, Bluetooth);
+#                                        USERDATA untouched
+#                              userdata  settings + per-user USERDATA (saves, states,
+#                                        screenshots, appdata) + library/cache
+#   apply-pending [state|userdata]
+#                            run a scheduled reset (S03 = state, S04 = userdata)
+#   safe-mode status|clear
+#
+# Never touched by any scope: SYSTEM, /userdata/roms, /userdata/bios, SSH host
+# keys (device identity). Content is removed only through the File Manager.
+# NUUBOS_ROOT (default empty) prefixes paths for the host test.
+
+R="${NUUBOS_ROOT:-}"
+STATE="$R/state"
+USERDATA="$R/userdata"
+RECOVERY="$STATE/recovery"
+PENDING="$RECOVERY/pending-reset"
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+log() { echo "nuubos-recovery: $*"; }
+valid_uuid() { printf '%s\n' "$1" | grep -Eq "$UUID_RE"; }
+
+event()
+{
+    mkdir -p "$RECOVERY" 2>/dev/null &&
+        printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$*" >> "$RECOVERY/history.log"
+    # Bounded history.
+    if [ -f "$RECOVERY/history.log" ] && [ "$(wc -l < "$RECOVERY/history.log")" -gt 200 ]; then
+        tail -n 100 "$RECOVERY/history.log" > "$RECOVERY/history.log.tmp" &&
+            mv "$RECOVERY/history.log.tmp" "$RECOVERY/history.log"
+    fi
+}
+
+active_user()
+{
+    cat "$R/run/nuubos/user/active" 2>/dev/null
+}
+
+reset_user()
+{
+    id="$1"
+    valid_uuid "$id" || { echo "ERR invalid user id"; return 1; }
+    sd="$STATE/users/$id"
+    [ -f "$sd/profile.conf" ] || { echo "ERR unknown user"; return 1; }
+
+    # Preferences kept by the product services in STATE.
+    rm -rf "${sd:?}/controllers" "${sd:?}/controllers.conf" "${sd:?}/localization.conf" \
+           "${sd:?}/lighting.conf" "${sd:?}/input-feedback.conf"
+    printf 'NUUBOS_USER_SETTINGS_VERSION=1\n' > "$sd/settings.conf.tmp" &&
+        chmod 600 "$sd/settings.conf.tmp" && mv "$sd/settings.conf.tmp" "$sd/settings.conf" ||
+        { echo "ERR settings"; return 1; }
+
+    # Per-user application configuration in USERDATA. Saves, states,
+    # screenshots, library history and music are user content: kept.
+    ud="$USERDATA/users/$id"
+    if [ -d "$ud/appdata" ]; then
+        rm -rf "${ud:?}/appdata" && mkdir -p "$ud/appdata"
+    fi
+    # Web Mode cache of the profile (its site data is in appdata).
+    rm -rf "$USERDATA/cache/web/$id"
+
+    sync
+    event "reset-user $id"
+    if [ "$(active_user)" = "$id" ]; then
+        echo "OK restart-required"
+    else
+        echo "OK"
+    fi
+}
+
+reset_system()
+{
+    if command -v nuubos-systemctl >/dev/null 2>&1; then
+        nuubos-systemctl reset-system-settings >/dev/null 2>&1 || { echo "ERR reset incomplete"; return 1; }
+        event "reset-system"
+        echo OK
+    else
+        echo "ERR system service unavailable"; return 1
+    fi
+}
+
+# Keys of /state/config/nuubos.conf that must exist, with the value written
+# when missing.
+config_defaults()
+{
+    cat <<'EOC'
+NUUBOS_CONFIG_VERSION=6
+STORAGE_MODE=AUTO
+USER_LOGIN_MODE=AUTO
+POWER_MODE=AUTO
+EOC
+}
+
+repair()
+{
+    changed=0
+    mkdir -p "$RECOVERY/quarantine"
+    conf="$STATE/config/nuubos.conf"
+    mkdir -p "$STATE/config"
+
+    if [ ! -f "$conf" ]; then
+        # No config at all: a pending OOB is the only valid recreated state.
+        { config_defaults; echo "SETUP_COMPLETE=0"; } > "$conf" && changed=1
+        log "recreated nuubos.conf"
+    else
+        # Duplicate keys make awk/sed readers disagree: keep the last value.
+        awk -F= '/^[A-Za-z0-9_]+=/{v[$1]=$0; if(!($1 in o)){o[$1]=++n; k[n]=$1}} END{for(i=1;i<=n;i++)print v[k[i]]}' \
+            "$conf" > "$conf.tmp"
+        if ! cmp -s "$conf" "$conf.tmp"; then
+            mv "$conf.tmp" "$conf" && changed=1
+        fi
+        rm -f "$conf.tmp"
+        config_defaults | while IFS= read -r line; do
+            key="${line%%=*}"
+            grep -q "^$key=" "$conf" || { echo "$line" >> "$conf"; echo "nuubos-recovery: added $key"; }
+        done
+        chmod 600 "$conf"
+    fi
+
+    # Stale temp files left by interrupted atomic writes.
+    for f in "$STATE"/config/*.tmp* "$STATE"/users/.new.* "$STATE"/users/*/*.tmp*; do
+        [ -e "$f" ] || continue
+        rm -rf "${f:?}"; changed=1
+    done
+
+    # A damaged profile aborts S03 start_state: quarantine it (never delete).
+    for d in "$STATE"/users/*; do
+        [ -d "$d" ] || continue
+        id="${d##*/}"
+        valid_uuid "$id" || continue
+        if [ ! -f "$d/profile.conf" ] || ! grep -qx "USER_ID=$id" "$d/profile.conf" 2>/dev/null; then
+            mv "$d" "$RECOVERY/quarantine/$id.$(date +%s 2>/dev/null)" && changed=1
+            log "quarantined profile $id"
+            continue
+        fi
+        if [ ! -d "$d/secrets" ]; then
+            mkdir -p "$d/secrets" && chmod 700 "$d/secrets"; changed=1
+        fi
+        if ! grep -qx 'NUUBOS_USER_SETTINGS_VERSION=1' "$d/settings.conf" 2>/dev/null; then
+            printf 'NUUBOS_USER_SETTINGS_VERSION=1\n' > "$d/settings.conf"
+            chmod 600 "$d/settings.conf"; changed=1
+            log "recreated settings for $id"
+        fi
+    done
+
+    sync
+    event "repair changed=$changed"
+    echo "OK changed=$changed"
+}
+
+factory_reset()
+{
+    scope="$1"
+    case "$scope" in
+        settings|userdata) ;;
+        *) echo "ERR scope must be settings or userdata"; return 1 ;;
+    esac
+    mkdir -p "$RECOVERY" || { echo "ERR"; return 1; }
+    printf '%s\n' "$scope" > "$PENDING.tmp" && mv "$PENDING.tmp" "$PENDING" || { echo "ERR"; return 1; }
+    sync
+    event "factory-reset scheduled scope=$scope"
+    echo "OK reboot-required"
+}
+
+# Remove everything inside $1 except the names listed after it.
+wipe_dir_contents()
+{
+    dir="${1:?}"; shift
+    for p in "$dir"/* "$dir"/.[!.]*; do
+        [ -e "$p" ] || continue
+        keep=0
+        for k in "$@"; do
+            [ "${p##*/}" = "$k" ] && keep=1
+        done
+        if [ "$keep" = 0 ]; then
+            rm -rf "${p:?}"
+        fi
+    done
+}
+
+# Phase "state" runs from S03 right after STATE is mounted (nothing has used
+# it yet); phase "userdata" runs from S04 once USERDATA is mounted. The
+# USERDATA part is handed over through a marker that survives the STATE wipe.
+apply_pending()
+{
+    phase="${1:-state}"
+    case "$phase" in
+    state)
+        [ -f "$PENDING" ] || return 0
+        scope="$(cat "$PENDING")"
+        case "$scope" in
+            settings|userdata) ;;
+            *) rm -f "${PENDING:?}"; return 1 ;;
+        esac
+        log "applying factory reset scope=$scope"
+        if [ "$scope" = userdata ]; then
+            : > "$RECOVERY/pending-userdata.tmp" && mv "$RECOVERY/pending-userdata.tmp" "$RECOVERY/pending-userdata" || return 1
+        fi
+        # STATE: keep SSH host identity and this recovery folder; everything
+        # else (config, users, Wi-Fi, Bluetooth pairings, migrations) goes.
+        # S03 then recreates the layout and a fresh config with SETUP_COMPLETE=0.
+        wipe_dir_contents "$STATE" ssh recovery lost+found
+        wipe_dir_contents "$STATE/ssh" dropbear root
+        rm -f "${PENDING:?}" "${RECOVERY:?}/safe-mode" "${RECOVERY:?}/ui-crashes"
+        sync
+        event "factory-reset state applied scope=$scope"
+        ;;
+    userdata)
+        [ -f "$RECOVERY/pending-userdata" ] || return 0
+        if [ -z "$R" ] && ! grep -qs " /userdata " /proc/mounts; then
+            log "USERDATA not mounted, factory reset of user data kept pending"
+            return 1
+        fi
+        # Per-user content and derived data. ROMs and BIOS are never listed.
+        for d in users cache retroarch library diagnostics steamlink; do
+            rm -rf "${USERDATA:?}/$d"
+        done
+        mkdir -p "$USERDATA/users"
+        rm -f "${RECOVERY:?}/pending-userdata"
+        sync
+        event "factory-reset userdata applied"
+        ;;
+    *) echo "ERR phase"; return 1 ;;
+    esac
+    return 0
+}
+
+safe_mode()
+{
+    case "$1" in
+        status)
+            if [ -f "$RECOVERY/safe-mode" ]; then
+                echo "safe-mode=1"; cat "$RECOVERY/safe-mode"
+            else
+                echo "safe-mode=0"
+            fi ;;
+        clear)
+            rm -f "${RECOVERY:?}/safe-mode" "${RECOVERY:?}/ui-crashes" "$R/run/nuubos/ui-failed"
+            sync; event "safe-mode cleared"; echo OK ;;
+        *) echo "ERR usage: safe-mode status|clear"; return 1 ;;
+    esac
+}
+
+case "${1:-}" in
+    reset-user) reset_user "${2:-}" ;;
+    reset-system) reset_system ;;
+    repair) repair ;;
+    factory-reset) factory_reset "${2:-}" ;;
+    apply-pending) apply_pending "${2:-state}" ;;
+    safe-mode) safe_mode "${2:-}" ;;
+    *) echo "Usage: nuubos-recoveryctl reset-user ID | reset-system | repair | factory-reset settings|userdata | apply-pending | safe-mode status|clear" >&2; exit 1 ;;
+esac

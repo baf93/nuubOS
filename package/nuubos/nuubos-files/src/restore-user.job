@@ -1,0 +1,6 @@
+# Restore into a profile (backup file, user id)
+COMMAND=/usr/bin/nuubos-backupctl restore
+SCOPE=device
+CANCEL=0
+RETRY=1
+ARGS=2

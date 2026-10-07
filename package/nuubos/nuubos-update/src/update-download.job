@@ -1,0 +1,6 @@
+# EPIC-048: download and verify the available nuubOS update.
+COMMAND=/usr/bin/nuubos-updatectl download
+SCOPE=device
+CANCEL=1
+RETRY=1
+ARGS=0

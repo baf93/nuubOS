@@ -1,0 +1,109 @@
+#!/bin/sh
+# nuubOS removable media (EPIC-024 USB storage, EPIC-032 Storage Manager).
+#
+#   hotplug add|remove DEV   from udev: mount a USB volume at /media/<name>
+#   list                     volume=<name>\t<dev>\t<path>\t<total>\t<free>\t<ro> ... end=1
+#   eject NAME               flush and unmount; ERR busy while files are open
+#
+# USB volumes are file sources/targets (File Manager, backups), never a ROM
+# location: the Game Library reads only USERDATA. Mounted nodev,nosuid,
+# noexec. NUUBOS_MEDIA_ROOT overrides /media for the host test.
+
+MEDIA="${NUUBOS_MEDIA_ROOT:-/media}"
+
+log() { echo "nuubos-media: $*" >&2; }
+
+notify()
+{
+    command -v nuubos-notifyctl >/dev/null 2>&1 &&
+        nuubos-notifyctl post "media.$2" "$1" "name=$2" >/dev/null 2>&1
+}
+
+# Volume label made safe for a folder name, else the device name.
+volume_name()
+{
+    label="$(blkid -o value -s LABEL "/dev/$1" 2>/dev/null | tr -c 'A-Za-z0-9._-' '_' | sed 's/_*$//' | cut -c1-32)"
+    case "$label" in ''|.*) label="$1" ;; esac
+    name="$label"; n=2
+    while [ -e "$MEDIA/$name" ] && ! grep -qs " $MEDIA/$name " /proc/mounts; do
+        name="$label-$n"; n=$((n + 1))
+    done
+    printf '%s\n' "$name"
+}
+
+hotplug_add()
+{
+    dev="$1"
+    case "$dev" in *[!a-z0-9]*|'') return 1 ;; esac
+    grep -qs "^/dev/$dev " /proc/mounts && return 0
+    type="$(blkid -o value -s TYPE "/dev/$dev" 2>/dev/null)"
+    case "$type" in
+        vfat|exfat) opts="nodev,nosuid,noexec,noatime,uid=0,gid=0,umask=022,iocharset=utf8" ;;
+        ext4|ext3|ext2) opts="nodev,nosuid,noexec,noatime" ;;
+        *) return 0 ;;
+    esac
+    name="$(volume_name "$dev")"
+    mkdir -p "$MEDIA/$name" || return 1
+    if mount -t "$type" -o "$opts" "/dev/$dev" "$MEDIA/$name"; then
+        log "mounted /dev/$dev at $MEDIA/$name"
+        notify media.connected "$name"
+    else
+        rmdir "$MEDIA/$name" 2>/dev/null
+        log "mount /dev/$dev failed"
+        return 1
+    fi
+}
+
+hotplug_remove()
+{
+    dev="$1"
+    mp="$(awk -v d="/dev/$dev" '$1 == d { print $2; exit }' /proc/mounts)"
+    [ -n "$mp" ] || return 0
+    # Pulled out without ejecting: detach now so nothing writes into the
+    # mount point; open files fail instead of hanging.
+    umount -l "$mp" 2>/dev/null
+    rmdir "$mp" 2>/dev/null
+    notify media.removed "${mp##*/}"
+}
+
+list()
+{
+    for mp in "$MEDIA"/*; do
+        [ -d "$mp" ] || continue
+        line="$(awk -v m="$mp" '$2 == m { print $1, $4; exit }' /proc/mounts)"
+        [ -n "$line" ] || continue
+        dev="${line%% *}"; opts="${line#* }"
+        case ",$opts," in *,ro,*) ro=1 ;; *) ro=0 ;; esac
+        set -- $(df -k "$mp" 2>/dev/null | awk 'NR == 2 { print $2 * 1024, $4 * 1024 }')
+        printf 'volume=%s\t%s\t%s\t%s\t%s\t%s\n' "${mp##*/}" "$dev" "$mp" "${1:-0}" "${2:-0}" "$ro"
+    done
+    echo "end=1"
+}
+
+eject()
+{
+    name="$1"
+    case "$name" in */*|.*|'') echo "ERR name"; return 1 ;; esac
+    mp="$MEDIA/$name"
+    grep -qs " $mp " /proc/mounts || { echo "ERR not-mounted"; return 1; }
+    sync
+    if umount "$mp" 2>/dev/null; then
+        rmdir "$mp" 2>/dev/null
+        echo OK
+    else
+        echo "ERR busy"
+        return 1
+    fi
+}
+
+case "${1:-}" in
+    hotplug)
+        case "${2:-}" in
+            add) hotplug_add "${3:-}" ;;
+            remove) hotplug_remove "${3:-}" ;;
+        esac
+        ;;
+    list) list ;;
+    eject) eject "${2:-}" ;;
+    *) echo "Usage: nuubos-mediactl list | eject NAME | hotplug add|remove DEV" >&2; exit 2 ;;
+esac

@@ -1,0 +1,8 @@
+config BR2_PACKAGE_NUUBOS_RECOVERY
+	bool "nuubos-recovery"
+	depends on BR2_USE_MMU
+	select BR2_PACKAGE_NUUBOS_JOBS
+	help
+	  EPIC-049/050/052: diagnostics and support bundle (nuubos-diag),
+	  scoped reset and repair (nuubos-recoveryctl) and the UI
+	  supervisor with crash-loop detection and safe mode.

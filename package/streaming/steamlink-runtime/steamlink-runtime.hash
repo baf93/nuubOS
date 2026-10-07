@@ -1,0 +1,7 @@
+# Locally calculated (Qt archive md5sums.txt verified)
+sha256  2a03b9f554e88c5824ef237c814b3dd45844c022e97be0e091f4a502ca4c9520  qtwayland-everywhere-src-5.14.1.tar.xz
+sha256  d9d423a6e7bcf1055c0372fc029f14a6fe67dd62c67b83095cde68b60b762cf7  qtbase-everywhere-src-5.14.1.tar.xz
+sha256  f37ad7db549af224f30c42874d7dc2544905977851517b05d30c385f6e4b916e  Vulkan-Headers-1.2.131.tar.gz
+sha256  da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768  LICENSE.LGPL3
+sha256  8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  LICENSE.GPL2
+sha256  8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903  LICENSE.GPL3

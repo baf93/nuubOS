@@ -1,0 +1,79 @@
+#!/bin/sh
+# Runs nuubUI under a bounded crash policy (EPIC-050).
+#
+# nuubUI exits non-zero or by signal -> restarted. CRASH_LIMIT crashes inside
+# CRASH_WINDOW seconds enter safe mode: the same binary started with
+# NUUBOS_SAFE_MODE=1 (built-in theme/layout, no custom configuration, a
+# Recovery page). Another CRASH_LIMIT crashes inside the window in safe mode
+# stop the restarts for good: /run/nuubos/ui-failed is written and the tty1
+# console stays available for advanced administration. Exit 0 ends the loop.
+# There is no retry/sleep fix: the counters only bound a deterministic failure.
+
+R="${NUUBOS_ROOT:-}"
+BIN="${NUUBOS_UI_BIN:-/usr/bin/nuubui-home}"
+RECOVERY="$R/state/recovery"
+CRASHES="$RECOVERY/ui-crashes"
+SAFE="$RECOVERY/safe-mode"
+FAILED="$R/run/nuubos/ui-failed"
+COMPOSITOR="${NUUBOS_COMPOSITOR:-labwc}"
+CRASH_LIMIT="${NUUBOS_CRASH_LIMIT:-3}"
+CRASH_WINDOW="${NUUBOS_CRASH_WINDOW:-120}"
+
+mkdir -p "$RECOVERY" "$R/run/nuubos" 2>/dev/null
+child=""
+trap '[ -n "$child" ] && kill "$child" 2>/dev/null; exit 0' TERM INT
+
+recent_crashes()
+{
+    now="$(date +%s)"
+    [ -f "$CRASHES" ] || { echo 0; return; }
+    awk -v now="$now" -v w="$CRASH_WINDOW" '$1 >= now - w {n++} END{print n+0}' "$CRASHES"
+}
+
+record_crash()
+{
+    echo "$(date +%s) $1" >> "$CRASHES"
+    tail -n 20 "$CRASHES" > "$CRASHES.tmp" && mv "$CRASHES.tmp" "$CRASHES"
+}
+
+while :; do
+    if [ -f "$SAFE" ]; then
+        export NUUBOS_SAFE_MODE=1
+    else
+        unset NUUBOS_SAFE_MODE
+    fi
+
+    "$BIN" "$@" &
+    child=$!
+    wait "$child"
+    code=$?
+    child=""
+
+    [ "$code" -eq 0 ] && exit 0
+    # SIGTERM/SIGINT during an orderly UI stop is not a crash.
+    if [ "$code" -eq 143 ] || [ "$code" -eq 130 ]; then
+        exit 0
+    fi
+
+    # The compositor going away (orderly session stop) takes its clients down
+    # with an error: that is not a nuubUI crash.
+    if ! pidof "$COMPOSITOR" >/dev/null 2>&1; then
+        exit 0
+    fi
+
+    if [ -f "$SAFE" ]; then in_safe=1; else in_safe=0; fi
+    record_crash "exit=$code safe=$in_safe"
+    echo "nuubos-ui-supervisor: nuubUI exited with $code" >&2
+
+    if [ "$(recent_crashes)" -ge "$CRASH_LIMIT" ]; then
+        if [ "$in_safe" = 1 ]; then
+            echo "nuubos-ui-supervisor: safe mode also crashes, giving up" >&2
+            echo "exit=$code" > "$FAILED"
+            exit 1
+        fi
+        printf 'reason=crash-loop\nsince=%s\n' "$(date +%s)" > "$SAFE"
+        # Safe mode gets its own fresh window.
+        : > "$CRASHES"
+        echo "nuubos-ui-supervisor: entering safe mode" >&2
+    fi
+done

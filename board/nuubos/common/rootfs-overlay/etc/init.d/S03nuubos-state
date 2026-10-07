@@ -692,6 +692,10 @@ prepare_ssh()
 start_state()
 {
     mount_state || return 1
+
+    # A scheduled factory reset runs before anything reads STATE (EPIC-049).
+    /usr/sbin/nuubos-recoveryctl apply-pending state || log "pending reset failed"
+
     prepare_layout || return 1
     init_config || return 1
     init_users || return 1

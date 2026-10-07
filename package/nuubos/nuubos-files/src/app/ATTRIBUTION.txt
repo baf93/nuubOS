@@ -1,0 +1,13 @@
+nuubOS Files application icon
+=============================
+
+files.png is the "folder.png" icon of the "XMB Monochrome" theme from the
+libretro RetroArch assets repository, redistributed unmodified (only the
+file name was changed):
+
+  https://github.com/libretro/retroarch-assets/tree/master/xmb/monochrome/png
+  commit d9f969054dc7fbb6fa89519036d2b971e0855b51
+
+Copyright (c) libretro / RetroArch assets contributors.
+Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0),
+see LICENSE-CC-BY-4.0.txt.

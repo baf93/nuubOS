@@ -1,0 +1,4 @@
+#!/bin/sh
+# Web Mode (EPIC-030): close the browser before Restart/Power Off (its
+# cookies and site data are written on exit). Sleep keeps the page.
+exec /usr/bin/nuubos-webctl pre-power "$1" >/dev/null

@@ -27,7 +27,11 @@ static void usage(void)
 		"  pause | resume | save | load | reset | fast-forward\n"
 		"  slot N|+1|-1\n"
 		"  advanced                       open RetroArch's own menu\n"
+		"  screenshot\n"
 		"  quit\n"
+		"  game-settings GAME SYSTEM       per-game overrides of the active user\n"
+		"  game-set GAME SYSTEM core|aspect|filter VALUE   (\"\" = inherit)\n"
+		"  game-reset GAME\n"
 		"  pre-power sleep|restart|poweroff\n");
 }
 
@@ -53,6 +57,14 @@ int main(int argc, char **argv)
 		snprintf(command, sizeof(command), "LAUNCH\t%s\n", argv[2]);
 	} else if (!strcmp(verb, "slot") && argc == 3) {
 		snprintf(command, sizeof(command), "SLOT\t%s\n", argv[2]);
+	} else if (!strcmp(verb, "game-settings") && argc == 4) {
+		snprintf(command, sizeof(command), "GAME_SETTINGS\t%s\t%s\n", argv[2], argv[3]);
+		multi = 1;
+	} else if (!strcmp(verb, "game-set") && argc == 6) {
+		snprintf(command, sizeof(command), "GAME_SET\t%s\t%s\t%s\t%s\n",
+			 argv[2], argv[3], argv[4], argv[5]);
+	} else if (!strcmp(verb, "game-reset") && argc == 3) {
+		snprintf(command, sizeof(command), "GAME_RESET\t%s\n", argv[2]);
 	} else if (!strcmp(verb, "pre-power") && argc == 3) {
 		snprintf(command, sizeof(command), "PRE_POWER\t%s\n", argv[2]);
 	} else if (argc == 2) {
@@ -61,6 +73,7 @@ int main(int argc, char **argv)
 			{ "save", "SAVE_STATE" }, { "load", "LOAD_STATE" },
 			{ "reset", "RESET" }, { "fast-forward", "FAST_FORWARD" },
 			{ "advanced", "ADVANCED" }, { "quit", "QUIT" },
+			{ "screenshot", "SCREENSHOT" },
 		};
 		size_t i;
 

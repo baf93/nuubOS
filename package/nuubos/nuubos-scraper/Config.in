@@ -1,0 +1,15 @@
+config BR2_PACKAGE_NUUBOS_SCRAPER
+	bool "nuubos-scraper"
+	depends on BR2_USE_MMU
+	select BR2_PACKAGE_NUUBOS_JOBS
+	select BR2_PACKAGE_NUUBOS_LIBRARY
+	select BR2_PACKAGE_LIBCURL
+	select BR2_PACKAGE_CA_CERTIFICATES
+	select BR2_PACKAGE_CJSON
+	select BR2_PACKAGE_ZLIB
+	help
+	  EPIC-015 optional game metadata and media (ScreenScraper),
+	  stored in the provider-neutral Library metadata store. The
+	  nuubOS ScreenScraper developer credentials are read at build
+	  time from local/screenscraper-dev.conf (DEVID=, DEVPASSWORD=);
+	  without them the provider is reported unavailable.

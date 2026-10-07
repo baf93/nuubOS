@@ -9,7 +9,7 @@ NUUBOS_STREAMING_SITE = $(BR2_EXTERNAL_NUUBOS_PATH)/package/nuubos/nuubos-stream
 NUUBOS_STREAMING_SITE_METHOD = local
 NUUBOS_STREAMING_LICENSE = MIT
 NUUBOS_STREAMING_LICENSE_FILES = LICENSE
-NUUBOS_STREAMING_DEPENDENCIES = nuubos-notify
+NUUBOS_STREAMING_DEPENDENCIES = nuubos-notify libcurl openssl zlib
 
 define NUUBOS_STREAMING_BUILD_CMDS
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
@@ -18,6 +18,9 @@ define NUUBOS_STREAMING_BUILD_CMDS
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		-std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror \
 		$(@D)/streamctl.c -o $(@D)/nuubos-streamctl
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
+		-std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -Wno-format-truncation \
+		$(@D)/steamlink-get.c -o $(@D)/nuubos-steamlink-get -lcurl -lcrypto -lz
 endef
 
 define NUUBOS_STREAMING_INSTALL_TARGET_CMDS
@@ -30,6 +33,12 @@ define NUUBOS_STREAMING_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/share/nuubos/applications/moonlight.app
 	$(INSTALL) -D -m 0644 $(@D)/app/moonlight.png \
 		$(TARGET_DIR)/usr/share/nuubos/applications/icons/moonlight.png
+	$(INSTALL) -D -m 0755 $(@D)/nuubos-steamlink-get \
+		$(TARGET_DIR)/usr/lib/nuubos/nuubos-steamlink-get
+	$(INSTALL) -D -m 0644 $(@D)/app/steamlink.app \
+		$(TARGET_DIR)/usr/share/nuubos/applications/steamlink.app
+	$(INSTALL) -D -m 0644 $(@D)/app/steamlink.png \
+		$(TARGET_DIR)/usr/share/nuubos/applications/icons/steamlink.png
 endef
 
 $(eval $(generic-package))

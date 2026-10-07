@@ -1,4 +1,27 @@
 
+/* Presentation tokens of the active theme (EPIC-008). Defaults are the
+ * built-in nuubOS theme; nuubUI sets them from the user's theme package
+ * (themes.rs) and falls back to these values on any theme error. Colors
+ * not covered by a token are fixed by the product design. */
+export global Theme {
+    in-out property <color> accent: #3a86ff;
+    in-out property <color> accent-light: #73a8ff;
+    in-out property <color> accent-muted: #5b86d6;
+    in-out property <color> accent-text: #cfe2ff;
+    in-out property <color> focus-fill: #18283c;
+    in-out property <color> text: #f5f6f8;
+    in-out property <color> text-secondary: #a8adb5;
+    in-out property <color> text-dim: #8e949d;
+    in-out property <color> text-faint: #7f858e;
+    in-out property <color> text-disabled: #555b64;
+    in-out property <color> background: #0d0e10;
+    in-out property <color> surface: #24272d;
+    in-out property <color> border: #30343b;
+    in-out property <color> border-soft: #2c3036;
+    in-out property <color> warning: #f2b84b;
+}
+
+
 component MarqueeText inherits Rectangle {
     in property <string> label: "";
     in property <color> text-color: #ffffff;
@@ -65,7 +88,7 @@ component BatteryGlyph inherits Rectangle {
         text: "?";
         horizontal-alignment: center;
         vertical-alignment: center;
-        color: #7f858e;
+        color: Theme.text-faint;
         font-size: 14px;
         font-weight: 700;
         visible: root.percent < 0;
@@ -95,9 +118,9 @@ component FaceButtonHint inherits Rectangle {
         width: 8px;
         height: 8px;
         border-radius: 4px;
-        background: root.active-position == 0 ? #3a86ff : #24272d;
+        background: root.active-position == 0 ? Theme.accent : Theme.surface;
         border-width: 1px;
-        border-color: root.active-position == 0 ? #73a8ff : #555b64;
+        border-color: root.active-position == 0 ? Theme.accent-light : Theme.text-disabled;
     }
 
     Rectangle {
@@ -106,9 +129,9 @@ component FaceButtonHint inherits Rectangle {
         width: 8px;
         height: 8px;
         border-radius: 4px;
-        background: root.active-position == 1 ? #3a86ff : #24272d;
+        background: root.active-position == 1 ? Theme.accent : Theme.surface;
         border-width: 1px;
-        border-color: root.active-position == 1 ? #73a8ff : #555b64;
+        border-color: root.active-position == 1 ? Theme.accent-light : Theme.text-disabled;
     }
 
     Rectangle {
@@ -117,9 +140,9 @@ component FaceButtonHint inherits Rectangle {
         width: 8px;
         height: 8px;
         border-radius: 4px;
-        background: root.active-position == 2 ? #3a86ff : #24272d;
+        background: root.active-position == 2 ? Theme.accent : Theme.surface;
         border-width: 1px;
-        border-color: root.active-position == 2 ? #73a8ff : #555b64;
+        border-color: root.active-position == 2 ? Theme.accent-light : Theme.text-disabled;
     }
 
     Rectangle {
@@ -128,9 +151,9 @@ component FaceButtonHint inherits Rectangle {
         width: 8px;
         height: 8px;
         border-radius: 4px;
-        background: root.active-position == 3 ? #3a86ff : #24272d;
+        background: root.active-position == 3 ? Theme.accent : Theme.surface;
         border-width: 1px;
-        border-color: root.active-position == 3 ? #73a8ff : #555b64;
+        border-color: root.active-position == 3 ? Theme.accent-light : Theme.text-disabled;
     }
 }
 
@@ -140,7 +163,7 @@ component MenuActionHint inherits Rectangle {
     border-radius: 5px;
     background: #d8dbe0;
     border-width: 1px;
-    border-color: #f5f6f8;
+    border-color: Theme.text;
 
     Text {
         x: 0;
@@ -150,7 +173,7 @@ component MenuActionHint inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         text: "H";
-        color: #0d0e10;
+        color: Theme.background;
         font-size: 16px;
         font-weight: 800;
     }
@@ -162,7 +185,7 @@ component HorizontalAdjustHint inherits Rectangle {
     border-radius: 5px;
     background: #d8dbe0;
     border-width: 1px;
-    border-color: #f5f6f8;
+    border-color: Theme.text;
 
     Text {
         x: 2px;
@@ -172,7 +195,7 @@ component HorizontalAdjustHint inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         text: "↔";
-        color: #0d0e10;
+        color: Theme.background;
         font-size: 18px;
         font-weight: 700;
     }
@@ -198,7 +221,7 @@ component MaterialSlider inherits Rectangle {
             width: parent.width * root.fraction;
             height: parent.height;
             border-radius: 1.5px;
-            background: #3a86ff;
+            background: Theme.accent;
         }
     }
 
@@ -208,7 +231,7 @@ component MaterialSlider inherits Rectangle {
         width: 5px;
         height: 16px;
         border-radius: 2.5px;
-        background: #3a86ff;
+        background: Theme.accent;
     }
 }
 
@@ -228,14 +251,14 @@ component NotificationCard inherits Rectangle {
     in property <float> progress: -1;
 
     property <color> accent: root.severity == 3 ? #ff6b78
-        : root.severity == 2 ? #f2b84b : #3a86ff;
+        : root.severity == 2 ? Theme.warning : Theme.accent;
     property <length> trailing: root.battery >= 0 ? 82px : 0px;
     /* Time needed to scroll the longest line once to its end. */
     out property <duration> scroll-time: max(title-text.scroll-time, root.detail != "" ? detail-text.scroll-time : 0ms);
     out property <length> marquee-offset: title-text.offset + detail-text.offset;
 
     height: 72px;
-    background: #0d0e10;
+    background: Theme.background;
     border-radius: 10px;
     border-width: 1px;
     border-color: root.severity >= 2 ? root.accent : #3a3f48;
@@ -246,7 +269,7 @@ component NotificationCard inherits Rectangle {
         width: 40px;
         height: 40px;
         border-radius: 20px;
-        background: root.severity == 3 ? #3d1c22 : root.severity == 2 ? #3a2f16 : #18283c;
+        background: root.severity == 3 ? #3d1c22 : root.severity == 2 ? #3a2f16 : Theme.focus-fill;
 
         Image {
             x: (parent.width - self.width) / 2;
@@ -275,7 +298,7 @@ component NotificationCard inherits Rectangle {
         x: 66px; y: 11px; width: parent.width - 80px - root.trailing; height: 25px;
         passes: 1;
         label: root.title;
-        text-color: #f5f6f8;
+        text-color: Theme.text;
         text-size: 17px;
         text-weight: 700;
     }
@@ -284,7 +307,7 @@ component NotificationCard inherits Rectangle {
         x: 66px; y: 36px; width: parent.width - 80px; height: 22px;
         passes: 1;
         label: root.detail;
-        text-color: #a8adb5;
+        text-color: Theme.text-secondary;
         text-size: 14px;
         text-weight: 600;
         visible: root.detail != "";
@@ -337,7 +360,7 @@ component QmSectionHeader inherits Rectangle {
         height: parent.height;
         vertical-alignment: center;
         text: root.label;
-        color: #3a86ff;
+        color: Theme.accent;
         font-size: 13px;
         font-weight: 700;
         overflow: elide;
@@ -353,9 +376,9 @@ component QmRow inherits Rectangle {
     in property <bool> show-icon: false;
 
     border-radius: 6px;
-    background: root.selected ? #1b2940 : #15171b;
+    background: root.selected ? Theme.focus-fill : #15171b;
     border-width: 1px;
-    border-color: root.selected ? #3a86ff : #24272d;
+    border-color: root.selected ? Theme.accent : Theme.surface;
 
     Image {
         x: parent.width - 12px - self.width;
@@ -364,7 +387,7 @@ component QmRow inherits Rectangle {
         height: 16px;
         source: root.icon;
         image-fit: contain;
-        colorize: root.selected ? #cfe2ff : #8e949d;
+        colorize: root.selected ? Theme.accent-text : Theme.text-dim;
         visible: root.show-icon;
     }
 
@@ -374,7 +397,7 @@ component QmRow inherits Rectangle {
         y: 0;
         height: parent.height;
         label: root.value;
-        text-color: root.selected ? #cfe2ff : #8e949d;
+        text-color: root.selected ? Theme.accent-text : Theme.text-dim;
         text-size: 14px;
         text-weight: 600;
         align-right: true;
@@ -388,10 +411,33 @@ component QmRow inherits Rectangle {
         width: root.value == "" ? parent.width - 24px - (root.show-icon ? 26px : 0px) : max(0px, value-text.x - 22px);
         height: parent.height;
         label: root.title;
-        text-color: root.selected ? #f5f6f8 : #c8ccd2;
+        text-color: root.selected ? Theme.text : #c8ccd2;
         text-size: 18px;
         text-weight: root.selected ? 700 : 600;
         active: root.selected;
+    }
+}
+
+/* One key of the Web Mode keyboard (same look as nuubUI's system keyboard). */
+component QmKey inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> selected: false;
+
+    border-radius: 5px;
+    background: root.selected ? Theme.focus-fill : #1a1c20;
+    border-width: 1px;
+    border-color: root.selected ? Theme.accent : #343840;
+    visible: root.label != "";
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.label;
+        color: root.selected ? Theme.text : #c8ccd2;
+        font-size: root.label.character-count > 1 ? 13px : 17px;
+        font-weight: root.selected ? 700 : 600;
     }
 }
 
@@ -406,9 +452,9 @@ component QmSliderRow inherits Rectangle {
     property <length> line-height: root.show-slider ? root.height - 26px : root.height;
 
     border-radius: 6px;
-    background: root.selected ? #1b2940 : #15171b;
+    background: root.selected ? Theme.focus-fill : #15171b;
     border-width: 1px;
-    border-color: root.selected ? #3a86ff : #24272d;
+    border-color: root.selected ? Theme.accent : Theme.surface;
 
     value-text := MarqueeText {
         width: root.value == "" ? 0px : min(self.content-width + 4px, parent.width * 0.58);
@@ -416,7 +462,7 @@ component QmSliderRow inherits Rectangle {
         y: root.show-slider ? 4px : 0px;
         height: root.line-height;
         label: root.value;
-        text-color: root.selected ? #cfe2ff : #8e949d;
+        text-color: root.selected ? Theme.accent-text : Theme.text-dim;
         text-size: 14px;
         text-weight: 600;
         align-right: true;
@@ -430,7 +476,7 @@ component QmSliderRow inherits Rectangle {
         width: root.value == "" ? parent.width - 24px : max(0px, value-text.x - 22px);
         height: root.line-height;
         label: root.title;
-        text-color: root.selected ? #f5f6f8 : #c8ccd2;
+        text-color: root.selected ? Theme.text : #c8ccd2;
         text-size: 18px;
         text-weight: root.selected ? 700 : 600;
         active: root.selected;
@@ -446,7 +492,7 @@ component QmSliderRow inherits Rectangle {
 }
 
 export component QuickMenuWindow inherits Window {
-    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming"];
+    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Create Support Bundle", "Creating support bundle…", "Support bundle saved", "The support bundle could not be created", "No ROMs, saves, passwords or Wi-Fi keys are included. Saved in the diagnostics folder of USERDATA.", "Repair Configuration", "Configuration checked", "The recovery operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Factory Reset and Erase User Data", "Checks and repairs damaged settings. Nothing is deleted.", "Resets the active user's preferences and app data. Saves and states are kept.", "Erases users, settings, Wi-Fi and Bluetooth pairings. ROMs, BIOS, saves and states are kept.", "Also erases saves, states, screenshots and app data of every user. ROMs and BIOS are kept.", "Press again • the console will restart", "Press again to erase user data", "Safe Mode", "nuubUI stopped repeatedly and started with the default appearance. Repair or reset, then exit safe mode.", "Exit Safe Mode", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Integer Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available in this build", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Support bundle", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in with an authorized SSH key", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Theme", "Theme installed", "This is not a valid nuubOS theme", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY"];
     in-out property <int> selected-index: 0;
     in-out property <bool> brightness-visible: false;
     in-out property <bool> switch-user-visible: false;
@@ -491,7 +537,8 @@ export component QuickMenuWindow inherits Window {
 
     /*
      * Which layer surface this window is rendered into:
-     * 0 full-screen (Quick Menu, lifecycle), 1 volume OSD surface only.
+     * 0 full-screen (Quick Menu, lifecycle), 1 volume OSD surface only,
+     * 2 Web Mode keyboard (bottom sheet surface only).
      */
     in-out property <int> surface-mode: 0;
 
@@ -505,7 +552,28 @@ export component QuickMenuWindow inherits Window {
      * game-confirm-index), then read-only statistics sampled when the menu
      * opens. Never visible together with GAME. */
     in-out property <bool> stream-section-visible: false;
+    /* The session is Steam Link (EPIC-026): Resume and Quit Steam Link
+     * only; Valve's application has no statistics or host application. */
+    in-out property <bool> stream-steamlink: false;
     in-out property <string> stream-latency-label: "";
+    /* WEB: the Web Mode browser runs (nuubos-webd, EPIC-030). Rows 20
+     * Resume, 27 Keyboard, 21 Go Back, 22 Go Forward, 23 Reload, 24 Zoom
+     * (left/right, confirm restores), 25 Add Bookmark, 26 Quit Web. */
+    in-out property <bool> web-section-visible: false;
+    in-out property <string> web-zoom-label: "100%";
+    /* A text field of the page has the focus (input method active). */
+    in-out property <bool> web-ime-active: false;
+    /* Web Mode keyboard sheet (surface-mode 2): four rows of up to ten
+     * keys, focus kb-index = row * 10 + column; kb-preview is the text of
+     * the focused field when the page reports it. */
+    in-out property <[string]> kb-row-zero: [];
+    in-out property <[string]> kb-row-one: [];
+    in-out property <[string]> kb-row-two: [];
+    in-out property <[string]> kb-row-three: [];
+    in-out property <int> kb-index: 0;
+    in-out property <string> kb-preview: "";
+    in-out property <string> kb-mode-label: "";
+    in-out property <bool> kb-visible: false;
     in-out property <string> stream-decode-label: "";
     in-out property <string> stream-video-label: "";
 
@@ -546,10 +614,11 @@ export component QuickMenuWindow inherits Window {
     property <length> game-y: root.content-top;
     property <length> game-row0-y: root.game-y + root.section-header;
     property <length> game-step: root.row-height + root.row-gap;
-    property <length> game-end: root.game-row0-y + 6 * root.game-step + root.row-height;
-    property <length> stream-end: root.game-row0-y + 5 * root.game-step + root.row-height;
+    property <length> game-end: root.game-row0-y + 7 * root.game-step + root.row-height;
+    property <length> stream-end: root.game-row0-y + (root.stream-steamlink ? 1 : 5) * root.game-step + root.row-height;
     property <length> context-y: root.game-section-visible ? root.game-end + root.section-gap
         : root.stream-section-visible ? root.stream-end + root.section-gap
+        : root.web-section-visible ? root.game-end + root.section-gap
         : root.content-top;
     property <length> display-y: root.context-section-visible
         ? root.context-y + root.section-header + root.row-height + root.section-gap
@@ -573,7 +642,14 @@ export component QuickMenuWindow inherits Window {
     property <length> poweroff-row-y: root.restart-row-y + root.row-height + root.row-gap;
 
     property <length> focus-top:
-        root.selected-index >= 15 ? root.game-row0-y + (root.selected-index - 15) * root.game-step
+        /* 18 Screenshot sits before 14 Quit Game. */
+        root.selected-index == 18 ? root.game-row0-y + 6 * root.game-step
+        : root.selected-index == 14 ? root.game-row0-y + 7 * root.game-step
+        /* WEB: 20 Resume, 27 Keyboard, then 21..26 in order. */
+        : root.selected-index == 20 ? root.game-row0-y
+        : root.selected-index == 27 ? root.game-row0-y + root.game-step
+        : root.selected-index >= 21 ? root.game-row0-y + (root.selected-index - 19) * root.game-step
+        : root.selected-index >= 15 ? root.game-row0-y + (root.selected-index - 15) * root.game-step
         : root.selected-index >= 8 ? root.game-row0-y + (root.selected-index - 8) * root.game-step
         : root.selected-index == 3 ? root.audio-row-y
         : root.selected-index == 5 ? root.brightness-row-y
@@ -593,11 +669,13 @@ export component QuickMenuWindow inherits Window {
         max(0px, root.focus-bottom - root.viewport-bottom),
         max(0px, root.focus-top - root.viewport-top
             - (root.focus-top == root.audio-row-y || root.selected-index == 8 || root.selected-index == 15
+                || root.selected-index == 20
                 ? root.section-header : 0px)));
 
     property <bool> selected-adjustable:
         (root.selected-index == 11 && root.game-section-visible)
         || (root.selected-index == 3 && root.audio-volume-visible)
+        || (root.selected-index == 24 && root.web-section-visible)
         || (root.selected-index == 5 && root.brightness-visible);
 
     title: root.i18n-strings[232];
@@ -618,7 +696,7 @@ export component QuickMenuWindow inherits Window {
         y: 0;
         width: root.panel-width;
         height: parent.height;
-        background: #0d0e10;
+        background: Theme.background;
         visible: root.menu-panel-visible;
         clip: true;
 
@@ -627,7 +705,7 @@ export component QuickMenuWindow inherits Window {
             y: 0;
             width: 1px;
             height: parent.height;
-            background: #2c3036;
+            background: Theme.border-soft;
             z: 90;
         }
 
@@ -686,6 +764,13 @@ export component QuickMenuWindow inherits Window {
         QmRow {
             x: 16px; y: root.game-row0-y + 6 * root.game-step - root.scroll;
             width: parent.width - 32px; height: root.row-height;
+            title: root.i18n-strings[592];
+            selected: root.selected-index == 18;
+            visible: root.game-section-visible;
+        }
+        QmRow {
+            x: 16px; y: root.game-row0-y + 7 * root.game-step - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
             title: root.i18n-strings[422];
             value: root.game-confirm-index == 14 ? root.i18n-strings[191] : "";
             selected: root.selected-index == 14;
@@ -695,7 +780,7 @@ export component QuickMenuWindow inherits Window {
         /* STREAM: the running PC stream, first in the menu. */
         QmSectionHeader {
             x: 16px; y: root.game-y - root.scroll; width: parent.width - 32px;
-            label: root.i18n-strings[468];
+            label: root.stream-steamlink ? root.i18n-strings[478] : root.i18n-strings[468];
             visible: root.stream-section-visible;
         }
         QmRow {
@@ -708,7 +793,7 @@ export component QuickMenuWindow inherits Window {
         QmRow {
             x: 16px; y: root.game-row0-y + root.game-step - root.scroll;
             width: parent.width - 32px; height: root.row-height;
-            title: root.i18n-strings[469];
+            title: root.stream-steamlink ? root.i18n-strings[496] : root.i18n-strings[469];
             selected: root.selected-index == 16;
             visible: root.stream-section-visible;
         }
@@ -718,7 +803,7 @@ export component QuickMenuWindow inherits Window {
             title: root.i18n-strings[470];
             value: root.game-confirm-index == 17 ? root.i18n-strings[191] : "";
             selected: root.selected-index == 17;
-            visible: root.stream-section-visible;
+            visible: root.stream-section-visible && !root.stream-steamlink;
         }
         for stat[k] in [
             { title: root.i18n-strings[471], value: root.stream-latency-label },
@@ -729,7 +814,31 @@ export component QuickMenuWindow inherits Window {
             width: parent.width - 32px; height: root.row-height;
             title: stat.title;
             value: stat.value;
-            visible: root.stream-section-visible;
+            visible: root.stream-section-visible && !root.stream-steamlink;
+        }
+
+        /* WEB: the running browser, first in the menu. */
+        QmSectionHeader {
+            x: 16px; y: root.game-y - root.scroll; width: parent.width - 32px;
+            label: root.i18n-strings[691];
+            visible: root.web-section-visible;
+        }
+        for web[k] in [
+            { index: 20, title: root.i18n-strings[416], value: "" },
+            { index: 27, title: root.i18n-strings[699], value: root.web-ime-active ? "" : root.i18n-strings[700] },
+            { index: 21, title: root.i18n-strings[692], value: "" },
+            { index: 22, title: root.i18n-strings[693], value: "" },
+            { index: 23, title: root.i18n-strings[694], value: "" },
+            { index: 24, title: root.i18n-strings[695], value: root.web-zoom-label },
+            { index: 25, title: root.i18n-strings[684], value: "" },
+            { index: 26, title: root.i18n-strings[696], value: "" },
+        ]: QmRow {
+            x: 16px; y: root.game-row0-y + k * root.game-step - root.scroll;
+            width: parent.width - 32px; height: root.row-height;
+            title: web.title;
+            value: web.value;
+            selected: root.selected-index == web.index;
+            visible: root.web-section-visible;
         }
 
         /* Optional context block. Sections remain independent, so future
@@ -828,12 +937,12 @@ export component QuickMenuWindow inherits Window {
             y: 0;
             width: parent.width;
             height: root.header-height;
-            background: #0d0e10;
+            background: Theme.background;
             z: 80;
 
             MarqueeText {
                 x: 20px; y: 11px; width: parent.width - 130px; height: 32px;
-                label: root.i18n-strings[233]; text-color: #f5f6f8; text-size: 25px; text-weight: 700;
+                label: root.i18n-strings[233]; text-color: Theme.text; text-size: 25px; text-weight: 700;
             }
 
             BatteryGlyph {
@@ -861,7 +970,7 @@ export component QuickMenuWindow inherits Window {
                 y: parent.height - 1px;
                 width: parent.width - 40px;
                 height: 1px;
-                background: #25282d;
+                background: Theme.surface;
             }
         }
 
@@ -881,7 +990,7 @@ export component QuickMenuWindow inherits Window {
                 y: 0;
                 width: parent.width - 32px;
                 height: 1px;
-                background: #25282d;
+                background: Theme.surface;
             }
 
             HorizontalLayout {
@@ -913,7 +1022,7 @@ export component QuickMenuWindow inherits Window {
                 Text {
                     vertical-alignment: center;
                     text: root.i18n-strings[186];
-                    color: #a8adb5; font-size: 15px; font-weight: 600;
+                    color: Theme.text-secondary; font-size: 15px; font-weight: 600;
                 }
                 Rectangle { width: 6px; }
                 VerticalLayout {
@@ -923,7 +1032,7 @@ export component QuickMenuWindow inherits Window {
                 Text {
                     vertical-alignment: center;
                     text: root.i18n-strings[239];
-                    color: #8e949d; font-size: 15px; font-weight: 600;
+                    color: Theme.text-dim; font-size: 15px; font-weight: 600;
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
@@ -939,7 +1048,7 @@ export component QuickMenuWindow inherits Window {
         height: 12px + min(root.audio-output-options.length, root.audio-output-dropdown-visible-rows) * (root.row-height + root.row-gap) - root.row-gap;
         background: #17191d;
         border-width: 1px;
-        border-color: #3a86ff;
+        border-color: Theme.accent;
         border-radius: 8px;
         clip: true;
         visible: root.menu-panel-visible && root.audio-output-dropdown-open;
@@ -966,17 +1075,17 @@ export component QuickMenuWindow inherits Window {
         y: root.osd-compact ? (parent.height - self.height) / 2 : parent.height - 142px;
         width: 360px;
         height: 82px;
-        background: #0d0e10;
+        background: Theme.background;
         border-width: 1px;
         border-color: #3a3f48;
         border-radius: 10px;
-        visible: root.volume-osd-visible;
+        visible: root.volume-osd-visible && root.surface-mode != 2;
         z: 80;
 
         MarqueeText {
             x: 18px; y: 12px; width: parent.width - 36px; height: 25px;
             label: root.volume-osd-title;
-            text-color: #f5f6f8;
+            text-color: Theme.text;
             text-size: 20px;
             text-weight: 700;
             
@@ -985,7 +1094,7 @@ export component QuickMenuWindow inherits Window {
         MarqueeText {
             x: 18px; y: 42px; width: parent.width - 36px; height: 22px;
             label: root.volume-osd-detail;
-            text-color: root.volume-osd-supported ? #a8adb5 : #d4d7dc;
+            text-color: root.volume-osd-supported ? Theme.text-secondary : #d4d7dc;
             text-size: root.volume-osd-supported ? 15px : 14px;
             text-weight: 600;
             visible: !root.volume-osd-supported;
@@ -1001,10 +1110,92 @@ export component QuickMenuWindow inherits Window {
         Text {
             x: parent.width - 68px; y: 11px; width: 50px; height: 25px;
             text: root.volume-osd-supported ? root.volume-osd-detail : "";
-            color: #f5f6f8;
+            color: Theme.text;
             font-size: 18px;
             font-weight: 700;
             horizontal-alignment: right;
+        }
+    }
+
+
+    /* Web Mode keyboard: the whole surface-mode 2 surface, a bottom sheet
+     * over the page. Keys commit straight into the focused field. */
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: Theme.background;
+        visible: root.surface-mode == 2;
+        border-width: 1px;
+        border-color: #2b2e34;
+
+        property <length> pad: 14px;
+        property <length> key-gap: 5px;
+        property <length> footer: 30px;
+        property <length> preview-height: 30px;
+        property <length> key-height: (self.height - 2 * self.pad - self.preview-height - self.footer - 4 * self.key-gap) / 4;
+
+        Rectangle {
+            x: parent.pad; y: parent.pad - 4px;
+            width: parent.width - 2 * parent.pad; height: parent.preview-height;
+            border-radius: 6px;
+            background: #15171b;
+            border-width: 1px;
+            border-color: #343840;
+            clip: true;
+            MarqueeText {
+                x: 10px; y: 0; width: parent.width - 20px; height: parent.height;
+                label: root.kb-preview;
+                text-color: #f5f6f8;
+                text-size: 16px;
+                text-weight: 600;
+                align-right: true;
+            }
+        }
+        for keys[r] in [root.kb-row-zero, root.kb-row-one, root.kb-row-two, root.kb-row-three]: HorizontalLayout {
+            x: parent.pad;
+            y: parent.pad + parent.preview-height + parent.key-gap + r * (parent.key-height + parent.key-gap);
+            width: parent.width - 2 * parent.pad;
+            height: parent.key-height;
+            spacing: parent.key-gap;
+            for key[i] in keys: QmKey {
+                label: key;
+                selected: root.kb-index == r * 10 + i;
+            }
+        }
+        HorizontalLayout {
+            x: parent.pad;
+            y: parent.height - parent.footer - 2px;
+            width: parent.width - 2 * parent.pad;
+            height: parent.footer;
+            spacing: 8px;
+            alignment: start;
+            VerticalLayout {
+                alignment: center;
+                FaceButtonHint { active-position: root.confirm-face-position; }
+            }
+            Text {
+                vertical-alignment: center;
+                text: root.i18n-strings[185];
+                color: #b8bdc5; font-size: 14px; font-weight: 600;
+            }
+            Rectangle { width: 6px; }
+            VerticalLayout {
+                alignment: center;
+                FaceButtonHint { active-position: root.back-face-position; }
+            }
+            Text {
+                vertical-alignment: center;
+                text: root.i18n-strings[697];
+                color: Theme.text-secondary; font-size: 14px; font-weight: 600;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                vertical-alignment: center;
+                text: root.kb-mode-label;
+                color: #6f7580; font-size: 12px;
+            }
         }
     }
 
@@ -1078,7 +1269,7 @@ export component QuickMenuWindow inherits Window {
             - (parent.height * root.splash-split) * root.curtain-progress;
         width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
         height: root.splash-line-height;
-        background: #5b86d6;
+        background: Theme.accent-muted;
         visible: root.lifecycle-active;
     }
 
@@ -1089,7 +1280,7 @@ export component QuickMenuWindow inherits Window {
             - self.height;
         width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
         height: root.splash-line-height;
-        background: #5b86d6;
+        background: Theme.accent-muted;
         visible: root.lifecycle-active;
     }
 
@@ -1100,7 +1291,7 @@ export component QuickMenuWindow inherits Window {
             - 2px;
         width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
         height: 7px;
-        background: #5b86d6;
+        background: Theme.accent-muted;
         opacity: 0.06;
         visible: root.lifecycle-active;
     }
@@ -1112,7 +1303,7 @@ export component QuickMenuWindow inherits Window {
             - 5px;
         width: parent.width * (root.splash-line-fraction + (1 - root.splash-line-fraction) * root.line-progress);
         height: 7px;
-        background: #5b86d6;
+        background: Theme.accent-muted;
         opacity: 0.06;
         visible: root.lifecycle-active;
     }

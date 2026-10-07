@@ -42,3 +42,23 @@ if [ -f "$INITTAB" ]; then
 fi
 
 echo "nuubOS rootfs configured with persistent state externalized"
+
+#
+# Product identity (EPIC-048 update checks, EPIC-051/052 build identifiers).
+#
+NUUBOS_TOP="${BR2_EXTERNAL_NUUBOS_PATH:-$(dirname "$0")/../../..}"
+NUUBOS_VERSION="$(cat "$NUUBOS_TOP/VERSION" 2>/dev/null || echo 0)"
+NUUBOS_BUILD="$(git -C "$NUUBOS_TOP" describe --always --dirty --abbrev=12 2>/dev/null || echo unknown)"
+# Buildroot's /etc/os-release is a link to /usr/lib/os-release: replace both.
+rm -f "$TARGET_DIR/etc/os-release" "$TARGET_DIR/usr/lib/os-release"
+cat > "$TARGET_DIR/etc/os-release" <<OS_RELEASE_EOF
+NAME=nuubOS
+ID=nuubos
+VERSION_ID=$NUUBOS_VERSION
+BUILD_ID=$NUUBOS_BUILD
+PRETTY_NAME="nuubOS $NUUBOS_VERSION"
+HOME_URL="https://github.com/baf93/nuubOS"
+OS_RELEASE_EOF
+ln -s ../../etc/os-release "$TARGET_DIR/usr/lib/os-release"
+mkdir -p "$TARGET_DIR/usr/share/nuubos"
+printf '%s\n' "$NUUBOS_BUILD" > "$TARGET_DIR/usr/share/nuubos/build-id"

@@ -1,0 +1,171 @@
+#!/bin/sh
+# nuubOS OTA updates, installation side (EPIC-048).
+#
+#   install    verify the downloaded payload, mark it for the next restart
+#   apply      pre-power hook (restart/poweroff): install a pending payload
+#   boot       S04, USERDATA mounted: count boots of an unconfirmed update;
+#              the third unconfirmed boot rolls it back and restarts
+#   confirm    nuubUI reached its ready state: the update is kept
+#   rollback   restore the system files the update replaced
+#   status     pending= applied= attempts= result= end=1
+#
+# nuubOS has one system slot. Installing replaces the system files listed
+# in the verified payload (a tar of the root filesystem), after saving the
+# files it replaces into rollback.tar and listing the files it adds. STATE
+# and USERDATA are never part of a payload and mount points are never
+# touched. If the new system does not reach nuubUI within three boots, the
+# previous files come back. A kernel that cannot boot at all is not covered
+# (needs a boot counter in U-Boot): OTA is not production-ready until then.
+# NUUBOS_ROOT prefixes paths for the host test.
+
+R="${NUUBOS_ROOT:-}"
+UPDATE_DIR="$R/userdata/.nuubos-update"
+STATE_DIR="$R/state/update"
+UPDATECTL="${NUUBOS_UPDATECTL:-/usr/bin/nuubos-updatectl}"
+MAX_ATTEMPTS=3
+
+log() { echo "nuubos-update: $*" >&2; }
+
+state_get() { cat "$STATE_DIR/$1" 2>/dev/null; }
+
+state_set()
+{
+    mkdir -p "$STATE_DIR" && printf '%s\n' "$2" > "$STATE_DIR/$1.tmp" && mv "$STATE_DIR/$1.tmp" "$STATE_DIR/$1"
+}
+
+state_clear() { rm -f "${STATE_DIR:?}/$1"; }
+
+# Payload members that belong to the system: no mount point or runtime tree.
+# Files and links of the payload, names exactly as in the archive (tar -T
+# matches them verbatim). Folders are created by tar for their files.
+system_members()
+{
+    gzip -dc "$UPDATE_DIR/payload" | tar -tf - 2>/dev/null |
+        grep -Ev '^(\./)?(dev|proc|sys|run|tmp|state|userdata|media|mnt|var/run|var/log|var/tmp)(/|$)' |
+        grep -Ev '/$|^(\./)?$|(^|/)\.\.(/|$)'
+}
+
+install()
+{
+    "$UPDATECTL" verify >/dev/null 2>&1 || { echo "ERR verify"; return 1; }
+    state_set pending 1 || { echo "ERR storage"; return 1; }
+    sync
+    echo "OK restart-required"
+}
+
+apply()
+{
+    [ "$(state_get pending)" = 1 ] || return 0
+    state_clear pending
+    if ! "$UPDATECTL" verify >/dev/null 2>&1; then
+        state_set result verify-failed
+        log "payload no longer verifies, not installed"
+        return 1
+    fi
+    members="$UPDATE_DIR/members"
+    existing="$UPDATE_DIR/replaced"
+    added="$UPDATE_DIR/added"
+    system_members > "$members" || { state_set result failed; return 1; }
+    : > "$existing"; : > "$added"
+    while IFS= read -r raw; do
+        m="${raw#./}"
+        m="${m%/}"
+        [ -n "$m" ] || continue
+        if [ -e "$R/$m" ] || [ -L "$R/$m" ]; then
+            [ -d "$R/$m" ] && [ ! -L "$R/$m" ] || echo "$m" >> "$existing"
+        else
+            echo "$m" >> "$added"
+            # Folders the update creates go away with it.
+            d="${m%/*}"
+            while [ "$d" != "$m" ] && [ -n "$d" ] && [ ! -e "$R/$d" ]; do
+                echo "$d" >> "$added"
+                m="$d"; d="${d%/*}"
+            done
+        fi
+    done < "$members"
+    # The files about to be replaced, metadata kept inside the archive
+    # (USERDATA is exFAT and could not keep modes or links itself).
+    if ! tar -C "$R/" -cf "$UPDATE_DIR/rollback.tar" -T "$existing" 2>/dev/null; then
+        rm -f "$UPDATE_DIR/rollback.tar"
+        state_set result failed
+        log "rollback archive failed, not installed"
+        return 1
+    fi
+    sync
+    state_set attempts 0
+    state_set applied 1
+    if ! gzip -dc "$UPDATE_DIR/payload" | tar -C "$R/" -xf - -T "$members" 2>/dev/null; then
+        log "extraction failed, rolling back"
+        rollback
+        return 1
+    fi
+    sync
+    state_set result installed
+    log "update installed, waiting for confirmation"
+    return 0
+}
+
+rollback()
+{
+    [ -f "$UPDATE_DIR/rollback.tar" ] || { state_clear applied; return 1; }
+    tar -C "$R/" -xf "$UPDATE_DIR/rollback.tar" 2>/dev/null
+    # Files the update added; folders only when empty again.
+    while IFS= read -r m; do
+        [ -n "$m" ] || continue
+        p="$R/$m"
+        if [ -d "$p" ] && [ ! -L "$p" ]; then
+            rmdir "$p" 2>/dev/null
+        else
+            rm -f "$p"
+        fi
+    done <<EOT
+$(sort -r "$UPDATE_DIR/added")
+EOT
+    sync
+    state_clear applied
+    state_clear attempts
+    state_set result rolled-back
+    rm -f "$UPDATE_DIR/rollback.tar" "$UPDATE_DIR/members" "$UPDATE_DIR/replaced" "$UPDATE_DIR/added"
+    log "previous system restored"
+}
+
+boot()
+{
+    [ "$(state_get applied)" = 1 ] || return 0
+    n=$(( $(state_get attempts || echo 0) + 1 ))
+    state_set attempts "$n"
+    if [ "$n" -ge "$MAX_ATTEMPTS" ]; then
+        log "update not confirmed after $n boots"
+        rollback
+        [ -z "$R" ] && reboot
+    fi
+}
+
+confirm()
+{
+    [ "$(state_get applied)" = 1 ] || { echo OK; return 0; }
+    state_clear applied
+    state_clear attempts
+    state_set result ok
+    rm -f "$UPDATE_DIR/rollback.tar" "$UPDATE_DIR/members" "$UPDATE_DIR/replaced" "$UPDATE_DIR/added" \
+          "$UPDATE_DIR/payload"
+    sync
+    echo OK
+}
+
+case "${1:-}" in
+    install) install ;;
+    apply)
+        # Called with the lifecycle action; Sleep never installs.
+        case "${2:-restart}" in restart|poweroff) apply ;; esac
+        ;;
+    boot) boot ;;
+    confirm) confirm ;;
+    rollback) rollback && echo OK ;;
+    status)
+        printf 'pending=%s\napplied=%s\nattempts=%s\nresult=%s\nend=1\n' \
+            "$(state_get pending || echo 0)" "$(state_get applied || echo 0)" \
+            "$(state_get attempts || echo 0)" "$(state_get result)"
+        ;;
+    *) echo "Usage: nuubos-update-apply install|apply [ACTION]|boot|confirm|rollback|status" >&2; exit 2 ;;
+esac

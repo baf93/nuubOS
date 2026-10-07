@@ -520,7 +520,13 @@ fn build_home(ui: &HomeWindow) {
                 HomeCard {
                     key: a.id.clone().into(),
                     kind: KIND_APP,
-                    title: a.name.clone().into(),
+                    /* Built-in nuubOS applications have localized names. */
+                    title: match a.id.as_str() {
+                        "files" => tr(ui, 609, "Files").into(),
+                        "media" => tr(ui, 665, "Media").into(),
+                        "web" => tr(ui, 678, "Web").into(),
+                        _ => a.name.clone().into(),
+                    },
                     cover_path: a.icon.clone().into(),
                     has_cover: icon.is_some(),
                     cover: icon.map(|(i, _)| i).unwrap_or_default(),
@@ -714,14 +720,19 @@ fn emulation_command(command: &str) -> std::io::Result<String> {
 }
 
 fn launch_game(ui: &HomeWindow, card: &HomeCard) {
-    if !card.available {
+    launch_by_id(ui, card.key.as_str(), card.available);
+}
+
+/* Also Play in Game Details. */
+pub fn launch_by_id(ui: &HomeWindow, id: &str, available: bool) {
+    if !available {
         show_notice(ui, tr(ui, 434, "This game is not available"));
         return;
     }
     if GAME_RUNNING.load(Ordering::SeqCst) {
         return;
     }
-    let command = format!("LAUNCH\t{}", card.key);
+    let command = format!("LAUNCH\t{}", id);
     let weak = ui.as_weak();
     thread::spawn(move || {
         let reason = match emulation_command(&command) {
@@ -879,6 +890,11 @@ fn close_grid(ui: &HomeWindow) {
 /* Input                                                            */
 /* ---------------------------------------------------------------- */
 
+/* Home notice for other modules (e.g. after Delete Game). */
+pub fn notice(ui: &HomeWindow, text: String) {
+    show_notice(ui, text);
+}
+
 fn show_notice(ui: &HomeWindow, text: String) {
     let serial = STATE.with(|st| {
         let mut st = st.borrow_mut();
@@ -999,8 +1015,12 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
             match card.kind {
                 KIND_FAVORITES | KIND_COLLECTION | KIND_SYSTEM => open_grid(ui, &card),
                 KIND_GAME => launch_game(ui, &card),
-                /* Built-in nuubUI application (EPIC-025). */
+                /* Built-in nuubUI applications (EPIC-025, EPIC-026). */
                 _ if card.key.as_str() == "moonlight" => crate::moonlight::open(ui),
+                _ if card.key.as_str() == "steamlink" => crate::steamlink::open(ui),
+                _ if card.key.as_str() == "files" => crate::filesui::open(ui),
+                _ if card.key.as_str() == "media" => crate::mediaui::open(ui),
+                _ if card.key.as_str() == "web" => crate::webui::open(ui),
                 /* Other applications need the future application session
                  * service. */
                 _ => show_notice(ui, tr(ui, 411, "Launching is not available yet")),
@@ -1011,6 +1031,15 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
             if let Some(card) = focused_card(ui) {
                 play_ui_sound("menu_confirm");
                 toggle_favorite(ui, &card);
+            }
+            return;
+        }
+        /* Game Details (EPIC-016): A still launches at once. */
+        "face_west" => {
+            if let Some(card) = focused_card(ui).filter(|c| c.kind == KIND_GAME) {
+                play_ui_sound("menu_confirm");
+                let cover = card.has_cover.then(|| card.cover.clone());
+                crate::gameui::open_details(ui, card.key.as_str(), card.title.as_str(), cover);
             }
             return;
         }

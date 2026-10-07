@@ -1,0 +1,52 @@
+From: nuubOS <noreply@nuubos.invalid>
+Subject: [PATCH] avcodec: accept a DRM device for V4L2 request hwaccels
+
+The earlier V4L2 request series (v4l2-request-n6.1.x / n7.0) used a DRM
+hwdevice for DRM_PRIME output. Clients written for it pass
+AV_HWDEVICE_TYPE_DRM: moonlight-embedded (nuubOS platform patch) and the
+Valve Steam Link application, which looks for a DRM_PRIME hw config and
+creates a DRM device. Replace such a device with a V4L2 request device in
+ff_get_format() instead of rejecting the hwaccel.
+---
+--- a/libavcodec/decode.c
++++ b/libavcodec/decode.c
+@@ -1273,6 +1273,29 @@
+     av_buffer_unref(&avctx->hw_frames_ctx);
+ }
+ 
++/*
++ * Applications written for the earlier V4L2 request hwaccel series pass a DRM
++ * device context (AV_HWDEVICE_TYPE_DRM) for DRM_PRIME output. Replace it with
++ * a V4L2 request device so that they keep working with this series.
++ */
++static int v4l2request_replace_drm_device(AVCodecContext *avctx,
++                                          const AVCodecHWConfig *config)
++{
++    const AVHWDeviceContext *device_ctx =
++        (AVHWDeviceContext*)avctx->hw_device_ctx->data;
++    AVBufferRef *ref = NULL;
++
++    if (config->device_type != AV_HWDEVICE_TYPE_V4L2REQUEST ||
++        device_ctx->type != AV_HWDEVICE_TYPE_DRM)
++        return 0;
++    if (av_hwdevice_ctx_create(&ref, AV_HWDEVICE_TYPE_V4L2REQUEST,
++                               NULL, NULL, 0) < 0)
++        return 0;
++    av_buffer_unref(&avctx->hw_device_ctx);
++    avctx->hw_device_ctx = ref;
++    return 1;
++}
++
+ int ff_get_format(AVCodecContext *avctx, const enum AVPixelFormat *fmt)
+ {
+     const AVPixFmtDescriptor *desc;
+@@ -1365,7 +1388,8 @@
+                    avctx->hw_device_ctx) {
+             const AVHWDeviceContext *device_ctx =
+                 (AVHWDeviceContext*)avctx->hw_device_ctx->data;
+-            if (device_ctx->type != config->device_type) {
++            if (device_ctx->type != config->device_type &&
++                !v4l2request_replace_drm_device(avctx, config)) {
+                 av_log(avctx, AV_LOG_ERROR, "Invalid setup for format %s: "
+                        "does not match the type of the provided device "
+                        "context.\n", desc->name);

@@ -1,0 +1,122 @@
+From: nuubOS <noreply@nuubos>
+Subject: [PATCH] nuubOS: zoom actions and page reports for the session service
+
+Adds zoom-in/zoom-out/zoom-reset remote actions (and cogctl commands):
+the Ctrl+=/- shortcuts depend on the keyboard layout. Prints
+"@nuubos uri=" / "@nuubos title=" / "@nuubos zoom=" lines on stdout so
+nuubos-webd knows the page being shown (bookmarks, history).
+
+Upstream-Status: Inappropriate [nuubOS specific]
+---
+diff --color -ruN a/launcher/cogctl.c b/launcher/cogctl.c
+--- a/launcher/cogctl.c	2026-10-07 13:38:07.278725112 +0200
++++ b/launcher/cogctl.c	2026-10-07 13:38:07.309625230 +0200
+@@ -305,6 +305,21 @@
+             .handler = cmd_generic_no_args,
+         },
+         {
++            .name = "zoom-in",
++            .desc = "Enlarge the page",
++            .handler = cmd_generic_no_args,
++        },
++        {
++            .name = "zoom-out",
++            .desc = "Reduce the page",
++            .handler = cmd_generic_no_args,
++        },
++        {
++            .name = "zoom-reset",
++            .desc = "Restore the page size",
++            .handler = cmd_generic_no_args,
++        },
++        {
+             .name = NULL,
+         },
+     };
+diff --color -ruN a/launcher/cog-launcher.c b/launcher/cog-launcher.c
+--- a/launcher/cog-launcher.c	2026-10-07 13:38:07.278660180 +0200
++++ b/launcher/cog-launcher.c	2026-10-07 13:38:07.309505562 +0200
+@@ -151,6 +151,64 @@
+     webkit_web_view_reload(cog_shell_get_web_view(launcher->shell));
+ }
+ 
++#define NUUBOS_ZOOM_STEP 0.1
++#define NUUBOS_ZOOM_MIN 0.3
++#define NUUBOS_ZOOM_MAX 3.0
++
++/* nuubOS: zoom from the remote control interface (keyboard shortcuts
++ * depend on the active keyboard layout). */
++static void
++nuubos_zoom_by(CogLauncher *launcher, double delta)
++{
++    WebKitWebView *web_view = cog_shell_get_web_view(launcher->shell);
++    double         level = delta == 0 ? 1.0 : webkit_web_view_get_zoom_level(web_view) + delta;
++
++    webkit_web_view_set_zoom_level(web_view, CLAMP(level, NUUBOS_ZOOM_MIN, NUUBOS_ZOOM_MAX));
++    g_print("@nuubos zoom=%d\n", (int) (webkit_web_view_get_zoom_level(web_view) * 100 + 0.5));
++}
++
++static void
++on_action_zoom_in(G_GNUC_UNUSED GAction *action, G_GNUC_UNUSED GVariant *param, CogLauncher *launcher)
++{
++    nuubos_zoom_by(launcher, NUUBOS_ZOOM_STEP);
++}
++
++static void
++on_action_zoom_out(G_GNUC_UNUSED GAction *action, G_GNUC_UNUSED GVariant *param, CogLauncher *launcher)
++{
++    nuubos_zoom_by(launcher, -NUUBOS_ZOOM_STEP);
++}
++
++static void
++on_action_zoom_reset(G_GNUC_UNUSED GAction *action, G_GNUC_UNUSED GVariant *param, CogLauncher *launcher)
++{
++    nuubos_zoom_by(launcher, 0);
++}
++
++/* nuubOS: the session service learns the page being shown from stdout,
++ * one "@nuubos key=value" line per change (no line breaks in values). */
++static void
++nuubos_report(const char *key, const char *value)
++{
++    g_autofree char *flat = g_strdup(value ? value : "");
++    for (char *p = flat; *p; p++)
++        if (*p == '\n' || *p == '\r' || *p == '\t')
++            *p = ' ';
++    g_print("@nuubos %s=%s\n", key, flat);
++}
++
++static void
++on_web_view_uri_changed(WebKitWebView *web_view, G_GNUC_UNUSED GParamSpec *pspec, G_GNUC_UNUSED void *userdata)
++{
++    nuubos_report("uri", webkit_web_view_get_uri(web_view));
++}
++
++static void
++on_web_view_title_changed(WebKitWebView *web_view, G_GNUC_UNUSED GParamSpec *pspec, G_GNUC_UNUSED void *userdata)
++{
++    nuubos_report("title", webkit_web_view_get_title(web_view));
++}
++
+ static void
+ on_action_open(G_GNUC_UNUSED GAction *action, GVariant *param, CogLauncher *launcher)
+ {
+@@ -313,6 +371,8 @@
+     }
+ 
+     g_signal_connect(web_view, "create", G_CALLBACK(on_web_view_create), NULL);
++    g_signal_connect(web_view, "notify::uri", G_CALLBACK(on_web_view_uri_changed), NULL);
++    g_signal_connect(web_view, "notify::title", G_CALLBACK(on_web_view_title_changed), NULL);
+ 
+     if (platform) {
+         cog_platform_init_web_view(platform, web_view);
+@@ -1244,6 +1304,9 @@
+     cog_launcher_add_action(launcher, "next", on_action_next, NULL);
+     cog_launcher_add_action(launcher, "reload", on_action_reload, NULL);
+     cog_launcher_add_action(launcher, "open", on_action_open, G_VARIANT_TYPE_STRING);
++    cog_launcher_add_action(launcher, "zoom-in", on_action_zoom_in, NULL);
++    cog_launcher_add_action(launcher, "zoom-out", on_action_zoom_out, NULL);
++    cog_launcher_add_action(launcher, "zoom-reset", on_action_zoom_reset, NULL);
+ 
+     g_application_add_main_option_entries(G_APPLICATION(object), s_cli_options);
+     cog_launcher_add_web_settings_option_entries(launcher);

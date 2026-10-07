@@ -1,0 +1,35 @@
+config BR2_PACKAGE_STEAMLINK_RUNTIME
+	bool "steamlink-runtime"
+	depends on BR2_INSTALL_LIBSTDCPP # double-conversion, Qt
+	depends on BR2_PACKAGE_HAS_LIBEGL
+	depends on BR2_PACKAGE_HAS_LIBGLES
+	depends on BR2_PACKAGE_HAS_UDEV # ffmpeg v4l2 request
+	depends on BR2_USE_MMU # libkrb5, dbus
+	depends on !BR2_STATIC_LIBS
+	# Not selected: libepoxy is in a Kconfig cycle with wayland (weston
+	# XWayland), and the clients of this package depend on wayland.
+	depends on BR2_PACKAGE_LIBEPOXY
+	select BR2_PACKAGE_DBUS
+	select BR2_PACKAGE_DOUBLE_CONVERSION
+	select BR2_PACKAGE_FFMPEG
+	select BR2_PACKAGE_FONTCONFIG
+	select BR2_PACKAGE_FREETYPE
+	select BR2_PACKAGE_HARFBUZZ
+	select BR2_PACKAGE_LIBDRM
+	select BR2_PACKAGE_LIBGLIB2
+	select BR2_PACKAGE_LIBKRB5
+	select BR2_PACKAGE_LIBPNG
+	select BR2_PACKAGE_LIBXKBCOMMON
+	select BR2_PACKAGE_MD4C
+	select BR2_PACKAGE_ZLIB
+	select BR2_PACKAGE_ZSTD
+	help
+	  What the Valve Steam Link application (arm64, Raspberry Pi
+	  OS build) needs besides the libraries it bundles: FFmpeg 7.1
+	  libavcodec/libavutil (H.264/HEVC through the V4L2 request
+	  hwaccel), libepoxy, double-conversion, md4c, zstd, the
+	  Kerberos GSSAPI library linked by its Qt 5, and the Qt 5.14.1
+	  Wayland platform plugin Valve does not ship (built here from
+	  Qt sources). The Steam Link application itself is proprietary
+	  and is not part of the image: it is downloaded from Valve on
+	  the device.

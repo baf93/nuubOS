@@ -12,6 +12,27 @@ impl Platform for P {
     }
 }
 
+fn gen(rows: &[(&str, &str, &str, bool, i32)]) -> ModelRc<GenRow> {
+    /* (title, value, detail, navigates, toggle: -1 none, 0 off, 1 on) */
+    let v: Vec<GenRow> = rows
+        .iter()
+        .map(|(t, v, d, n, tg)| GenRow {
+            title: (*t).into(),
+            value: (*v).into(),
+            detail: (*d).into(),
+            navigates: *n,
+            toggle: *tg >= 0,
+            toggle_on: *tg == 1,
+            enabled: true,
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(v)))
+}
+
+fn s(ui: &HomeWindow, i: usize) -> String {
+    ui.get_i18n_strings().row_data(i).unwrap_or_default().to_string()
+}
+
 fn strings() -> ModelRc<SharedString> {
     let lang = std::env::var("LANG_FILE").unwrap_or("/i18n/en.lang".into());
     let v: Vec<SharedString> = std::fs::read_to_string(lang)
@@ -97,8 +118,43 @@ fn quick_menu(win: &Rc<MinimalSoftwareWindow>) {
             shot(win, w, h, name);
         }
     }
+    /* Steam Link session (EPIC-026): Resume and Quit Steam Link only. */
+    qm.set_stream_steamlink(true);
+    qm.set_selected_index(16);
+    qm.set_game_confirm_index(-1);
+    for (w, h) in sizes {
+        shot(win, w, h, "qm_steamlink");
+    }
+    qm.set_stream_steamlink(false);
     qm.set_stream_section_visible(false);
     qm.set_game_confirm_index(-1);
+    /* Web Mode (EPIC-030): WEB section (Zoom adjustable), then the
+     * keyboard bottom sheet surface (236 logical px high). */
+    qm.set_web_section_visible(true);
+    qm.set_web_zoom_label("110%".into());
+    qm.set_web_ime_active(false);
+    qm.set_selected_index(24);
+    for (w, h) in sizes {
+        shot(win, w, h, "qm_web");
+    }
+    qm.set_web_section_visible(false);
+    qm.set_menu_panel_visible(false);
+    qm.set_surface_mode(2);
+    let row = |keys: &[&str]| -> ModelRc<SharedString> {
+        ModelRc::from(Rc::new(VecModel::from(keys.iter().map(|k| SharedString::from(*k)).collect::<Vec<_>>())))
+    };
+    qm.set_kb_row_zero(row(&["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]));
+    qm.set_kb_row_one(row(&["a", "s", "d", "f", "g", "h", "j", "k", "l", "'"]));
+    qm.set_kb_row_two(row(&["⇧", "z", "x", "c", "v", "b", "n", "m", ",", "?"]));
+    qm.set_kb_row_three(row(&["123", "#+=", "@", "/", "␣", "␣", ".", "-", "⌫", "Done"]));
+    qm.set_kb_preview("nuubos handheld".into());
+    qm.set_kb_mode_label("QWERTY".into());
+    qm.set_kb_index(14);
+    for w in [640u32, 720, 1280] {
+        shot(win, w, 236, "qm_keyboard");
+    }
+    qm.set_surface_mode(0);
+    qm.set_menu_panel_visible(true);
     qm.set_switch_user_visible(true);
 
     /* Notifications: the copy drawn over the open Quick Menu, then the
@@ -204,10 +260,76 @@ fn main() {
         ("general_users", Box::new(|ui| { ui.set_settings_view(25); ui.set_user_list_index(0); })),
         ("connectivity", Box::new(|ui| { ui.set_settings_selected_index(1); ui.set_settings_view(1); ui.set_connectivity_selected_index(4); })),
         ("wifi_list", Box::new(|ui| { ui.set_settings_view(2); ui.set_wifi_network_index(2); ui.set_wifi_network_scroll_offset(0); })),
-        ("display_audio", Box::new(|ui| { ui.set_settings_selected_index(3); ui.set_settings_view(18); ui.set_display_audio_index(5); ui.set_display_audio_scroll_offset(1); })),
-        ("system", Box::new(|ui| { ui.set_settings_selected_index(4); ui.set_settings_view(19); ui.set_system_index(4); ui.set_system_scroll_offset(0); })),
+        ("display_audio", Box::new(|ui| { ui.set_settings_selected_index(4); ui.set_settings_view(18); ui.set_display_audio_index(5); ui.set_display_audio_scroll_offset(1); })),
+        ("system", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_settings_view(19); ui.set_system_index(4); ui.set_system_scroll_offset(0); })),
         ("controllers", Box::new(|ui| { ui.set_settings_selected_index(2); ui.set_settings_view(0); })),
+        ("gaming_preview", Box::new(|ui| { ui.set_settings_selected_index(3); ui.set_settings_view(0); })),
+        ("gaming", Box::new(|ui| { ui.set_settings_selected_index(3); ui.set_settings_view(68); ui.set_gaming_index(3); })),
         ("restore", Box::new(|ui| { ui.set_settings_view(22); })),
+        ("game_details", Box::new(|ui| {
+            ui.set_details_active(true); ui.set_settings_view(50); ui.set_gen_index(0); ui.set_gen_scroll(0);
+            ui.set_details_title("Super Mario World".into()); ui.set_details_subtitle("Super Nintendo".into());
+            ui.set_details_description("Mario and Luigi travel to Dinosaur Land, where Bowser has kidnapped Princess Toadstool again.".into());
+            ui.set_gen_section("Super Nintendo".into()); ui.set_gen_select(true);
+            ui.set_gen_rows(gen(&[(&s(ui, 413), "", "", false, -1), (&s(ui, 412), "", "", false, 1),
+                (&s(ui, 537), "1", "Platformers", true, -1), (&s(ui, 524), "", "", true, -1),
+                (&s(ui, 560), "", "", false, -1), (&s(ui, 551), &s(ui, 403), "", false, -1),
+                (&s(ui, 552), "12 h 05 min", "", false, -1), (&s(ui, 553), "Nintendo EAD", "", false, -1)]));
+        })),
+        ("game_delete", Box::new(|ui| {
+            ui.set_details_active(true); ui.set_settings_view(50); ui.set_gen_index(3); ui.set_gen_scroll(0);
+            ui.set_details_title("Super Mario World".into()); ui.set_gen_section("Super Nintendo".into());
+            ui.set_gen_rows(gen(&[(&s(ui, 540), "", &s(ui, 543), false, 0), (&s(ui, 549), "", "", false, -1),
+                (&s(ui, 558), "", "snes/Super Mario World (USA).sfc", false, -1), (&s(ui, 544), "", &s(ui, 546), false, -1)]));
+        })),
+        ("game_settings", Box::new(|ui| {
+            ui.set_details_active(true); ui.set_settings_view(51); ui.set_gen_index(1); ui.set_gen_scroll(0);
+            ui.set_details_title("Super Mario World".into()); ui.set_gen_section(s(ui, 524).into());
+            ui.set_gen_rows(gen(&[(&s(ui, 525), &s(ui, 528).replace("{0}", "snes9x"), "", true, -1),
+                (&s(ui, 526), "4:3", "", true, -1), (&s(ui, 527), &s(ui, 534), "", true, -1),
+                (&s(ui, 535), "", &s(ui, 536), false, -1)]));
+        })),
+        ("bios", Box::new(|ui| {
+            ui.set_details_active(false); ui.set_settings_selected_index(3); ui.set_settings_view(52); ui.set_gen_index(1); ui.set_gen_scroll(0);
+            ui.set_gen_section(s(ui, 576).into()); ui.set_gen_notice(s(ui, 581).into());
+            let p = s(ui, 582).replace("{0}", "1").replace("{1}", "3");
+            ui.set_gen_rows(gen(&[("PlayStation", &s(ui, 66), &p, true, -1), ("Mega-CD / Sega CD", &s(ui, 577), &p, true, -1),
+                ("Sega Saturn", &s(ui, 578), &p, true, -1), ("Game Boy", &s(ui, 579), &p, true, -1)]));
+        })),
+        ("achievements", Box::new(|ui| {
+            ui.set_details_active(false); ui.set_settings_selected_index(3); ui.set_settings_view(54); ui.set_gen_index(2); ui.set_gen_scroll(0);
+            ui.set_gen_section(s(ui, 584).into()); ui.set_gen_notice("".into());
+            ui.set_gen_rows(gen(&[(&s(ui, 588), "alice", "", false, -1), (&s(ui, 112), "", "", false, 1),
+                (&s(ui, 585), "", &s(ui, 586), false, 0), (&s(ui, 567), "", "", false, -1)]));
+        })),
+        ("metadata", Box::new(|ui| {
+            ui.set_details_active(false); ui.set_settings_selected_index(3); ui.set_settings_view(55); ui.set_gen_index(2); ui.set_gen_scroll(0);
+            ui.set_gen_section(s(ui, 564).into());
+            ui.set_gen_rows(gen(&[(&s(ui, 564), &s(ui, 67), &s(ui, 569), false, -1), (&s(ui, 565), &s(ui, 566), "", false, -1),
+                (&s(ui, 568), &s(ui, 571), "", false, -1)]));
+        })),
+        ("hidden", Box::new(|ui| {
+            ui.set_details_active(false); ui.set_settings_selected_index(3); ui.set_settings_view(56); ui.set_gen_index(0); ui.set_gen_scroll(0);
+            ui.set_gen_section(s(ui, 541).into()); ui.set_gen_notice("".into());
+            ui.set_gen_rows(gen(&[("Tetris", "", "gb", false, 1), ("Pac-Man", "", "arcade", false, 1)]));
+        })),
+        ("web", Box::new(|ui| {
+            ui.set_details_active(true); ui.set_details_has_cover(false); ui.set_settings_view(67); ui.set_gen_index(0); ui.set_gen_scroll(0);
+            ui.set_details_shell_title(s(ui, 678).into()); ui.set_details_title(s(ui, 678).into()); ui.set_details_subtitle("".into());
+            ui.set_details_description(s(ui, 698).into()); ui.set_gen_section(s(ui, 678).into()); ui.set_gen_select(true); ui.set_gen_notice("".into());
+            ui.set_gen_rows(gen(&[(&s(ui, 679), "", "", true, -1), (&s(ui, 681), "3", "", true, -1), (&s(ui, 682), "", "", true, -1),
+                (&s(ui, 686), "", "", false, -1), (&s(ui, 687), "", &s(ui, 688), false, -1)]));
+        })),
+        ("web_bookmarks", Box::new(|ui| {
+            ui.set_settings_view(67); ui.set_gen_index(1); ui.set_gen_section(s(ui, 681).into());
+            ui.set_settings_north_hint(s(ui, 644).into());
+            ui.set_gen_rows(gen(&[("Wikipedia, the free encyclopedia", "", "en.wikipedia.org", false, -1),
+                ("Libretro Docs", "", "docs.libretro.com", false, -1), ("nuubOS on GitHub", "", "github.com/baf93/nuubOS", false, -1)]));
+        })),
+        ("diagnostics", Box::new(|ui| {
+            ui.set_details_active(false); ui.set_settings_north_hint("".into()); ui.set_settings_selected_index(5); ui.set_settings_view(27); ui.set_diag_index(0); ui.set_recovery_notice("nuubos-support-20261007-101500.tar.gz".into()); })),
+        ("recovery", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_settings_view(28); ui.set_recovery_index(3); ui.set_recovery_armed(3); ui.set_recovery_stage(1); })),
+        ("recovery_safe", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_safe_mode(true); ui.set_settings_view(28); ui.set_recovery_index(4); })),
         ("dropdown", Box::new(|ui| {
             ui.set_settings_view(19); ui.set_settings_choice_open(true); ui.set_settings_choice_title("Sleep After".into());
             let o: Vec<SettingsChoiceEntry> = ["Off","1 min","2 min","5 min","10 min","15 min","30 min","60 min"].iter().map(|s| SettingsChoiceEntry{ value: (*s).into(), label: (*s).into() }).collect();
@@ -325,9 +447,35 @@ fn main() {
         ui.set_moonlight_codec_label("H.264".into());
         ui.set_moonlight_bitrate_label(s.row_data(122).unwrap_or_default());
     })));
+    /* Steam Link page (settings-view 45, EPIC-026). */
+    scenes.push(("steamlink_absent", Box::new(|ui| {
+        ui.set_moonlight_active(false);
+        ui.set_steamlink_active(true);
+        ui.set_settings_view(45);
+        ui.set_steamlink_state("absent".into());
+        ui.set_steamlink_download_detail("".into());
+        ui.set_steamlink_index(0);
+    })));
+    scenes.push(("steamlink_downloading", Box::new(|ui| {
+        ui.set_steamlink_state("installing".into());
+        ui.set_steamlink_progress_label("42%".into());
+    })));
+    scenes.push(("steamlink_installed", Box::new(|ui| {
+        let s = strings();
+        ui.set_steamlink_state("installed".into());
+        ui.set_steamlink_version_label(format!("{} 1.3.32.316", s.row_data(485).unwrap_or_default()).into());
+        ui.set_steamlink_update_title(s.row_data(487).unwrap_or_default());
+        ui.set_steamlink_update_value(s.row_data(489).unwrap_or_default());
+        ui.set_steamlink_index(1);
+    })));
+    scenes.push(("steamlink_remove", Box::new(|ui| {
+        ui.set_steamlink_index(2);
+        ui.set_steamlink_remove_confirm(true);
+    })));
     /* Top bar with connected controllers (battery dots) and BT headphones. */
     scenes.push(("topbar_controllers_2", Box::new(|ui| {
         ui.set_moonlight_active(false);
+        ui.set_steamlink_active(false);
         ui.set_oob_active(false);
         ui.set_settings_open(false);
         ui.set_audio_bluetooth_available(true);
@@ -416,6 +564,18 @@ fn main() {
     scenes.push(("home_notice", Box::new(|ui| {
         ui.set_library_open(false); ui.set_home_row(0); ui.set_home_recent_index(1);
         ui.set_home_notice(ui.get_i18n_strings().row_data(411).unwrap_or_default());
+    })));
+    /* Last: a theme from the built-in set (EPIC-008) on the Home screen. */
+    scenes.push(("theme_ember", Box::new(|ui| {
+        ui.set_home_notice("".into());
+        ui.set_library_open(false);
+        ui.set_home_row(0);
+        let t = ui.global::<Theme>();
+        let c = |v: u32| slint::Color::from_rgb_u8((v >> 16) as u8, (v >> 8) as u8, v as u8);
+        t.set_accent(c(0xff7a2f)); t.set_accent_light(c(0xffa36b)); t.set_accent_muted(c(0xd46a2e));
+        t.set_accent_text(c(0xffe2cf)); t.set_focus_fill(c(0x3a2214)); t.set_text(c(0xf7f4f2));
+        t.set_text_secondary(c(0xb3aaa4)); t.set_text_dim(c(0x988f89)); t.set_text_faint(c(0x857c76));
+        t.set_background(c(0x100d0c)); t.set_surface(c(0x2b2522)); t.set_border(c(0x3b332f));
     })));
     for (name, f) in &scenes {
         f(&ui);

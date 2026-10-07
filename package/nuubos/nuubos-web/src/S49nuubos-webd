@@ -1,0 +1,39 @@
+#!/bin/sh
+# nuubOS Web Mode (EPIC-030).
+
+DAEMON=/usr/sbin/nuubos-webd
+PIDFILE=/run/nuubos/webd.pid
+SOCKET=/run/nuubos/webd.sock
+
+webd_running()
+{
+    [ -r "$PIDFILE" ] || return 1
+    PID="$(cat "$PIDFILE" 2>/dev/null)"
+    [ -n "$PID" ] || return 1
+    [ "$(tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p')" = "$DAEMON" ]
+}
+
+start_service()
+{
+    mkdir -p /run/nuubos
+    webd_running && return 0
+    rm -f "$PIDFILE" "$SOCKET"
+    "$DAEMON" >/run/nuubos/webd.log 2>&1 &
+    return 0
+}
+
+stop_service()
+{
+    if webd_running; then
+        kill -TERM "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null || true
+    fi
+    rm -f "$PIDFILE" "$SOCKET"
+    return 0
+}
+
+case "${1:-}" in
+    start) start_service ;;
+    stop) stop_service ;;
+    restart) stop_service; start_service ;;
+    *) echo "Usage: $0 {start|stop|restart}" >&2; exit 1 ;;
+esac

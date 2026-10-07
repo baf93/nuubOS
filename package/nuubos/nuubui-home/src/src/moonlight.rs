@@ -45,9 +45,10 @@ struct Host {
     probing: bool,
 }
 
+/* nuubos-streamd snapshot (Moonlight and Steam Link). */
 #[derive(Clone, Default)]
-struct Snapshot {
-    state: String,
+pub(crate) struct Snapshot {
+    pub(crate) state: String,
     resolution: String,
     fps: i32,
     codec: String,
@@ -59,11 +60,17 @@ struct Snapshot {
     apps_state: String,
     hosts: Vec<Host>,
     apps: Vec<String>,
+    pub(crate) steamlink_installed: bool,
+    pub(crate) steamlink_version: String,
+    pub(crate) steamlink_latest: String,
+    pub(crate) steamlink_job: String,
+    pub(crate) steamlink_progress: i32,
+    pub(crate) steamlink_error: String,
 }
 
-static SNAPSHOT: Mutex<Option<Snapshot>> = Mutex::new(None);
+pub(crate) static SNAPSHOT: Mutex<Option<Snapshot>> = Mutex::new(None);
 
-fn command(line: &str) -> std::io::Result<String> {
+pub(crate) fn command(line: &str) -> std::io::Result<String> {
     let mut stream = UnixStream::connect(STREAM_SOCKET)?;
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     stream.write_all(line.as_bytes())?;
@@ -74,7 +81,7 @@ fn command(line: &str) -> std::io::Result<String> {
 }
 
 /* Fire-and-forget: the outcome comes back in the snapshot. */
-fn send(line: String) {
+pub(crate) fn send(line: String) {
     thread::spawn(move || {
         if let Err(error) = command(&line) {
             eprintln!("home: streamd {line} failed={error}");
@@ -97,6 +104,12 @@ fn parse(text: &str) -> Snapshot {
             "pairing_pin" => s.pairing_pin = value.into(),
             "apps_host" => s.apps_host = value.into(),
             "apps_state" => s.apps_state = value.into(),
+            "steamlink" => s.steamlink_installed = value == "installed",
+            "steamlink_version" => s.steamlink_version = value.into(),
+            "steamlink_latest" => s.steamlink_latest = value.into(),
+            "steamlink_job" => s.steamlink_job = value.into(),
+            "steamlink_progress" => s.steamlink_progress = value.parse().unwrap_or(-1),
+            "steamlink_error" => s.steamlink_error = value.into(),
             "host" => {
                 let f: Vec<&str> = value.split('\t').collect();
                 if f.len() >= 7 {
@@ -204,7 +217,8 @@ fn apply(ui: &HomeWindow, s: &Snapshot) {
     update_scroll(ui);
 }
 
-/* Follows nuubos-streamd: the pages, and stream start/end for Home. */
+/* Follows nuubos-streamd: the pages (Moonlight and Steam Link), and
+ * stream start/end for Home. */
 pub fn start_listener(ui: &HomeWindow) {
     let weak = ui.as_weak();
     thread::spawn(move || loop {
@@ -228,6 +242,7 @@ pub fn start_listener(ui: &HomeWindow) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = weak.upgrade() {
                             apply(&ui, &snapshot);
+                            crate::steamlink::apply(&ui, &snapshot);
                             if changed {
                                 on_game_session(&ui, running);
                             }

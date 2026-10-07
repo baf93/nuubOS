@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- nuubOS application icon for Steam Link (remote play from a Steam PC).
+     Original artwork of the nuubOS project, MIT licensed like this package;
+     it does not use Valve's Steam or Steam Link logos. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <path d="M60 30 A50 50 0 0 1 132 30" fill="none" stroke="#3a86ff" stroke-width="10" stroke-linecap="round"/>
+  <path d="M76 52 A26 26 0 0 1 116 52" fill="none" stroke="#3a86ff" stroke-width="10" stroke-linecap="round"/>
+  <path d="M58 82 H134 C156 82 168 100 172 128 C175 150 166 162 152 162 C140 162 134 150 126 140 H66 C58 150 52 162 40 162 C26 162 17 150 20 128 C24 100 36 82 58 82 Z"
+        fill="none" stroke="#e6e8ec" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M60 106 V130 M48 118 H72" stroke="#e6e8ec" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="128" cy="110" r="7" fill="#3a86ff"/>
+  <circle cx="146" cy="126" r="7" fill="#e6e8ec"/>
+</svg>

@@ -1,0 +1,3 @@
+#!/bin/sh
+# OTA (EPIC-048): a pending verified update is installed on Restart/Power Off.
+exec /usr/sbin/nuubos-update-apply apply "${1:-}"

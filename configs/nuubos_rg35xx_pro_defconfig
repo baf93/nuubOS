@@ -17,7 +17,7 @@ BR2_LINUX_KERNEL_INTREE_DTS_NAME="allwinner/sun50i-h700-anbernic-rg-sp allwinner
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
-# BR2_TARGET_ROOTFS_TAR is not set
+BR2_TARGET_ROOTFS_TAR=y
 
 BR2_TARGET_ARM_TRUSTED_FIRMWARE=y
 BR2_TARGET_ARM_TRUSTED_FIRMWARE_CUSTOM_VERSION=y
@@ -150,20 +150,35 @@ BR2_PACKAGE_NUUBOS_LIGHTING=y
 BR2_PACKAGE_NUUBOS_QUICK_MENU=y
 
 BR2_PACKAGE_NUUBOS_SYSTEM=y
+BR2_PACKAGE_NUUBOS_RECOVERY=y
+BR2_PACKAGE_NUUBOS_JOBS=y
+BR2_PACKAGE_NUUBOS_SCRAPER=y
+BR2_PACKAGE_NUUBOS_REMOTE=y
+BR2_PACKAGE_NUUBOS_FILES=y
+BR2_PACKAGE_NUUBOS_THEMES=y
+BR2_PACKAGE_NUUBOS_UPDATE=y
+BR2_PACKAGE_MPV=y
+BR2_PACKAGE_NUUBOS_MEDIA=y
+BR2_PACKAGE_SYNCTHING=y
+BR2_PACKAGE_NUUBOS_SYNC=y
+# Web Mode (EPIC-030): parked until after the RC (user decision
+# 2026-10-07). Re-enable with BR2_PACKAGE_NUUBOS_WEB=y and
+# BR2_PACKAGE_COG_PROGRAMS_HOME_URI="" (CLAUDE.md §37.27).
 BR2_PACKAGE_NUUBOS_EMULATION=y
 
 # PC game streaming (EPIC-025): Moonlight with VPU (Cedrus) decoding.
 # FFmpeg holds only what the V4L2 request hwaccels need.
+BR2_PACKAGE_LIBEPOXY=y
 BR2_PACKAGE_NUUBOS_STREAMING=y
 # BR2_PACKAGE_FFMPEG_FFMPEG is not set
 BR2_PACKAGE_FFMPEG_ENCODERS=""
-BR2_PACKAGE_FFMPEG_DECODERS="h264 hevc"
+BR2_PACKAGE_FFMPEG_DECODERS="h264 hevc mpeg2video mpeg4 vp8 vp9 mjpeg png aac aac_latm mp3 mp3float flac opus vorbis ac3 eac3 alac pcm_s16le pcm_s24le pcm_f32le subrip ass ssa webvtt mov_text dvdsub dvbsub"
 BR2_PACKAGE_FFMPEG_MUXERS=""
-BR2_PACKAGE_FFMPEG_DEMUXERS=""
-BR2_PACKAGE_FFMPEG_PARSERS="h264 hevc"
+BR2_PACKAGE_FFMPEG_DEMUXERS="mov matroska mp3 flac ogg wav aac avi mpegts mpegps ac3 eac3 srt ass webvtt"
+BR2_PACKAGE_FFMPEG_PARSERS="h264 hevc mpeg4video mpegvideo vp8 vp9 aac mpegaudio flac opus vorbis ac3"
 BR2_PACKAGE_FFMPEG_BSFS=""
-BR2_PACKAGE_FFMPEG_PROTOCOLS=""
-BR2_PACKAGE_FFMPEG_FILTERS=""
+BR2_PACKAGE_FFMPEG_PROTOCOLS="file http tcp"
+BR2_PACKAGE_FFMPEG_FILTERS="aformat anull aresample format null scale volume"
 # BR2_PACKAGE_FFMPEG_INDEVS is not set
 # BR2_PACKAGE_FFMPEG_OUTDEVS is not set
-BR2_PACKAGE_FFMPEG_EXTRACONF="--disable-hwaccels --enable-hwaccel=h264_v4l2request --enable-hwaccel=hevc_v4l2request --enable-v4l2-request --enable-libudev --disable-libv4l2 --disable-v4l2-m2m --disable-avdevice --disable-avfilter --disable-avformat --disable-swresample --disable-swscale --disable-network --disable-vulkan"
+BR2_PACKAGE_FFMPEG_EXTRACONF="--disable-hwaccels --enable-hwaccel=h264_v4l2request --enable-hwaccel=hevc_v4l2request --enable-hwaccel=mpeg2_v4l2request --enable-hwaccel=vp8_v4l2request --enable-hwaccel=vp9_v4l2request --enable-v4l2-request --enable-libudev --disable-libv4l2 --disable-v4l2-m2m --disable-avdevice --disable-vulkan"

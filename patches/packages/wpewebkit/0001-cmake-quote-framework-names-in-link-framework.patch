@@ -1,0 +1,20 @@
+From: nuubOS <noreply@nuubos>
+Subject: [PATCH] cmake: quote the framework names compared in _WEBKIT_TARGET_LINK_FRAMEWORK
+
+With an empty _linked_into the unquoted expansion leaves "NOT IN_LIST",
+which CMake 4.x rejects as unknown arguments (the first clause already
+makes the condition true, so the result is unchanged).
+
+Upstream-Status: Pending
+---
+--- a/Source/cmake/WebKitMacros.cmake	2026-10-07 14:00:16.056497559 +0200
++++ b/Source/cmake/WebKitMacros.cmake	2026-10-07 14:00:23.597594364 +0200
+@@ -308,7 +308,7 @@
+         get_property(_linked_into GLOBAL PROPERTY ${framework}_LINKED_INTO)
+ 
+         # See if the target is linking a framework that the specified framework is already linked into
+-        if ((NOT _linked_into) OR (${framework} STREQUAL ${_linked_into}) OR (NOT ${_linked_into} IN_LIST ${_target}_FRAMEWORKS))
++        if ((NOT _linked_into) OR ("${framework}" STREQUAL "${_linked_into}") OR (NOT "${_linked_into}" IN_LIST ${_target}_FRAMEWORKS))
+             list(APPEND ${_target}_PRIVATE_LIBRARIES WebKit::${framework})
+ 
+             # The WebKit:: alias targets do not propagate OBJECT libraries so the

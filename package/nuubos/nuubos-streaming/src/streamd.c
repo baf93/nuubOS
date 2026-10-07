@@ -29,6 +29,16 @@
  * <sleep|restart|poweroff> replies once no stream runs. Outcomes the user
  * must see are typed notifications (EPIC-006).
  *
+ * Steam Link (EPIC-026) is the second streaming client: Valve's proprietary
+ * application, never part of the image. On the user's request
+ * nuubos-steamlink-get downloads Valve's current arm64 build into
+ * /userdata/steamlink/app (shared by all users: STEAMLINK_CHECK,
+ * STEAMLINK_INSTALL, STEAMLINK_CANCEL, STEAMLINK_REMOVE). STEAMLINK_LAUNCH
+ * runs it as a session like a Moonlight stream (stream_client=steamlink):
+ * Valve's own interface handles the computers, pairing and streams, with the
+ * user's data in /userdata/users/<id>/appdata/steamlink. QUIT ends it with
+ * SIGTERM.
+ *
  * Idle: poll() without timeout. Timers exist only while a child process,
  * a discovery or a stream exit is pending.
  */
@@ -83,6 +93,16 @@
 	"leftstick:b10,rightstick:b11,leftx:a0,lefty:a1,rightx:a2,righty:a3," \
 	"dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,platform:Linux,"
 
+/* Steam Link: Valve's build (downloaded), the nuubOS runtime (image). */
+#define STEAMLINK_GET "/usr/lib/nuubos/nuubos-steamlink-get"
+#define STEAMLINK_ROOT "/userdata/steamlink"
+#define STEAMLINK_APP STEAMLINK_ROOT "/app"
+#define STEAMLINK_QT "/usr/lib/steamlink-runtime/qt5"
+#define STEAMLINK_QT_VALVE STEAMLINK_APP "/Qt-5.14.1"
+#define STEAMLINK_TMP "/tmp/steamlink"
+#define STEAMLINK_LOG RUN_ROOT "/steamlink.log"
+#define STATE_USERS "/state/users"
+
 #define MAX_CLIENTS 16
 #define MAX_LINE 1024
 #define MAX_HOSTS 16
@@ -99,6 +119,8 @@
 #define STREAM_QUIT_TIMEOUT_MS 5000
 #define KILL_TIMEOUT_MS 3000
 #define STATS_TIMEOUT_MS 1500
+#define SL_CHECK_TIMEOUT_MS 40000
+#define SL_REMOVE_TIMEOUT_MS 60000
 
 /* Settings (per user). Defaults live only here. */
 #define DEFAULT_RESOLUTION "auto"
@@ -135,6 +157,10 @@ enum job_kind {
 	JOB_UNPAIR,
 	JOB_QUITAPP,
 	JOB_STREAM,
+	JOB_SL_CHECK,   /* nuubos-steamlink-get check */
+	JOB_SL_INSTALL, /* nuubos-steamlink-get install */
+	JOB_SL_REMOVE,  /* nuubos-steamlink-get remove */
+	JOB_SL_SESSION, /* Steam Link itself */
 };
 
 struct job {
@@ -149,6 +175,7 @@ struct job {
 	bool term_sent;
 	bool kill_sent;
 	char error[32];
+	char result[32];    /* Steam Link helper: @latest / @done version */
 	bool ok;
 };
 
@@ -177,6 +204,7 @@ struct stream {
 	int terminated_error;
 	char last_stats[384];
 	int power_client;
+	bool steamlink;     /* the session is Steam Link, not a Moonlight stream */
 };
 
 static volatile sig_atomic_t stop_requested;
@@ -203,6 +231,12 @@ static int setting_bitrate = DEFAULT_BITRATE;
 
 static int mdns_fd = -1;
 static long long mdns_deadline_ms;
+
+/* Steam Link application (shared by all users). */
+static char steamlink_version[32];  /* installed build, "" when absent */
+static char steamlink_latest[32];   /* Valve's current build, once checked */
+static int steamlink_progress = -1; /* download percent while installing */
+static char steamlink_error[16];    /* last install failure */
 
 static long long monotonic_ms(void)
 {
@@ -548,6 +582,8 @@ static const char *stream_state_name(void)
 	}
 }
 
+static const char *steamlink_job_name(void);
+
 static char *build_status(size_t *len_out)
 {
 	size_t cap = 4096 + (size_t)(host_count * 192) + (size_t)(app_count * 128);
@@ -567,6 +603,14 @@ static char *build_status(size_t *len_out)
 	APPEND("state=%s\n", stream_state_name());
 	APPEND("stream_host=%s\n", stream.state == STREAM_IDLE ? "" : stream.host);
 	APPEND("stream_app=%s\n", stream.state == STREAM_IDLE ? "" : stream.app);
+	APPEND("stream_client=%s\n", stream.state == STREAM_IDLE ? "" :
+	       stream.steamlink ? "steamlink" : "moonlight");
+	APPEND("steamlink=%s\n", steamlink_version[0] ? "installed" : "absent");
+	APPEND("steamlink_version=%s\n", steamlink_version);
+	APPEND("steamlink_latest=%s\n", steamlink_latest);
+	APPEND("steamlink_job=%s\n", steamlink_job_name());
+	APPEND("steamlink_progress=%d\n", steamlink_progress);
+	APPEND("steamlink_error=%s\n", steamlink_error);
 	APPEND("user=%d\n", user[0] ? 1 : 0);
 	APPEND("resolution=%s\n", setting_resolution);
 	APPEND("fps=%d\n", setting_fps);
@@ -1018,11 +1062,21 @@ static void request_stream_quit(bool close_app)
 {
 	if (stream.state != STREAM_STARTING && stream.state != STREAM_RUNNING)
 		return;
-	stream.close_app |= close_app;
 	stream.user_quit = true;
 	stream.state = STREAM_EXITING;
-	jobs[stream.job].deadline_ms = monotonic_ms() + STREAM_QUIT_TIMEOUT_MS;
-	job_command(stream.job, "QUIT");
+	if (stream.steamlink) {
+		/* Steam Link has no control channel: SIGTERM, then SIGKILL. */
+		struct job *j = &jobs[stream.job];
+
+		if (!j->term_sent)
+			kill(-j->pid, SIGTERM);
+		j->term_sent = true;
+		j->deadline_ms = monotonic_ms() + KILL_TIMEOUT_MS;
+	} else {
+		stream.close_app |= close_app;
+		jobs[stream.job].deadline_ms = monotonic_ms() + STREAM_QUIT_TIMEOUT_MS;
+		job_command(stream.job, "QUIT");
+	}
 	notify_subscribers();
 }
 
@@ -1082,6 +1136,239 @@ static void process_input_link(void)
 			stream.input_used = 0;
 		}
 	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Steam Link (EPIC-026)                                               */
+/* ------------------------------------------------------------------ */
+
+static void read_steamlink_version(void)
+{
+	char line[64] = "";
+	FILE *fp;
+
+	steamlink_version[0] = '\0';
+	/* version.txt alone (an interrupted removal) is not an installation. */
+	if (access(STEAMLINK_APP "/bin/shell", X_OK) != 0)
+		return;
+	fp = fopen(STEAMLINK_APP "/version.txt", "r");
+	if (!fp)
+		return;
+	if (fgets(line, sizeof(line), fp)) {
+		trim(line);
+		sanitize(line);
+		copy_text(steamlink_version, sizeof(steamlink_version), line);
+	}
+	fclose(fp);
+}
+
+/* The download, check or removal in progress (one at a time). */
+static int steamlink_job(void)
+{
+	for (int i = 0; i < MAX_JOBS; i++)
+		if (jobs[i].kind == JOB_SL_CHECK || jobs[i].kind == JOB_SL_INSTALL ||
+		    jobs[i].kind == JOB_SL_REMOVE)
+			return i;
+	return -1;
+}
+
+static const char *steamlink_job_name(void)
+{
+	int i = steamlink_job();
+
+	if (i < 0)
+		return "idle";
+	switch (jobs[i].kind) {
+	case JOB_SL_CHECK:
+		return "checking";
+	case JOB_SL_INSTALL:
+		return "installing";
+	default:
+		return "removing";
+	}
+}
+
+/* Steam Link's interface language: the user's nuubOS language. */
+static const char *steamlink_locale(void)
+{
+	static const struct {
+		const char *code;
+		const char *steam;
+	} langs[] = {
+		{ "de", "german" }, { "en", "english" }, { "es", "spanish" }, { "fr", "french" },
+		{ "it", "italian" }, { "nl", "dutch" }, { "pt", "portuguese" },
+	};
+	char path[PATH_MAX];
+	char line[128];
+	const char *result = "english";
+	FILE *fp;
+
+	snprintf(path, sizeof(path), STATE_USERS "/%s/localization.conf", user);
+	fp = fopen(path, "r");
+	if (!fp)
+		return result;
+	while (fgets(line, sizeof(line), fp)) {
+		trim(line);
+		if (strncmp(line, "LANGUAGE=", 9) != 0)
+			continue;
+		for (size_t i = 0; i < sizeof(langs) / sizeof(langs[0]); i++)
+			if (!strcmp(line + 9, langs[i].code))
+				result = langs[i].steam;
+	}
+	fclose(fp);
+	return result;
+}
+
+/* Child side of a Steam Link session: Valve's build with the nuubOS Qt
+ * Wayland plugin, per-user data, the nuubOS game gamepads. */
+static void steamlink_session_env(void)
+{
+	char home[PATH_MAX];
+
+	snprintf(home, sizeof(home), USERS_DIR "/%s/appdata/steamlink", user);
+	if (mkdir_p(home) != 0 || mkdir_p(STEAMLINK_TMP) != 0 || chdir(STEAMLINK_APP) != 0)
+		_exit(126);
+	clearenv();
+	setenv("PATH", STEAMLINK_APP "/bin:/usr/bin:/bin:/usr/sbin:/sbin", 1);
+	setenv("HOME", home, 1);
+	setenv("TMPDIR", STEAMLINK_TMP, 1);
+	setenv("XDG_RUNTIME_DIR", WAYLAND_RUNTIME, 1);
+	setenv("WAYLAND_DISPLAY", "wayland-0", 1);
+	setenv("PIPEWIRE_RUNTIME_DIR", PIPEWIRE_RUNTIME, 1);
+	setenv("SDL_VIDEO_DRIVER", "wayland", 1);
+	/* Valve bundles Qt 5.14.1 without a Wayland plugin (it expects
+	 * XWayland); steamlink-runtime ships one built for that Qt. */
+	setenv("QT_QPA_PLATFORM", "wayland-egl", 1);
+	setenv("QTDIR", STEAMLINK_QT_VALVE, 1);
+	setenv("QT_PLUGIN_PATH", STEAMLINK_QT "/plugins:" STEAMLINK_QT_VALVE "/plugins", 1);
+	setenv("LD_LIBRARY_PATH", STEAMLINK_APP "/lib:" STEAMLINK_QT_VALVE "/lib:" STEAMLINK_QT "/lib", 1);
+	setenv("SDL_GAMECONTROLLERCONFIG", GAMEPAD_MAPPING, 1);
+	setenv("LANG", "C.UTF-8", 1);
+}
+
+/* nuubos-steamlink-get (machine readable lines on stdout) or Steam Link
+ * itself (output to the log). */
+static int spawn_steamlink_job(enum job_kind kind, char *const argv[], long long timeout)
+{
+	bool session = kind == JOB_SL_SESSION;
+	int out_pipe[2] = { -1, -1 };
+	int slot = free_job();
+	pid_t pid;
+
+	if (slot < 0)
+		return -1;
+	if (!session && pipe2(out_pipe, O_CLOEXEC) != 0)
+		return -1;
+	pid = fork();
+	if (pid < 0) {
+		if (!session) {
+			close(out_pipe[0]);
+			close(out_pipe[1]);
+		}
+		return -1;
+	}
+	if (pid == 0) {
+		sigset_t none;
+		int fd;
+
+		sigemptyset(&none);
+		sigprocmask(SIG_SETMASK, &none, NULL);
+		signal(SIGCHLD, SIG_DFL);
+		signal(SIGPIPE, SIG_DFL);
+		setsid();
+		fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+		if (fd >= 0)
+			dup2(fd, STDIN_FILENO);
+		fd = open(STEAMLINK_LOG, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+		if (fd >= 0) {
+			dup2(fd, STDERR_FILENO);
+			if (session)
+				dup2(fd, STDOUT_FILENO);
+		}
+		if (session) {
+			steamlink_session_env();
+		} else {
+			dup2(out_pipe[1], STDOUT_FILENO);
+			clearenv();
+			setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin", 1);
+		}
+		execv(argv[0], argv);
+		_exit(127);
+	}
+	if (!session)
+		close(out_pipe[1]);
+	memset(&jobs[slot], 0, sizeof(jobs[slot]));
+	jobs[slot].kind = kind;
+	jobs[slot].pid = pid;
+	jobs[slot].out_fd = session ? -1 : out_pipe[0];
+	jobs[slot].in_fd = -1;
+	jobs[slot].deadline_ms = timeout > 0 ? monotonic_ms() + timeout : -1;
+	if (jobs[slot].out_fd >= 0)
+		(void)fcntl(jobs[slot].out_fd, F_SETFL, O_NONBLOCK);
+	log_msg("streamd: steamlink %s pid=%d", session ? "session" : argv[1], (int)pid);
+	return slot;
+}
+
+static bool start_steamlink_job(enum job_kind kind)
+{
+	char *argv[4] = { (char *)STEAMLINK_GET, NULL, NULL, NULL };
+	long long timeout = -1;
+
+	switch (kind) {
+	case JOB_SL_CHECK:
+		argv[1] = (char *)"check";
+		timeout = SL_CHECK_TIMEOUT_MS;
+		break;
+	case JOB_SL_INSTALL:
+		/* No overall limit: the helper aborts a stalled download. */
+		argv[1] = (char *)"install";
+		argv[2] = (char *)STEAMLINK_ROOT;
+		break;
+	case JOB_SL_REMOVE:
+		argv[1] = (char *)"remove";
+		argv[2] = (char *)STEAMLINK_ROOT;
+		timeout = SL_REMOVE_TIMEOUT_MS;
+		break;
+	default:
+		return false;
+	}
+	return spawn_steamlink_job(kind, argv, timeout) >= 0;
+}
+
+static const char *launch_steamlink(void)
+{
+	static char shell[] = STEAMLINK_APP "/bin/shell";
+	static char locale[16];
+	char *argv[] = { shell, (char *)"--skip-update", (char *)"--fullscreen",
+			 (char *)"--locale", locale, NULL };
+	int slot;
+
+	if (stream.state != STREAM_IDLE)
+		return "busy";
+	if (!user[0])
+		return "no-user";
+	if (!steamlink_version[0] || steamlink_job() >= 0)
+		return "unavailable";
+	copy_text(locale, sizeof(locale), steamlink_locale());
+
+	stream.input_fd = input_gamepads_on();
+	if (stream.input_fd < 0)
+		log_msg("streamd: inputd game gamepads unavailable");
+	slot = spawn_steamlink_job(JOB_SL_SESSION, argv, -1);
+	if (slot < 0) {
+		if (stream.input_fd >= 0)
+			close(stream.input_fd);
+		stream.input_fd = -1;
+		return "spawn";
+	}
+	/* Valve's interface is the session: it runs from the start. */
+	stream.state = STREAM_RUNNING;
+	stream.job = slot;
+	stream.steamlink = true;
+	stream.started = true;
+	stream.power_client = -1;
+	log_msg("streamd: steamlink %s locale=%s user=%s", steamlink_version, locale, user);
+	return NULL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1148,6 +1435,27 @@ static void handle_job_line(int slot, char *line)
 			copy_text(j->error, sizeof(j->error), "connection");
 		} else if (!strncmp(line, "@stats ", 7)) {
 			answer_stats(line);
+		}
+		break;
+	case JOB_SL_CHECK:
+	case JOB_SL_INSTALL:
+	case JOB_SL_REMOVE:
+		if (!strncmp(line, "@progress ", 10)) {
+			int percent = atoi(line + 10);
+
+			if (percent != steamlink_progress) {
+				steamlink_progress = percent;
+				notify_subscribers();
+			}
+		} else if (!strncmp(line, "@latest ", 8) || !strncmp(line, "@done", 5)) {
+			const char *value = line[1] == 'l' ? line + 8 : line + 5;
+
+			while (*value == ' ')
+				value++;
+			copy_text(j->result, sizeof(j->result), value);
+			trim(j->result);
+			sanitize(j->result);
+			j->ok = true;
 		}
 		break;
 	default:
@@ -1268,6 +1576,40 @@ static void finish_job(int slot, int status)
 		 * next stream resumes it; "close" also ends it on the host. */
 		if (close_app && (h = find_host(host_id)) != NULL)
 			(void)spawn_job(JOB_QUITAPP, h, NULL, false);
+		finish_power_wait();
+		break;
+	}
+	case JOB_SL_CHECK:
+		if (j->ok && exited_ok)
+			copy_text(steamlink_latest, sizeof(steamlink_latest), j->result);
+		break;
+	case JOB_SL_INSTALL:
+		steamlink_progress = -1;
+		read_steamlink_version();
+		if (j->ok && exited_ok) {
+			copy_text(steamlink_latest, sizeof(steamlink_latest), j->result);
+			steamlink_error[0] = '\0';
+			notify_event("stream.steamlink.installed", "version", steamlink_version);
+		} else if (strcmp(j->error, "cancelled") != 0) {
+			copy_text(steamlink_error, sizeof(steamlink_error), j->error[0] ? j->error : "write");
+			notify_event("stream.steamlink.failed", "reason", steamlink_error);
+		}
+		log_msg("streamd: steamlink install status=%d error=%s version=%s", status,
+			j->error[0] ? j->error : "-", steamlink_version[0] ? steamlink_version : "-");
+		break;
+	case JOB_SL_REMOVE:
+		read_steamlink_version();
+		log_msg("streamd: steamlink removed status=%d", status);
+		break;
+	case JOB_SL_SESSION: {
+		bool clean = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+
+		log_msg("streamd: steamlink exited status=%d user_quit=%d", status, stream.user_quit ? 1 : 0);
+		/* Leaving from Valve's interface is a clean exit; anything else
+		 * the user did not ask for is a failure they must see. */
+		if (!stream.user_quit && !clean)
+			notify_stream_failed("steamlink", "");
+		reset_stream();
 		finish_power_wait();
 		break;
 	}
@@ -1561,7 +1903,7 @@ static void handle_command(struct client *c, char *line)
 		return;
 	}
 	if (!strcmp(line, "STATS")) {
-		if (stream.state != STREAM_RUNNING) {
+		if (stream.state != STREAM_RUNNING || stream.steamlink) {
 			reply(c, "ERR no-stream\n");
 			return;
 		}
@@ -1576,6 +1918,45 @@ static void handle_command(struct client *c, char *line)
 			return;
 		}
 		request_stream_quit(argc == 1 && !strcmp(args[0], "close"));
+		reply(c, "OK\n");
+		return;
+	}
+
+	/* Steam Link application: shared by every user. */
+	if (!strcmp(line, "STEAMLINK_CHECK")) {
+		if (steamlink_job() < 0 && !start_steamlink_job(JOB_SL_CHECK)) {
+			reply(c, "ERR spawn\n");
+			return;
+		}
+		reply(c, "OK\n");
+		notify_subscribers();
+		return;
+	}
+	if (!strcmp(line, "STEAMLINK_INSTALL") || !strcmp(line, "STEAMLINK_REMOVE")) {
+		bool install = !strcmp(line, "STEAMLINK_INSTALL");
+
+		if (steamlink_job() >= 0 || (stream.state != STREAM_IDLE && stream.steamlink)) {
+			reply(c, "ERR busy\n");
+			return;
+		}
+		if (!start_steamlink_job(install ? JOB_SL_INSTALL : JOB_SL_REMOVE)) {
+			reply(c, "ERR spawn\n");
+			return;
+		}
+		steamlink_error[0] = '\0';
+		steamlink_progress = install ? 0 : -1;
+		reply(c, "OK\n");
+		notify_subscribers();
+		return;
+	}
+	if (!strcmp(line, "STEAMLINK_CANCEL")) {
+		int i = steamlink_job();
+
+		if (i >= 0 && jobs[i].kind == JOB_SL_INSTALL && !jobs[i].term_sent) {
+			kill(-jobs[i].pid, SIGTERM);
+			jobs[i].term_sent = true;
+			jobs[i].deadline_ms = monotonic_ms() + KILL_TIMEOUT_MS;
+		}
 		reply(c, "OK\n");
 		return;
 	}
@@ -1669,6 +2050,19 @@ static void handle_command(struct client *c, char *line)
 			char text[64];
 
 			log_msg("streamd: launch refused: %s", error);
+			snprintf(text, sizeof(text), "ERR %s\n", error);
+			reply(c, text);
+			return;
+		}
+		reply(c, "OK\n");
+		notify_subscribers();
+	} else if (!strcmp(line, "STEAMLINK_LAUNCH")) {
+		const char *error = launch_steamlink();
+
+		if (error) {
+			char text[64];
+
+			log_msg("streamd: steamlink launch refused: %s", error);
 			snprintf(text, sizeof(text), "ERR %s\n", error);
 			reply(c, text);
 			return;
@@ -1791,12 +2185,12 @@ static void run_timers(void)
 		if (j->kind == JOB_NONE || j->deadline_ms <= 0 || now < j->deadline_ms)
 			continue;
 		if (!j->term_sent) {
-			log_msg("streamd: moonlight pid=%d timed out, SIGTERM", (int)j->pid);
+			log_msg("streamd: child pid=%d timed out, SIGTERM", (int)j->pid);
 			kill(-j->pid, SIGTERM);
 			j->term_sent = true;
 			j->deadline_ms = now + KILL_TIMEOUT_MS;
 		} else if (!j->kill_sent) {
-			log_msg("streamd: moonlight pid=%d did not terminate, SIGKILL", (int)j->pid);
+			log_msg("streamd: child pid=%d did not terminate, SIGKILL", (int)j->pid);
 			kill(-j->pid, SIGKILL);
 			j->kill_sent = true;
 			j->deadline_ms = -1;
@@ -1846,6 +2240,7 @@ int main(void)
 	signal(SIGPIPE, SIG_IGN);
 
 	refresh_active_user();
+	read_steamlink_version();
 	inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 	if (inotify_fd >= 0 &&
 	    inotify_add_watch(inotify_fd, ACTIVE_DIR, IN_CLOSE_WRITE | IN_MOVED_TO | IN_DELETE | IN_CREATE) < 0)
@@ -1955,7 +2350,10 @@ int main(void)
 		pid_t pid = jobs[stream.job].pid;
 		bool exited = false;
 
-		job_command(stream.job, "QUIT");
+		if (stream.steamlink)
+			kill(-pid, SIGTERM);
+		else
+			job_command(stream.job, "QUIT");
 		while (!exited && monotonic_ms() < deadline) {
 			struct pollfd p = { sigchld_pipe[0], POLLIN, 0 };
 			char drain[32];
@@ -1969,7 +2367,7 @@ int main(void)
 			kill(-pid, SIGKILL);
 	}
 	for (int i = 0; i < MAX_JOBS; i++)
-		if (jobs[i].kind != JOB_NONE && jobs[i].kind != JOB_STREAM)
+		if (jobs[i].kind != JOB_NONE && jobs[i].kind != JOB_STREAM && jobs[i].kind != JOB_SL_SESSION)
 			kill(-jobs[i].pid, SIGTERM);
 	unlink(SOCKET_PATH);
 	unlink(PIDFILE);

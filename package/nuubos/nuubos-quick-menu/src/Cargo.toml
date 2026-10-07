@@ -14,6 +14,8 @@ glutin = { version = "=0.32.3", default-features = false, features = ["egl", "wa
 raw-window-handle = "=0.6.2"
 wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
 wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
+# Input method protocol (Web Mode text entry), generated from protocols/.
+wayland-scanner = "=0.31.11"
 
 [build-dependencies]
 slint-build = "=1.18.1"

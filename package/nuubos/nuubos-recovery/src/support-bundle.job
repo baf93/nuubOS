@@ -1,0 +1,6 @@
+# EPIC-052 support bundle (nuubos-recovery).
+COMMAND=/usr/bin/nuubos-diag bundle
+SCOPE=device
+CANCEL=1
+RETRY=1
+ARGS=0

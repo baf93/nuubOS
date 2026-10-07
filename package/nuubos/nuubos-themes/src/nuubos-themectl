@@ -1,0 +1,180 @@
+#!/bin/sh
+# nuubOS Themes (EPIC-008).
+#
+#   list                      theme=<id>\t<name>\t<author>\t<version>\t<builtin>\t<path> ... end=1
+#   validate DIR              OK | ERR <reason>
+#   install SRC               a theme folder or .tar (USB, USERDATA); validated first
+#   remove ID                 user-installed only; users of it go back to the default
+#   select USER ID | selected USER
+#
+# A theme is a presentation package without code: theme.conf (FORMAT=1,
+# ID, NAME, AUTHOR, VERSION, MIN_NUUBUI, DESCRIPTION, LICENSE, optional
+# PREVIEW) and the color tokens nuubUI documents (accent ... warning, each
+# #RRGGBB; missing tokens keep the built-in value). Installed packages are
+# shared: built-in /usr/share/nuubos/themes, user-installed
+# /userdata/themes. The selection is per user (THEME= in the profile's
+# settings.conf). The built-in "nuubos" theme cannot be removed and is the
+# fallback for anything invalid. NUUBOS_ROOT prefixes paths for the host test.
+
+R="${NUUBOS_ROOT:-}"
+BUILTIN="$R/usr/share/nuubos/themes"
+INSTALLED="$R/userdata/themes"
+STATE_USERS="$R/state/users"
+DEFAULT=nuubos
+NUUBUI_VERSION=0.5
+TOKENS="accent accent-light accent-muted accent-text focus-fill text text-secondary text-dim text-faint text-disabled background surface border border-soft warning"
+
+value() { sed -n "s/^$2=//p" "$1/theme.conf" 2>/dev/null | head -n 1; }
+valid_id() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9-]{0,31}$'; }
+valid_uuid() { printf '%s' "$1" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; }
+
+# "1.10" >= "1.9" style comparison of dotted numbers.
+version_ge()
+{
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        n = split(a, x, "."); m = split(b, y, ".")
+        for (i = 1; i <= (n > m ? n : m); i++) {
+            if ((x[i] + 0) > (y[i] + 0)) exit 0
+            if ((x[i] + 0) < (y[i] + 0)) exit 1
+        }
+        exit 0 }'
+}
+
+validate()
+{
+    d="$1"
+    [ -f "$d/theme.conf" ] || { echo "ERR manifest"; return 1; }
+    [ "$(value "$d" FORMAT)" = 1 ] || { echo "ERR format"; return 1; }
+    id="$(value "$d" ID)"
+    valid_id "$id" || { echo "ERR id"; return 1; }
+    for k in NAME AUTHOR VERSION MIN_NUUBUI; do
+        v="$(value "$d" "$k")"
+        [ -n "$v" ] || { echo "ERR $k"; return 1; }
+        printf '%s' "$v" | grep -q '[[:cntrl:]]' && { echo "ERR $k"; return 1; }
+    done
+    version_ge "$NUUBUI_VERSION" "$(value "$d" MIN_NUUBUI)" || { echo "ERR incompatible"; return 1; }
+    # Every key is a known field or token; tokens are colors. No code.
+    bad="$(grep -v '^[[:space:]]*#' "$d/theme.conf" | grep -v '^[[:space:]]*$' | while IFS='=' read -r k v; do
+        case "$k" in
+            FORMAT|ID|NAME|AUTHOR|VERSION|MIN_NUUBUI|DESCRIPTION|LICENSE|PREVIEW) ;;
+            *)
+                case " $TOKENS " in *" $k "*) ;; *) echo "$k"; continue ;; esac
+                printf '%s' "$v" | grep -Eq '^#[0-9A-Fa-f]{6}$' || echo "$k"
+                ;;
+        esac
+    done)"
+    [ -z "$bad" ] || { echo "ERR token $(echo "$bad" | head -n 1)"; return 1; }
+    p="$(value "$d" PREVIEW)"
+    if [ -n "$p" ]; then
+        case "$p" in */*|.*) echo "ERR preview"; return 1 ;; esac
+        [ -f "$d/$p" ] || { echo "ERR preview"; return 1; }
+    fi
+    echo OK
+}
+
+theme_dir()
+{
+    valid_id "$1" || return 1
+    if [ -f "$BUILTIN/$1/theme.conf" ]; then echo "$BUILTIN/$1"
+    elif [ -f "$INSTALLED/$1/theme.conf" ]; then echo "$INSTALLED/$1"
+    else return 1; fi
+}
+
+list()
+{
+    for base in "$BUILTIN" "$INSTALLED"; do
+        [ "$base" = "$BUILTIN" ] && b=1 || b=0
+        for d in "$base"/*; do
+            [ -d "$d" ] || continue
+            [ "$(validate "$d")" = OK ] || continue
+            id="$(value "$d" ID)"
+            # Built-in ids win; a folder must carry its own id.
+            [ "${d##*/}" = "$id" ] || continue
+            [ "$b" = 0 ] && [ -d "$BUILTIN/$id" ] && continue
+            printf 'theme=%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$(value "$d" NAME)" "$(value "$d" AUTHOR)" \
+                "$(value "$d" VERSION)" "$b" "$d"
+        done
+    done
+    echo "end=1"
+}
+
+install_theme()
+{
+    src="$1"
+    mkdir -p "$INSTALLED" || { echo "ERR storage"; return 1; }
+    stage="$(mktemp -d "$INSTALLED/.stage.XXXXXX")" || { echo "ERR storage"; return 1; }
+    trap 'rm -rf "$stage"' EXIT
+    if [ -d "$src" ]; then
+        cp -r "$src/." "$stage/" || { echo "ERR copy"; return 1; }
+    elif [ -f "$src" ]; then
+        # No absolute, "..", or link entries.
+        tar -tf "$src" > "$stage/.list" 2>/dev/null || { echo "ERR archive"; return 1; }
+        if grep -Eq '^/|(^|/)\.\.(/|$)' "$stage/.list" || tar -tvf "$src" 2>/dev/null | grep -q '^[lh]'; then
+            echo "ERR archive"; return 1
+        fi
+        rm -f "$stage/.list"
+        tar -C "$stage" -xf "$src" 2>/dev/null || { echo "ERR archive"; return 1; }
+        # A single top folder holding the theme is accepted too.
+        if [ ! -f "$stage/theme.conf" ] && [ "$(ls "$stage" | wc -l)" = 1 ] && [ -f "$stage/$(ls "$stage")/theme.conf" ]; then
+            inner="$stage/$(ls "$stage")"
+            mv "$inner" "$stage.inner" && rm -rf "$stage" && mv "$stage.inner" "$stage"
+        fi
+    else
+        echo "ERR source"; return 1
+    fi
+    r="$(validate "$stage")"
+    [ "$r" = OK ] || { echo "$r"; return 1; }
+    id="$(value "$stage" ID)"
+    [ -d "$BUILTIN/$id" ] && { echo "ERR builtin"; return 1; }
+    # The previous version stays until the new one is complete.
+    if [ -d "$INSTALLED/$id" ]; then
+        mv "$INSTALLED/$id" "$INSTALLED/.old-$id" || { echo "ERR storage"; return 1; }
+    fi
+    if mv "$stage" "$INSTALLED/$id"; then
+        rm -rf "${INSTALLED:?}/.old-$id"
+    else
+        [ -d "$INSTALLED/.old-$id" ] && mv "$INSTALLED/.old-$id" "$INSTALLED/$id"
+        echo "ERR storage"; return 1
+    fi
+    trap - EXIT
+    sync
+    echo "OK $id"
+}
+
+set_user_theme()
+{
+    f="$STATE_USERS/$1/settings.conf"
+    [ -f "$f" ] || return 1
+    { grep -v '^THEME=' "$f"; echo "THEME=$2"; } > "$f.tmp" && chmod 600 "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+case "${1:-}" in
+    list) list ;;
+    validate) validate "${2:-}" ;;
+    install) install_theme "${2:-}" ;;
+    remove)
+        id="${2:-}"
+        valid_id "$id" || { echo "ERR id"; exit 1; }
+        [ -d "$BUILTIN/$id" ] && { echo "ERR builtin"; exit 1; }
+        [ -d "$INSTALLED/$id" ] || { echo "ERR missing"; exit 1; }
+        for u in "$STATE_USERS"/*/settings.conf; do
+            [ -f "$u" ] || continue
+            grep -qx "THEME=$id" "$u" && set_user_theme "$(basename "$(dirname "$u")")" "$DEFAULT"
+        done
+        rm -rf "${INSTALLED:?}/$id"
+        echo OK
+        ;;
+    select)
+        valid_uuid "${2:-}" || { echo "ERR user"; exit 1; }
+        theme_dir "${3:-}" >/dev/null || { echo "ERR theme"; exit 1; }
+        set_user_theme "$2" "$3" || { echo "ERR user"; exit 1; }
+        echo OK
+        ;;
+    selected)
+        valid_uuid "${2:-}" || { echo "ERR user"; exit 1; }
+        id="$(sed -n 's/^THEME=//p' "$STATE_USERS/$2/settings.conf" 2>/dev/null | tail -n 1)"
+        d="$(theme_dir "$id")" && [ "$(validate "$d")" = OK ] || { id="$DEFAULT"; d="$BUILTIN/$DEFAULT"; }
+        printf 'id=%s\npath=%s\nend=1\n' "$id" "$d"
+        ;;
+    *) echo "Usage: nuubos-themectl list | validate DIR | install SRC | remove ID | select USER ID | selected USER" >&2; exit 2 ;;
+esac

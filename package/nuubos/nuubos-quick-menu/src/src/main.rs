@@ -1,4 +1,5 @@
 mod gpu;
+mod ime;
 mod splash;
 slint::include_modules!();
 
@@ -65,6 +66,10 @@ const STATUS_SOCKET: &str = "/run/nuubos/statusd.sock";
 const NOTIFY_SOCKET: &str = "/run/nuubos/notifyd.sock";
 const EMULATION_SOCKET: &str = "/run/nuubos/emud.sock";
 const STREAM_SOCKET: &str = "/run/nuubos/streamd.sock";
+const WEB_SOCKET: &str = "/run/nuubos/webd.sock";
+const REGIONAL_SOCKET: &str = "/run/nuubos/regionald.sock";
+/* Web Mode keyboard sheet height (logical px, full output width). */
+const KEYBOARD_SURFACE_HEIGHT: u32 = 236;
 
 
 const LINE_STAGE_MS: u64 = 220;
@@ -189,12 +194,14 @@ enum SurfaceKind {
     Full,
     Volume,
     Toast,
+    Keyboard,
 }
 
 impl SurfaceKind {
     fn slint_mode(self) -> i32 {
         match self {
             SurfaceKind::Volume => 1,
+            SurfaceKind::Keyboard => 2,
             _ => 0,
         }
     }
@@ -323,6 +330,12 @@ impl WaylandState {
                 layer_surface.set_size(TOAST_SURFACE_WIDTH, TOAST_SURFACE_HEIGHT);
                 layer_surface.set_anchor(Anchor::Top | Anchor::Right);
                 layer_surface.set_margin(TOAST_SURFACE_MARGIN, TOAST_SURFACE_MARGIN, 0, 0);
+            }
+            SurfaceKind::Keyboard => {
+                /* The Web Mode keyboard: a full-width bottom sheet over the
+                 * browser, which keeps its size. */
+                layer_surface.set_size(0, KEYBOARD_SURFACE_HEIGHT);
+                layer_surface.set_anchor(Anchor::Bottom | Anchor::Left | Anchor::Right);
             }
             SurfaceKind::Full => {
                 layer_surface.set_size(0, 0);
@@ -1366,11 +1379,22 @@ enum AppEvent {
     /* Emulation Service session snapshot (nuubos-emud). */
     Game(GameSnapshot),
     /* PC Game Streaming Service: a stream runs (nuubos-streamd). */
-    Stream(bool),
+    /* running, Steam Link session */
+    Stream(bool, bool),
     StatusChanged,
     /* The output device changed its own volume (Bluetooth headset buttons). */
     DeviceVolume,
     Notify(Notification, Instant),
+    /* Web Mode Service (nuubos-webd): browser running, zoom percent. */
+    Web(bool, i32),
+    /* Input method: a text field of the page has the focus or not. */
+    Ime(ime::ImeState),
+}
+
+impl From<ime::ImeState> for AppEvent {
+    fn from(state: ime::ImeState) -> Self {
+        AppEvent::Ime(state)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1649,6 +1673,59 @@ fn toast_view(ui: &QuickMenuWindow, n: &Notification) -> Option<ToastView> {
             n.text("ssid").to_owned(),
             -1,
         ),
+        "media.failed" => (ICON_FAILED, SEVERITY_WARNING, tr(ui, 667, "The media could not be played"), String::new(), -1),
+        "web.failed" => (
+            ICON_FAILED,
+            SEVERITY_ERROR,
+            if n.text("reason") == "crash" {
+                tr(ui, 690, "The browser closed unexpectedly")
+            } else {
+                tr(ui, 689, "The browser could not be started")
+            },
+            String::new(),
+            -1,
+        ),
+        "web.bookmark.added" => (ICON_DONE, SEVERITY_SUCCESS, tr(ui, 685, "Bookmark added"), n.text("title").to_owned(), -1),
+        "media.connected" => (ICON_STORAGE, SEVERITY_INFO, tr(ui, 646, "USB drive connected"), n.text("name").to_owned(), -1),
+        "media.removed" => (ICON_STORAGE, SEVERITY_INFO, tr(ui, 647, "USB drive removed"), n.text("name").to_owned(), -1),
+        "game.screenshot.saved" => (ICON_DONE, SEVERITY_SUCCESS, tr(ui, 593, "Screenshot saved"), String::new(), -1),
+        "game.screenshot.failed" => (
+            ICON_FAILED,
+            SEVERITY_WARNING,
+            tr(ui, 594, "The screenshot could not be saved"),
+            String::new(),
+            -1,
+        ),
+        /* Background jobs (EPIC-007): one Live Notification per job. */
+        "job" => {
+            let title = match n.text("type") {
+                "support-bundle" => tr(ui, 595, "Support bundle"),
+                "file-copy" => tr(ui, 623, "Copying files"),
+                "file-move" => tr(ui, 624, "Moving files"),
+                "backup-user" => tr(ui, 630, "Backup & Restore"),
+                "restore-user" => tr(ui, 635, "Restore"),
+                "update-download" => tr(ui, 660, "Downloading update"),
+                "scrape-game" | "scrape-bulk" => tr(ui, 571, "Getting metadata"),
+                _ => return None,
+            };
+            let failure = match n.text("reason") {
+                "not-found" => tr(ui, 573, "No metadata found for this game"),
+                "quota" => tr(ui, 574, "Daily metadata limit reached, try again later"),
+                "auth" => tr(ui, 575, "Check the account"),
+                "network" => tr(ui, 494, "Check the network connection"),
+                "unavailable" => tr(ui, 570, "The metadata service is not available in this build"),
+                "space" => tr(ui, 493, "Not enough free space"),
+                _ => tr(ui, 93, "Failed"),
+            };
+            let (icon, severity, detail) = match n.text("state") {
+                "queued" | "running" => (ICON_STORAGE, SEVERITY_INFO, tr(ui, 91, "Running")),
+                "succeeded" => (ICON_DONE, SEVERITY_SUCCESS, tr(ui, 92, "Completed")),
+                "cancelled" => (ICON_FAILED, SEVERITY_INFO, tr(ui, 596, "Cancelled")),
+                "failed" => (ICON_FAILED, SEVERITY_ERROR, failure),
+                _ => return None,
+            };
+            (icon, severity, title, detail, -1)
+        }
         "game.state.saved" | "game.state.loaded" => (
             ICON_DONE,
             SEVERITY_SUCCESS,
@@ -1717,10 +1794,29 @@ fn toast_view(ui: &QuickMenuWindow, n: &Notification) -> Option<ToastView> {
             n.text("name").to_owned(),
             -1,
         ),
+        "stream.steamlink.installed" => (
+            ICON_DONE,
+            SEVERITY_SUCCESS,
+            tr(ui, 491, "Steam Link installed"),
+            n.text("version").to_owned(),
+            -1,
+        ),
+        "stream.steamlink.failed" => (
+            ICON_FAILED,
+            SEVERITY_ERROR,
+            tr(ui, 492, "Steam Link could not be downloaded"),
+            match n.text("reason") {
+                "space" => tr(ui, 493, "Not enough free space"),
+                "network" => tr(ui, 494, "Check the network connection"),
+                _ => String::new(),
+            },
+            -1,
+        ),
         "stream.failed" => (
             ICON_FAILED,
             SEVERITY_ERROR,
             match n.text("reason") {
+                "steamlink" => tr(ui, 495, "Steam Link closed unexpectedly"),
                 "connection" => tr(ui, 465, "The stream was interrupted"),
                 _ => tr(ui, 464, "The stream could not be started"),
             },
@@ -1904,6 +2000,86 @@ impl Toasts {
  * own event queue, and is mapped/unmapped only by the notification's own
  * lifetime, never by the Quick Menu opening or closing.
  */
+/* ------------------------------------------------------------------ */
+/* Themes (EPIC-008)                                                    */
+/* ------------------------------------------------------------------ */
+
+/* The active user's theme tokens (nuubos-themectl validates packages and
+ * owns the selection). Built-in values for anything missing or invalid. */
+const THEME_DEFAULTS: &[(&str, &str)] = &[
+    ("accent", "#3a86ff"), ("accent-light", "#73a8ff"), ("accent-muted", "#5b86d6"),
+    ("accent-text", "#cfe2ff"), ("focus-fill", "#18283c"), ("text", "#f5f6f8"),
+    ("text-secondary", "#a8adb5"), ("text-dim", "#8e949d"), ("text-faint", "#7f858e"),
+    ("text-disabled", "#555b64"), ("background", "#0d0e10"), ("surface", "#24272d"),
+    ("border", "#30343b"), ("border-soft", "#2c3036"), ("warning", "#f2b84b"),
+];
+
+thread_local! {
+    static THEME_TOKENS: RefCell<Vec<(String, slint::Color)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn theme_color(v: &str) -> Option<slint::Color> {
+    let n = u32::from_str_radix(v.trim().strip_prefix('#')?, 16).ok()?;
+    (v.trim().len() == 7).then(|| slint::Color::from_rgb_u8((n >> 16) as u8, (n >> 8) as u8, n as u8))
+}
+
+fn read_theme_tokens() -> Vec<(String, slint::Color)> {
+    let user = fs::read_to_string("/run/nuubos/user/active").unwrap_or_default().trim().to_owned();
+    let path = std::process::Command::new("/usr/bin/nuubos-themectl")
+        .args(["selected", &user])
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout).lines().find_map(|l| l.strip_prefix("path=").map(str::to_owned))
+        })
+        .unwrap_or_default();
+    let text = fs::read_to_string(format!("{path}/theme.conf")).unwrap_or_default();
+    THEME_DEFAULTS
+        .iter()
+        .map(|(k, d)| {
+            let v = text
+                .lines()
+                .find_map(|l| l.strip_prefix(*k).and_then(|r| r.strip_prefix('=')))
+                .and_then(theme_color)
+                .unwrap_or_else(|| theme_color(d).unwrap());
+            ((*k).to_owned(), v)
+        })
+        .collect()
+}
+
+macro_rules! apply_theme {
+    ($window:expr, $tokens:expr) => {{
+        let t = $window.global::<Theme>();
+        for (k, c) in $tokens.iter() {
+            match k.as_str() {
+                "accent" => t.set_accent(*c),
+                "accent-light" => t.set_accent_light(*c),
+                "accent-muted" => t.set_accent_muted(*c),
+                "accent-text" => t.set_accent_text(*c),
+                "focus-fill" => t.set_focus_fill(*c),
+                "text" => t.set_text(*c),
+                "text-secondary" => t.set_text_secondary(*c),
+                "text-dim" => t.set_text_dim(*c),
+                "text-faint" => t.set_text_faint(*c),
+                "text-disabled" => t.set_text_disabled(*c),
+                "background" => t.set_background(*c),
+                "surface" => t.set_surface(*c),
+                "border" => t.set_border(*c),
+                "border-soft" => t.set_border_soft(*c),
+                "warning" => t.set_warning(*c),
+                _ => {}
+            }
+        }
+    }};
+}
+
+/* At every menu open: the user may have switched or changed theme. */
+fn refresh_theme(ui: &QuickMenuWindow) {
+    let tokens = read_theme_tokens();
+    apply_theme!(ui, tokens);
+    THEME_TOKENS.with(|t| *t.borrow_mut() = tokens);
+}
+
 struct Notifier {
     toasts: Toasts,
     card: NotificationWindow,
@@ -1915,6 +2091,12 @@ struct Notifier {
 
 impl Notifier {
     fn apply(&mut self, ui: &QuickMenuWindow) {
+        THEME_TOKENS.with(|t| {
+            let t = t.borrow();
+            if !t.is_empty() {
+                apply_theme!(self.card, t);
+            }
+        });
         self.toasts.apply(ui, &self.card);
     }
 
@@ -2352,15 +2534,17 @@ fn stream_command(command: &str, timeout: Duration) -> std::io::Result<String> {
     Ok(reply)
 }
 
-fn stream_running_from(reply: &str) -> bool {
-    reply.lines().any(|line| matches!(line, "state=streaming" | "state=starting"))
+/* (a stream or Steam Link session runs, it is Steam Link) */
+fn stream_state_from(reply: &str) -> (bool, bool) {
+    let running = reply.lines().any(|line| matches!(line, "state=streaming" | "state=starting"));
+    (running, running && reply.lines().any(|line| line == "stream_client=steamlink"))
 }
 
-fn read_stream_running() -> bool {
-    let Ok(mut stream) = UnixStream::connect(STREAM_SOCKET) else { return false };
+fn read_stream_state() -> (bool, bool) {
+    let Ok(mut stream) = UnixStream::connect(STREAM_SOCKET) else { return (false, false) };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
     if stream.write_all(b"STATUS\n").is_err() {
-        return false;
+        return (false, false);
     }
     let mut reply = String::new();
     for line in BufReader::new(stream).lines() {
@@ -2371,14 +2555,15 @@ fn read_stream_running() -> bool {
             break;
         }
     }
-    stream_running_from(&reply)
+    stream_state_from(&reply)
 }
 
-fn apply_stream_running(ui: &QuickMenuWindow, running: bool) {
-    if !running && ui.get_selected_index() >= 15 {
-        ui.set_selected_index(3);
+fn apply_stream_running(ui: &QuickMenuWindow, running: bool, steamlink: bool) {
+    if (!running || steamlink) && ui.get_selected_index() >= if running { 17 } else { 15 } {
+        ui.set_selected_index(if running { 15 } else { 3 });
         ui.set_game_confirm_index(-1);
     }
+    ui.set_stream_steamlink(steamlink);
     ui.set_stream_section_visible(running);
 }
 
@@ -2430,9 +2615,9 @@ fn start_stream_subscription(tx: Sender<AppEvent>) {
                         Ok(_) => {
                             block.push_str(&line);
                             if line.trim_end() == "end=1" {
-                                let running = stream_running_from(&block);
+                                let (running, steamlink) = stream_state_from(&block);
                                 block.clear();
-                                if tx.send(AppEvent::Stream(running)).is_err() {
+                                if tx.send(AppEvent::Stream(running, steamlink)).is_err() {
                                     return;
                                 }
                             }
@@ -2446,13 +2631,382 @@ fn start_stream_subscription(tx: Sender<AppEvent>) {
     });
 }
 
+
+/* Web Mode (EPIC-030). The page stays live under the menu. */
+fn web_command(command: &str) {
+    let command = command.to_owned();
+    thread::spawn(move || {
+        let result = (|| -> std::io::Result<String> {
+            let mut stream = UnixStream::connect(WEB_SOCKET)?;
+            stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+            stream.write_all(command.as_bytes())?;
+            stream.write_all(b"\n")?;
+            let mut reply = String::new();
+            BufReader::new(stream).read_line(&mut reply)?;
+            Ok(reply)
+        })();
+        if let Err(error) = result {
+            eprintln!("quick-menu: web {command} failed={error}");
+        }
+    });
+}
+
+/* (browser running, zoom percent) */
+fn web_state_from(reply: &str) -> (bool, i32) {
+    let running = reply.lines().any(|line| line == "state=running");
+    let zoom = reply
+        .lines()
+        .find_map(|line| line.strip_prefix("zoom="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
+    (running, zoom)
+}
+
+fn read_web_state() -> (bool, i32) {
+    let Ok(mut stream) = UnixStream::connect(WEB_SOCKET) else { return (false, 100) };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
+    if stream.write_all(b"STATUS\n").is_err() {
+        return (false, 100);
+    }
+    let mut reply = String::new();
+    for line in BufReader::new(stream).lines() {
+        let Ok(line) = line else { break };
+        reply.push_str(&line);
+        reply.push('\n');
+        if line == "end=1" {
+            break;
+        }
+    }
+    web_state_from(&reply)
+}
+
+fn apply_web_state(ui: &QuickMenuWindow, running: bool, zoom: i32) {
+    if !running && (20..=27).contains(&ui.get_selected_index()) {
+        ui.set_selected_index(3);
+    }
+    ui.set_web_section_visible(running);
+    ui.set_web_zoom_label(format!("{zoom}%").into());
+}
+
+fn start_web_subscription(tx: Sender<AppEvent>) {
+    thread::spawn(move || loop {
+        if let Ok(mut stream) = UnixStream::connect(WEB_SOCKET) {
+            if stream.write_all(b"SUBSCRIBE\n").is_ok() {
+                let mut reader = BufReader::new(stream);
+                let mut block = String::new();
+                let mut line = String::new();
+                let mut last = (false, 0);
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            block.push_str(&line);
+                            if line.trim_end() == "end=1" {
+                                let state = web_state_from(&block);
+                                block.clear();
+                                /* Page and history changes publish too:
+                                 * forward only what the menu shows. */
+                                if state != last {
+                                    last = state;
+                                    if tx.send(AppEvent::Web(state.0, state.1)).is_err() {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = tx.send(AppEvent::Web(false, 100));
+        /* Only reached while webd is absent or restarting. */
+        thread::sleep(Duration::from_secs(1));
+    });
+}
+
+/* WEB rows: 20 Resume, 27 Keyboard, 21 Go Back, 22 Go Forward, 23 Reload,
+ * 24 Zoom (confirm restores 100%), 25 Add Bookmark, 26 Quit Web. Back,
+ * Forward, Reload and Zoom keep the menu open over the live page. */
+fn activate_web_row(
+    ui: &QuickMenuWindow,
+    mapped: &mut bool,
+    brightness_dirty: &mut bool,
+    queue: &mut EventQueue<WaylandState>,
+    state: &mut WaylandState,
+    qh: &QueueHandle<WaylandState>,
+    conn: &Connection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let close = match ui.get_selected_index() {
+        20 => true,
+        27 => {
+            if !ui.get_web_ime_active() {
+                return Ok(());
+            }
+            KEYBOARD_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+            true
+        }
+        21 => {
+            web_command("BACK");
+            false
+        }
+        22 => {
+            web_command("FORWARD");
+            false
+        }
+        23 => {
+            web_command("RELOAD");
+            false
+        }
+        24 => {
+            web_command("ZOOM_RESET");
+            false
+        }
+        25 => {
+            web_command("BOOKMARK_ADD");
+            true
+        }
+        26 => {
+            web_command("QUIT");
+            ui.set_web_section_visible(false);
+            true
+        }
+        _ => return Ok(()),
+    };
+    if close {
+        flush_brightness(ui, brightness_dirty)?;
+        unmap_overlay(ui, queue, state, conn);
+        *mapped = false;
+    } else {
+        redraw_overlay(ui, queue, state, qh, conn)?;
+    }
+    Ok(())
+}
+
+/*
+ * Web Mode keyboard. Shown while the page's text field has the input
+ * method focus; it takes the controller (inputd MENU OPEN) and commits
+ * each key into the field. Back closes it (the field keeps the focus;
+ * Keyboard in the Quick Menu shows it again).
+ */
+/* Keyboard row: show the keyboard once the menu has closed. */
+static KEYBOARD_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[derive(Default)]
+struct WebKeyboard {
+    ime: Option<std::sync::Arc<ime::Ime>>,
+    field: ime::ImeState,
+    visible: bool,
+    /* Closed by the user for this field: not reopened by its updates. */
+    dismissed: bool,
+    page: i32,
+    shift: bool,
+    layout: String,
+}
+
+const KEY_SHIFT: &str = "⇧";
+const KEY_BACKSPACE: &str = "⌫";
+const KEY_SPACE: &str = "␣";
+const KEY_NUMBERS: &str = "123";
+const KEY_SYMBOLS: &str = "#+=";
+const KEY_LETTERS: &str = "abc";
+const KEY_DONE: &str = "\u{1}done";
+
+fn keyboard_layout() -> String {
+    let reply = (|| -> std::io::Result<String> {
+        let mut stream = UnixStream::connect(REGIONAL_SOCKET)?;
+        stream.set_read_timeout(Some(Duration::from_millis(300)))?;
+        stream.write_all(b"STATUS\n")?;
+        stream.shutdown(std::net::Shutdown::Write)?;
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply)?;
+        Ok(reply)
+    })()
+    .unwrap_or_default();
+    match reply.lines().find_map(|l| l.strip_prefix("keyboard_layout=")).unwrap_or("us") {
+        "fr" => "azerty".into(),
+        "de" => "qwertz".into(),
+        _ => "qwerty".into(),
+    }
+}
+
+fn keyboard_rows(kb: &WebKeyboard) -> [Vec<&'static str>; 4] {
+    let bottom = |page: &'static str| vec![page, KEY_SYMBOLS, "@", "/", KEY_SPACE, KEY_SPACE, ".", "-", KEY_BACKSPACE, KEY_DONE];
+    match kb.page {
+        1 => [
+            vec!["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
+            vec!["!", "?", "#", "$", "%", "&", "*", "(", ")", "'"],
+            vec!["+", "=", ":", ";", ",", "_", "\"", "<", ">", "~"],
+            bottom(KEY_LETTERS),
+        ],
+        2 => [
+            vec!["`", "^", "€", "£", "¥", "°", "§", "|", "\\", "¿"],
+            vec!["[", "]", "{", "}", "¡", "«", "»", "·", "¨", "´"],
+            vec!["à", "è", "é", "ì", "ò", "ù", "ç", "ñ", "ä", "ö"],
+            vec![KEY_LETTERS, KEY_NUMBERS, "ü", "ß", KEY_SPACE, KEY_SPACE, "ê", "â", KEY_BACKSPACE, KEY_DONE],
+        ],
+        _ => {
+            let (r0, r1, r2): (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>) = match kb.layout.as_str() {
+                "azerty" => (
+                    vec!["a", "z", "e", "r", "t", "y", "u", "i", "o", "p"],
+                    vec!["q", "s", "d", "f", "g", "h", "j", "k", "l", "m"],
+                    vec![KEY_SHIFT, "w", "x", "c", "v", "b", "n", ",", "'", "?"],
+                ),
+                "qwertz" => (
+                    vec!["q", "w", "e", "r", "t", "z", "u", "i", "o", "p"],
+                    vec!["a", "s", "d", "f", "g", "h", "j", "k", "l", "'"],
+                    vec![KEY_SHIFT, "y", "x", "c", "v", "b", "n", "m", ",", "?"],
+                ),
+                _ => (
+                    vec!["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
+                    vec!["a", "s", "d", "f", "g", "h", "j", "k", "l", "'"],
+                    vec![KEY_SHIFT, "z", "x", "c", "v", "b", "n", "m", ",", "?"],
+                ),
+            };
+            [r0, r1, r2, bottom(KEY_NUMBERS)]
+        }
+    }
+}
+
+fn key_label(ui: &QuickMenuWindow, kb: &WebKeyboard, key: &str) -> String {
+    if key == KEY_DONE {
+        tr(ui, 697, "Done")
+    } else if kb.shift && kb.page == 0 && key.chars().count() == 1 && key.chars().all(char::is_alphabetic) {
+        key.to_uppercase()
+    } else {
+        key.to_owned()
+    }
+}
+
+fn apply_keyboard(ui: &QuickMenuWindow, kb: &WebKeyboard) {
+    let rows = keyboard_rows(kb);
+    let model = |row: &Vec<&'static str>| -> ModelRc<SharedString> {
+        let labels: Vec<SharedString> = row.iter().map(|k| key_label(ui, kb, k).into()).collect();
+        ModelRc::from(Rc::new(VecModel::from(labels)))
+    };
+    ui.set_kb_row_zero(model(&rows[0]));
+    ui.set_kb_row_one(model(&rows[1]));
+    ui.set_kb_row_two(model(&rows[2]));
+    ui.set_kb_row_three(model(&rows[3]));
+    ui.set_kb_preview(kb.field.surrounding.clone().into());
+    ui.set_kb_mode_label(match kb.page {
+        1 => "123".into(),
+        2 => "#+=".into(),
+        _ => kb.layout.to_uppercase().into(),
+    });
+}
+
+fn show_keyboard(ui: &QuickMenuWindow, kb: &mut WebKeyboard) {
+    if kb.visible {
+        return;
+    }
+    kb.visible = true;
+    ui.set_kb_visible(true);
+    kb.dismissed = false;
+    kb.page = 0;
+    kb.shift = false;
+    kb.layout = keyboard_layout();
+    refresh_i18n(ui);
+    refresh_hint_mapping(ui);
+    ui.set_kb_index(0);
+    apply_keyboard(ui, kb);
+    set_menu_capture(true);
+}
+
+fn hide_keyboard(ui: &QuickMenuWindow, kb: &mut WebKeyboard) {
+    if !kb.visible {
+        return;
+    }
+    kb.visible = false;
+    ui.set_kb_visible(false);
+    set_menu_capture(false);
+}
+
+fn keyboard_move(ui: &QuickMenuWindow, kb: &WebKeyboard, dx: i32, dy: i32) {
+    let rows = keyboard_rows(kb);
+    let index = ui.get_kb_index();
+    let row = (index / 10 + dy).rem_euclid(4);
+    let keys = &rows[row as usize];
+    let len = keys.len() as i32;
+    let mut col = (index % 10).min(len - 1);
+    if dx != 0 {
+        /* The space bar is two keys wide: one step crosses it. */
+        let from_space = keys[col as usize] == KEY_SPACE;
+        col = (col + dx).rem_euclid(len);
+        if from_space && keys[col as usize] == KEY_SPACE {
+            col = (col + dx).rem_euclid(len);
+        }
+    }
+    ui.set_kb_index(row * 10 + col);
+}
+
+/* One controller action while the keyboard is shown. Returns false when
+ * the keyboard closed. */
+fn keyboard_action(ui: &QuickMenuWindow, kb: &mut WebKeyboard, action: &str) -> bool {
+    match action {
+        "menu_up" => keyboard_move(ui, kb, 0, -1),
+        "menu_down" => keyboard_move(ui, kb, 0, 1),
+        "menu_left" => keyboard_move(ui, kb, -1, 0),
+        "menu_right" => keyboard_move(ui, kb, 1, 0),
+        "menu_back" => {
+            kb.dismissed = true;
+            hide_keyboard(ui, kb);
+            return false;
+        }
+        "face_north" => {
+            if let Some(ime) = kb.ime.as_ref() {
+                ime.delete_before(&kb.field);
+            }
+        }
+        "menu_confirm" => {
+            let index = ui.get_kb_index();
+            let rows = keyboard_rows(kb);
+            let Some(key) = rows.get((index / 10) as usize).and_then(|r| r.get((index % 10) as usize)).copied() else {
+                return true;
+            };
+            match key {
+                KEY_DONE => {
+                    kb.dismissed = true;
+                    hide_keyboard(ui, kb);
+                    return false;
+                }
+                KEY_SHIFT => kb.shift = !kb.shift,
+                KEY_NUMBERS => kb.page = 1,
+                KEY_SYMBOLS => kb.page = 2,
+                KEY_LETTERS => kb.page = 0,
+                KEY_BACKSPACE => {
+                    if let Some(ime) = kb.ime.as_ref() {
+                        ime.delete_before(&kb.field);
+                    }
+                }
+                _ => {
+                    let text = if key == KEY_SPACE { " ".to_owned() } else { key_label(ui, kb, key) };
+                    if let Some(ime) = kb.ime.as_ref() {
+                        ime.commit_text(&text);
+                    }
+                    /* One capital, like a phone keyboard. */
+                    if kb.shift && kb.page == 0 && key != KEY_SPACE {
+                        kb.shift = false;
+                    }
+                }
+            }
+            apply_keyboard(ui, kb);
+        }
+        _ => {}
+    }
+    true
+}
+
 fn selectable_menu_indices(ui: &QuickMenuWindow) -> Vec<i32> {
     let mut indices = Vec::new();
     if ui.get_game_section_visible() {
-        indices.extend_from_slice(&[8, 9, 10, 11, 12, 13, 14]);
+        indices.extend_from_slice(&[8, 9, 10, 11, 12, 13, 18, 14]);
     }
     if ui.get_stream_section_visible() {
-        indices.extend_from_slice(&[15, 16, 17]);
+        indices.extend_from_slice(if ui.get_stream_steamlink() { &[15, 16] } else { &[15, 16, 17] });
+    }
+    if ui.get_web_section_visible() {
+        indices.extend_from_slice(&[20, 27, 21, 22, 23, 24, 25, 26]);
     }
     indices.push(3);
     if ui.get_brightness_visible() {
@@ -2475,6 +3029,8 @@ fn first_selectable_index(ui: &QuickMenuWindow) -> i32 {
         8
     } else if ui.get_stream_section_visible() {
         15
+    } else if ui.get_web_section_visible() {
+        20
     } else {
         3
     }
@@ -2618,6 +3174,7 @@ fn map_overlay(
     conn: &Connection,
 ) -> Result<(), Box<dyn std::error::Error>> {
     refresh_i18n(ui);
+    refresh_theme(ui);
     let _ = fs::remove_file(MAPPED_FILE);
     let _ = fs::remove_file(SURFACE_FILE);
 
@@ -2642,12 +3199,14 @@ fn map_overlay(
     if game.running {
         game_action("PAUSE");
     }
-    let streaming = read_stream_running();
-    apply_stream_running(ui, streaming);
-    if streaming {
+    let (streaming, steamlink) = read_stream_state();
+    apply_stream_running(ui, streaming, steamlink);
+    if streaming && !steamlink {
         refresh_stream_stats(ui);
     }
-    ui.set_switch_user_visible(!game.running && !streaming && switch_user_available());
+    let (web, zoom) = read_web_state();
+    apply_web_state(ui, web, zoom);
+    ui.set_switch_user_visible(!game.running && !streaming && !web && switch_user_available());
     ui.set_selected_index(first_selectable_index(ui));
 
     state.create_overlay(qh, SurfaceKind::Full)?;
@@ -2799,7 +3358,11 @@ fn present(
         return redraw_overlay(ui, queue, state, qh, conn);
     }
 
-    let want = ui.get_volume_osd_visible().then_some(SurfaceKind::Volume);
+    let want = if ui.get_kb_visible() {
+        Some(SurfaceKind::Keyboard)
+    } else {
+        ui.get_volume_osd_visible().then_some(SurfaceKind::Volume)
+    };
 
     if want == *passive {
         if passive.is_some() {
@@ -3040,7 +3603,9 @@ fn activate_stream_row(
     Ok(())
 }
 
-/* GAME rows (8 Resume .. 14 Quit). Load State, Restart Game and Quit Game
+/* GAME rows (8 Resume .. 13 RetroArch Advanced, 18 Screenshot, 14 Quit).
+ * The screenshot is RetroArch's own rendering, so the menu is not in it.
+ * Load State, Restart Game and Quit Game
  * lose unsaved progress and take a second press (EPIC-005 safety rules). */
 fn activate_game_row(
     ui: &QuickMenuWindow,
@@ -3076,6 +3641,7 @@ fn activate_game_row(
             game_action("QUIT");
             resume = false;
         }
+        18 => game_action("SCREENSHOT"),
         _ => return Ok(()),
     }
     if !resume {
@@ -3154,7 +3720,7 @@ fn handle_event(
             && (ui.get_selected_index() == 1 || ui.get_selected_index() == 2);
         let slider_adjustment = *mapped
             && (event.action == "menu_left" || event.action == "menu_right")
-            && (ui.get_selected_index() == 3 ||
+            && (ui.get_selected_index() == 3 || ui.get_selected_index() == 24 ||
                 (ui.get_selected_index() == 5 && ui.get_brightness_visible()));
         if !lifecycle_confirm && !slider_adjustment {
             play_ui_sound(event.action.as_str());
@@ -3176,7 +3742,8 @@ fn handle_event(
     match event.action.as_str() {
         /* Over a game Home (and its Power menu) is hidden: the power key
          * opens the Quick Menu on Sleep, next to Restart and Power Off. */
-        "power" if (ui.get_game_section_visible() || ui.get_stream_section_visible())
+        "power" if (ui.get_game_section_visible() || ui.get_stream_section_visible()
+            || ui.get_web_section_visible())
             && !ui.get_lifecycle_active() => {
             if *mapped {
                 flush_brightness(ui, brightness_dirty)?;
@@ -3219,6 +3786,20 @@ fn handle_event(
             && ui.get_selected_index() >= 8 =>
         {
             activate_game_row(ui, mapped, brightness_dirty, queue, state, qh, conn)?;
+        }
+        "menu_confirm" if *mapped
+            && !ui.get_lifecycle_active()
+            && ui.get_web_section_visible()
+            && (20..=27).contains(&ui.get_selected_index()) =>
+        {
+            activate_web_row(ui, mapped, brightness_dirty, queue, state, qh, conn)?;
+        }
+        "menu_left" | "menu_right" if *mapped
+            && !ui.get_lifecycle_active()
+            && ui.get_web_section_visible()
+            && ui.get_selected_index() == 24 =>
+        {
+            web_command(if event.action == "menu_left" { "ZOOM_OUT" } else { "ZOOM_IN" });
         }
         "menu_confirm" if *mapped
             && !ui.get_lifecycle_active()
@@ -3375,6 +3956,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui = QuickMenuWindow::new()?;
     let card = NotificationWindow::new()?;
+    refresh_theme(&ui);
 
     let mut queue = conn.new_event_queue::<WaylandState>();
     let qh = queue.handle();
@@ -3411,6 +3993,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     start_audio_subscription(tx.clone());
     start_game_subscription(tx.clone());
     start_stream_subscription(tx.clone());
+    start_web_subscription(tx.clone());
+    let mut keyboard = WebKeyboard { ime: ime::start(tx.clone()), ..WebKeyboard::default() };
     refresh_i18n(&ui);
 
     let mut mapped = false;
@@ -3487,6 +4071,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 eprintln!("quick-menu: volume action failed={}", error);
                             }
                         }
+                    } else if keyboard.visible && !mapped {
+                        /* Web Mode keyboard: it owns the controller; the
+                         * Quick Menu (or the power key) replaces it. */
+                        if event.pressed && (event.action == "quick_menu" || event.action == "power") {
+                            hide_keyboard(&ui, &mut keyboard);
+                            unmap_passive(&ui, &mut queue, &mut state, &conn);
+                            passive = None;
+                            osd_deadline = None;
+                            map_overlay(&ui, &mut queue, &mut state, &qh, &conn)?;
+                            mapped = true;
+                            if event.action == "power" {
+                                ui.set_selected_index(0);
+                                redraw_overlay(&ui, &mut queue, &mut state, &qh, &conn)?;
+                            }
+                        } else if event.pressed {
+                            play_ui_sound(event.action.as_str());
+                            keyboard_action(&ui, &mut keyboard, &event.action);
+                            dirty = true;
+                        }
                     } else if event.pressed
                         && event.action == "quick_menu"
                         && passive.is_some()
@@ -3537,8 +4140,36 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-                AppEvent::Stream(running) => {
-                    apply_stream_running(&ui, running);
+                AppEvent::Web(running, zoom) => {
+                    apply_web_state(&ui, running, zoom);
+                    if !running && keyboard.visible {
+                        hide_keyboard(&ui, &mut keyboard);
+                    }
+                    if mapped && !running {
+                        ui.set_switch_user_visible(switch_user_available());
+                    }
+                    dirty = true;
+                }
+                AppEvent::Ime(field) => {
+                    if field.generation != keyboard.field.generation {
+                        keyboard.dismissed = false;
+                    }
+                    let active = field.active;
+                    keyboard.field = field;
+                    ui.set_web_ime_active(active);
+                    if !active {
+                        hide_keyboard(&ui, &mut keyboard);
+                    } else if keyboard.visible {
+                        apply_keyboard(&ui, &keyboard);
+                    } else if ui.get_web_section_visible() && !mapped && !keyboard.dismissed
+                        && !ui.get_lifecycle_active()
+                    {
+                        show_keyboard(&ui, &mut keyboard);
+                    }
+                    dirty = true;
+                }
+                AppEvent::Stream(running, steamlink) => {
+                    apply_stream_running(&ui, running, steamlink);
                     if mapped {
                         if !running {
                             ui.set_switch_user_visible(switch_user_available());
@@ -3596,6 +4227,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+        }
+
+        /* Keyboard row of the menu: shown once the menu has closed. */
+        if !mapped && KEYBOARD_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst)
+            && ui.get_web_ime_active() && !keyboard.visible
+        {
+            show_keyboard(&ui, &mut keyboard);
+            dirty = true;
         }
 
         let now = Instant::now();

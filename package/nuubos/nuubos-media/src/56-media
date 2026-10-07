@@ -1,0 +1,4 @@
+#!/bin/sh
+# Media playback (EPIC-028): stop it, saving the resume position, before
+# Sleep/Restart/Power Off.
+exec /usr/bin/nuubos-playerctl pre-power

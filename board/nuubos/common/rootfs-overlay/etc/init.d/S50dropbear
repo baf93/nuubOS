@@ -1,0 +1,17 @@
+#!/bin/sh
+# Remote Services (EPIC-037): Dropbear SSH, SMB file sharing and Web
+# administration start here only when enabled in Settings
+# (nuubos-remotectl, which also prepares the device credential).
+
+case "${1:-}" in
+    start|restart|reload)
+        /usr/sbin/nuubos-remotectl start
+        ;;
+    stop)
+        /usr/sbin/nuubos-remotectl stop
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}" >&2
+        exit 1
+        ;;
+esac

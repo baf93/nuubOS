@@ -1,0 +1,6 @@
+# File Manager copy (source, destination folder)
+COMMAND=/usr/bin/nuubos-filesctl copy
+SCOPE=device
+CANCEL=1
+RETRY=1
+ARGS=2

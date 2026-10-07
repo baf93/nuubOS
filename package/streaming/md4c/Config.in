@@ -1,0 +1,8 @@
+config BR2_PACKAGE_MD4C
+	bool "md4c"
+	help
+	  MD4C is a Markdown parser written in C (CommonMark). Needed
+	  at runtime by the Qt 5 libraries bundled with the Valve Steam
+	  Link application.
+
+	  https://github.com/mity/md4c

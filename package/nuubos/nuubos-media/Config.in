@@ -1,0 +1,11 @@
+config BR2_PACKAGE_NUUBOS_MEDIA
+	bool "nuubos-media"
+	depends on BR2_USE_MMU
+	select BR2_PACKAGE_NUUBOS_NOTIFY
+	select BR2_PACKAGE_MPV
+	select BR2_PACKAGE_CJSON
+	select BR2_PACKAGE_LIBCURL
+	help
+	  EPIC-027/028: local video and music playback (nuubos-mediad,
+	  mpv with Cedrus decoding and per-user resume) and the Jellyfin
+	  media server client (nuubos-jellyfinctl).

@@ -42,8 +42,13 @@ for L in "${LANGS[@]}"; do
         -v /usr/share/fonts:/usr/share/fonts:ro \
         -w /shot \
         nuubos-dev:0.5 \
-        sh -c 'cargo build --offline --release --locked --target-dir /target 2>&1 | grep -E "^(error|warning: unused)" -A6; /target/release/ui-shot; SCENES=qm /target/release/ui-shot'
-    if ls "$OUT/$L"/*.png >/dev/null 2>&1; then
+        sh -c 'cargo build --offline --release --locked --target-dir /target > /tmp/build.log 2>&1; rc=$?; grep -E "^(error|warning: unused)" -A6 /tmp/build.log; [ "$rc" = 0 ] || exit 1; /target/release/ui-shot; SCENES=qm /target/release/ui-shot'
+    BUILD=$?
+    # A failed build must not report the previous binary's snapshots.
+    if [ "$BUILD" -ne 0 ]; then
+        echo "[FAIL] $L: ui-shot build or run failed"
+        STATUS=1
+    elif ls "$OUT/$L"/*.png >/dev/null 2>&1; then
         echo "[PASS] $L: $(ls "$OUT/$L"/*.png | wc -l) snapshots in $OUT/$L"
     else
         echo "[FAIL] $L: no snapshots produced"

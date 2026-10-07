@@ -43,6 +43,7 @@
 #define MAX_PADMAPS 16
 #define MAX_VPADS 8
 #define NAV_REPEAT_INTERVAL_MS 90
+#define WEB_DEV_NAME "nuubOS Web Input"
 
 #define BITS_PER_LONG (sizeof(unsigned long) * 8U)
 #define NBITS(n) (((n) + BITS_PER_LONG - 1U) / BITS_PER_LONG)
@@ -61,8 +62,10 @@ static struct binding bindings[] = {
 	{ "menu_right", 547 },
 	{ "menu_confirm", 305 },
 	{ "menu_back", 304 },
-	/* Contextual UI action (EPIC-001 X/Y): e.g. Favorite on Home. */
+	/* Contextual UI actions (EPIC-001 X/Y): Favorite and Game Details
+	 * on Home. */
 	{ "face_north", 307 },
+	{ "face_west", 308 },
 	/*
 	 * Physical console power is a device-global semantic action.  It is
 	 * deliberately not owned by Settings or Quick Menu and is delivered to
@@ -135,6 +138,8 @@ struct client {
 	/* This connection switched game gamepads on (Emulation Service);
 	 * they are switched off when it closes. */
 	bool owns_gamepads;
+	/* This connection switched Web Mode input on (nuubos-webd). */
+	bool owns_web;
 	enum client_role role;
 	char buf[MAX_LINE];
 	size_t used;
@@ -1025,8 +1030,10 @@ static void rescan_inputs(void)
 		if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0)
 			snprintf(name, sizeof(name), "unknown");
 
-		/* Our own game gamepads are outputs, never inputs. */
-		if (strncmp(name, VPAD_NAME, strlen(VPAD_NAME)) == 0) {
+		/* Our own game gamepads and browser input are outputs,
+		 * never inputs. */
+		if (strncmp(name, VPAD_NAME, strlen(VPAD_NAME)) == 0 ||
+		    strcmp(name, WEB_DEV_NAME) == 0) {
 			close(fd);
 			continue;
 		}
@@ -1097,7 +1104,8 @@ static bool action_is_navigation(const char *action)
 	       strcmp(action, "menu_right") == 0 ||
 	       strcmp(action, "menu_confirm") == 0 ||
 	       strcmp(action, "menu_back") == 0 ||
-	       strcmp(action, "face_north") == 0;
+	       strcmp(action, "face_north") == 0 ||
+	       strcmp(action, "face_west") == 0;
 }
 
 static bool client_wants_action(const struct client *client,
@@ -1388,11 +1396,15 @@ static const struct game_hotkey game_hotkeys[] = {
 	{ PAD_RIGHT, "slot_next" },
 	{ PAD_LEFT, "slot_prev" },
 	{ PAD_R2, "fast_forward" },
+	{ PAD_L2, "screenshot" },
 };
 
+static bool web_on;
+
+/* Controllers are grabbed and translated: a game or the browser runs. */
 static bool gamepads_forwarding(void)
 {
-	return gamepads_on;
+	return gamepads_on || web_on;
 }
 
 static bool input_is_pad(const struct input_dev *input)
@@ -1532,9 +1544,14 @@ static void vpad_release(struct vpad *pad)
 	vpad_sync(pad);
 }
 
+static void web_release(void);
+
 static void release_all_vpads(void)
 {
 	size_t i;
+
+	if (web_on)
+		web_release();
 
 	for (i = 0; i < MAX_VPADS; i++)
 		if (vpads[i].fd >= 0)
@@ -1719,7 +1736,7 @@ static bool game_hotkey_event(const struct input_dev *input,
 
 	if (!hotkey_held || !map)
 		return false;
-	if (ev->type != EV_KEY || ev->value != 1)
+	if (ev->type != EV_KEY || ev->value != 1 || web_on)
 		return true;
 	for (i = 0; i < sizeof(game_hotkeys) / sizeof(game_hotkeys[0]); i++) {
 		const struct pad_source *src = &map->src[game_hotkeys[i].control];
@@ -1798,6 +1815,273 @@ static bool forward_game_event(const struct input_dev *input,
 	return consumed;
 }
 
+
+/*
+ * Web Mode (EPIC-030). While nuubos-webd holds WEB ON, every controller is
+ * grabbed as for a game but drives one uinput "nuubOS Web Input" keyboard
+ * and pointer for the browser, following the user's mapping: D-pad = arrow
+ * keys (WebKit spatial navigation), confirm = Enter, back = history back
+ * (Alt+Left), north = pointer click, west = Escape, L1/R1 = Page Up/Down,
+ * Start/Select = Tab/Shift+Tab, left stick = pointer, right stick =
+ * scroll. L2/R2/L3 zoom through nuubos-webd (HOTKEY zoom_out|zoom_in|
+ * zoom_reset: Ctrl+= depends on the keyboard layout). Only layout-neutral
+ * keys are sent; text goes through the Quick Menu input method. The Quick
+ * Menu button opens the Quick Menu on release. Sticks are sampled by a
+ * timer that exists only while one is deflected.
+ */
+#define WEB_TICK_MS 16
+#define WEB_POINTER_MAX 12 /* px per tick at full deflection */
+#define WEB_SCROLL_MAX 90  /* hi-res wheel units (120 = one notch) per tick */
+
+struct web_key {
+	int mod;
+	int code;
+	const char *hotkey;
+};
+
+static const struct web_key web_keys[PAD_CONTROL_COUNT] = {
+	[PAD_SOUTH] = { KEY_LEFTALT, KEY_LEFT, NULL },
+	[PAD_EAST] = { 0, KEY_ENTER, NULL },
+	[PAD_NORTH] = { 0, BTN_LEFT, NULL },
+	[PAD_WEST] = { 0, KEY_ESC, NULL },
+	[PAD_UP] = { 0, KEY_UP, NULL },
+	[PAD_DOWN] = { 0, KEY_DOWN, NULL },
+	[PAD_LEFT] = { 0, KEY_LEFT, NULL },
+	[PAD_RIGHT] = { 0, KEY_RIGHT, NULL },
+	[PAD_L1] = { 0, KEY_PAGEUP, NULL },
+	[PAD_R1] = { 0, KEY_PAGEDOWN, NULL },
+	[PAD_L2] = { 0, 0, "zoom_out" },
+	[PAD_R2] = { 0, 0, "zoom_in" },
+	[PAD_L3] = { 0, 0, "zoom_reset" },
+	[PAD_START] = { 0, KEY_TAB, NULL },
+	[PAD_SELECT] = { KEY_LEFTSHIFT, KEY_TAB, NULL },
+};
+
+static int web_fd = -1;
+static bool web_pressed[PAD_CONTROL_COUNT];
+static int web_axis[4];  /* -100..100 after deadzone: LX LY RX RY */
+static int web_rest[4];  /* sub-unit remainders (x1000) */
+static long long web_next_ms;
+
+static void web_write(int type, int code, int value)
+{
+	struct input_event ev;
+
+	if (web_fd < 0)
+		return;
+	memset(&ev, 0, sizeof(ev));
+	ev.type = (unsigned short)type;
+	ev.code = (unsigned short)code;
+	ev.value = value;
+	if (write(web_fd, &ev, sizeof(ev)) != (ssize_t)sizeof(ev))
+		log_message("web write failed errno=%d", errno);
+}
+
+static int web_create(void)
+{
+	struct uinput_setup setup;
+	size_t c;
+	int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+
+	if (fd < 0)
+		return -1;
+	(void)ioctl(fd, UI_SET_EVBIT, EV_KEY);
+	(void)ioctl(fd, UI_SET_EVBIT, EV_REL);
+	for (c = 0; c < PAD_CONTROL_COUNT; c++) {
+		if (web_keys[c].mod)
+			(void)ioctl(fd, UI_SET_KEYBIT, web_keys[c].mod);
+		if (web_keys[c].code)
+			(void)ioctl(fd, UI_SET_KEYBIT, web_keys[c].code);
+	}
+	(void)ioctl(fd, UI_SET_KEYBIT, BTN_RIGHT);
+	(void)ioctl(fd, UI_SET_RELBIT, REL_X);
+	(void)ioctl(fd, UI_SET_RELBIT, REL_Y);
+	(void)ioctl(fd, UI_SET_RELBIT, REL_WHEEL);
+	(void)ioctl(fd, UI_SET_RELBIT, REL_HWHEEL);
+	(void)ioctl(fd, UI_SET_RELBIT, REL_WHEEL_HI_RES);
+	(void)ioctl(fd, UI_SET_RELBIT, REL_HWHEEL_HI_RES);
+
+	memset(&setup, 0, sizeof(setup));
+	setup.id.bustype = BUS_VIRTUAL;
+	setup.id.vendor = 0;
+	setup.id.product = 0x100;
+	setup.id.version = 1;
+	snprintf(setup.name, sizeof(setup.name), "%s", WEB_DEV_NAME);
+	if (ioctl(fd, UI_DEV_SETUP, &setup) < 0 || ioctl(fd, UI_DEV_CREATE) < 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+static void web_set_button(size_t c, bool pressed)
+{
+	const struct web_key *k = &web_keys[c];
+
+	if (web_pressed[c] == pressed)
+		return;
+	web_pressed[c] = pressed;
+	if (k->hotkey) {
+		if (pressed)
+			send_game_hotkey(k->hotkey);
+		return;
+	}
+	if (!k->code)
+		return;
+	if (pressed) {
+		if (k->mod)
+			web_write(EV_KEY, k->mod, 1);
+		web_write(EV_KEY, k->code, 1);
+	} else {
+		web_write(EV_KEY, k->code, 0);
+		if (k->mod)
+			web_write(EV_KEY, k->mod, 0);
+	}
+	web_write(EV_SYN, SYN_REPORT, 0);
+}
+
+static bool web_sticks_active(void)
+{
+	return web_axis[0] || web_axis[1] || web_axis[2] || web_axis[3];
+}
+
+/* Releases everything held (Quick Menu opened, mapping changed, end). */
+static void web_release(void)
+{
+	size_t c;
+
+	for (c = 0; c < PAD_CONTROL_COUNT; c++)
+		web_set_button(c, false);
+	memset(web_axis, 0, sizeof(web_axis));
+	memset(web_rest, 0, sizeof(web_rest));
+}
+
+static void set_web(bool enabled)
+{
+	if (web_on == enabled)
+		return;
+	web_on = enabled;
+	hotkey_held = false;
+	hotkey_used = false;
+	if (enabled) {
+		web_fd = web_create();
+		log_message("web on fd=%d errno=%d", web_fd, web_fd < 0 ? errno : 0);
+	} else {
+		web_release();
+		if (web_fd >= 0) {
+			(void)ioctl(web_fd, UI_DEV_DESTROY);
+			close(web_fd);
+		}
+		web_fd = -1;
+		log_message("web off");
+	}
+	sync_input_grab();
+}
+
+/* Quadratic response: fine control near the centre, speed at the edge. */
+static int web_motion(int a, int max)
+{
+	long long v = web_axis[a];
+	long long scaled = v * (v < 0 ? -v : v) * max / 10; /* x1000 units */
+	long long total = scaled + web_rest[a];
+	int units = (int)(total / 1000);
+
+	web_rest[a] = (int)(total % 1000);
+	return units;
+}
+
+static void web_tick(void)
+{
+	int dx, dy, sx, sy;
+
+	if (!web_on || menu_open || !web_sticks_active() || monotonic_ms() < web_next_ms)
+		return;
+	web_next_ms = monotonic_ms() + WEB_TICK_MS;
+	dx = web_motion(0, WEB_POINTER_MAX);
+	dy = web_motion(1, WEB_POINTER_MAX);
+	sx = web_motion(2, WEB_SCROLL_MAX);
+	sy = web_motion(3, WEB_SCROLL_MAX);
+	if (dx)
+		web_write(EV_REL, REL_X, dx);
+	if (dy)
+		web_write(EV_REL, REL_Y, dy);
+	/* Wheel: positive = up, the stick pushed up is negative. */
+	if (sy)
+		web_write(EV_REL, REL_WHEEL_HI_RES, -sy);
+	if (sx)
+		web_write(EV_REL, REL_HWHEEL_HI_RES, sx);
+	if (dx || dy || sx || sy)
+		web_write(EV_SYN, SYN_REPORT, 0);
+}
+
+static int web_timeout_ms(void)
+{
+	long long left;
+
+	if (!web_on || menu_open || !web_sticks_active())
+		return -1;
+	left = web_next_ms - monotonic_ms();
+	return left <= 0 ? 0 : (int)left;
+}
+
+/* One physical event of a controller in Web Mode. Returns true when it is
+ * a browser control (consumed); the Quick Menu control falls through. */
+static bool forward_web_event(const struct input_dev *input,
+			      const struct input_event *ev)
+{
+	const struct padmap *map;
+	bool consumed = false;
+	size_t c;
+
+	if (ev->type != EV_KEY && ev->type != EV_ABS)
+		return false;
+	map = padmap_for(input->controller_id);
+	if (!map)
+		return false;
+
+	for (c = 0; c < PAD_CONTROL_COUNT; c++) {
+		const struct pad_source *src = &map->src[c];
+
+		if (src->code < 0 || src->code != ev->code ||
+		    src->is_key != (ev->type == EV_KEY))
+			continue;
+		if (c == PAD_MODE)
+			return false;
+		consumed = true;
+
+		if (ev->type == EV_KEY) {
+			if (ev->value != 2 && c < PAD_AXIS_FIRST)
+				web_set_button(c, ev->value != 0);
+			continue;
+		}
+		if (c >= PAD_AXIS_FIRST) {
+			int value = scale_abs(input, ev->code, ev->value);
+			int a = (int)(c - PAD_AXIS_FIRST);
+			bool was_active = web_sticks_active();
+
+			if (src->dir == 2)
+				value = (value + PAD_AXIS_MAX) / 2;
+			else if (src->dir == -2)
+				value = (PAD_AXIS_MAX - value) / 2;
+			else if (src->dir < 0)
+				value = -value;
+			value = apply_deadzone(value, map->deadzone[a / 2]);
+			web_axis[a] = (int)((long long)value * 100 / PAD_AXIS_MAX);
+			if (!web_axis[a])
+				web_rest[a] = 0;
+			if (!was_active && web_sticks_active())
+				web_next_ms = monotonic_ms();
+		} else {
+			int n = normalize_abs(input, ev->code, ev->value);
+			int travel = src->dir == 1 ? n : src->dir == -1 ? -n :
+				     src->dir == 2 ? (n + 100) / 2 : (100 - n) / 2;
+
+			web_set_button(c, web_pressed[c] ? travel >= 30 : travel >= 50);
+		}
+	}
+	return consumed;
+}
+
 static void flush_vpads(void)
 {
 	size_t i;
@@ -1868,7 +2152,7 @@ static void commit_padmaps(void)
 	memcpy(padmaps, padmaps_next, sizeof(padmaps));
 	padmap_count = padmap_next_count;
 	log_message("padmaps updated count=%zu", padmap_count);
-	if (gamepads_on) {
+	if (gamepads_on || web_on) {
 		/* A remapped or reassigned control must not stay held. */
 		release_all_vpads();
 		sync_vpads();
@@ -1903,6 +2187,7 @@ static void status_reply(int fd)
 		 "menu_back=%d\n"
 		 "power=%d\n"
 		 "gamepads=%d\n"
+		 "web=%d\n"
 		 "padmaps=%zu\n",
 		 menu_open ? 1 : 0,
 		 settings_open ? 1 : 0,
@@ -1925,6 +2210,7 @@ static void status_reply(int fd)
 		 binding_by_name("menu_back")->code,
 		 binding_by_name("power")->code,
 		 gamepads_on ? 1 : 0,
+		 web_on ? 1 : 0,
 		 padmap_count);
 
 	(void)write_all(fd, reply);
@@ -2017,6 +2303,24 @@ static void handle_command(struct client *client, const char *line)
 	if (strcmp(line, "GAMEPADS OFF") == 0) {
 		client->owns_gamepads = false;
 		set_gamepads(false);
+		(void)write_all(client->fd, "OK\n");
+		return;
+	}
+
+	/* Web Mode Service (EPIC-030): browser keyboard/pointer for the
+	 * lifetime of this connection. Games and the browser never overlap. */
+	if (strcmp(line, "WEB ON") == 0) {
+		client->owns_web = true;
+		client->owns_gamepads = true; /* receives the zoom HOTKEYs */
+		set_web(true);
+		(void)write_all(client->fd, "OK\n");
+		return;
+	}
+
+	if (strcmp(line, "WEB OFF") == 0) {
+		client->owns_web = false;
+		client->owns_gamepads = false;
+		set_web(false);
 		(void)write_all(client->fd, "OK\n");
 		return;
 	}
@@ -2164,10 +2468,12 @@ static void process_client(struct client *client)
 	if (n <= 0) {
 		enum client_role role = client->role;
 		bool owned_gamepads = client->owns_gamepads;
+		bool owned_web = client->owns_web;
 
 		close(client->fd);
 		client->fd = -1;
 		client->owns_gamepads = false;
+		client->owns_web = false;
 		client->subscribed = false;
 		client->role = CLIENT_ROLE_GENERIC;
 		client->used = 0;
@@ -2182,7 +2488,9 @@ static void process_client(struct client *client)
 		    settings_open)
 			set_settings_grab(false);
 
-		if (owned_gamepads)
+		if (owned_web)
+			set_web(false);
+		else if (owned_gamepads)
 			set_gamepads(false);
 
 		return;
@@ -2252,6 +2560,7 @@ static void accept_client(int server_fd)
 			clients[i].fd = fd;
 			clients[i].subscribed = false;
 			clients[i].owns_gamepads = false;
+			clients[i].owns_web = false;
 			clients[i].role = CLIENT_ROLE_GENERIC;
 			clients[i].used = 0;
 			return;
@@ -2460,13 +2769,14 @@ static void process_input(struct input_dev *input)
 		 * never navigate the nuubUI underneath it. Only the Quick Menu
 		 * button, power and volume keys stay nuubOS actions.
 		 */
-		if (gamepads_on && input_is_pad(input) &&
+		if ((gamepads_on || web_on) && input_is_pad(input) &&
 		    !(events[i].type == EV_KEY && events[i].code == BTN_START &&
 		      suppress_start_marker_present())) {
 			if (!menu_open) {
 				if (game_modifier_event(input, &events[i]) ||
 				    game_hotkey_event(input, &events[i]) ||
-				    forward_game_event(input, &events[i]) ||
+				    (web_on ? forward_web_event(input, &events[i])
+					    : forward_game_event(input, &events[i])) ||
 				    events[i].type == EV_ABS)
 					continue;
 			} else if (events[i].type == EV_ABS) {
@@ -2583,6 +2893,7 @@ static void cleanup_runtime(int server_fd,
 	settings_open = false;
 	gamepads_on = false;
 	destroy_vpads();
+	set_web(false);
 	sync_input_grab();
 	close_inputs();
 
@@ -2701,6 +3012,7 @@ int main(int argc, char **argv)
 		size_t kinds[2 + MAX_INPUTS + MAX_CLIENTS];
 		size_t indexes[2 + MAX_INPUTS + MAX_CLIENTS];
 		nfds_t count = 0;
+		int timeout;
 		int rc;
 
 		if (reload_requested) {
@@ -2745,7 +3057,11 @@ int main(int argc, char **argv)
 			count++;
 		}
 
-		rc = poll(pfds, count, navigation_repeat_timeout_ms());
+		timeout = navigation_repeat_timeout_ms();
+		if (web_timeout_ms() >= 0 &&
+		    (timeout < 0 || web_timeout_ms() < timeout))
+			timeout = web_timeout_ms();
+		rc = poll(pfds, count, timeout);
 		if (rc < 0) {
 			if (errno == EINTR)
 				continue;
@@ -2753,6 +3069,7 @@ int main(int argc, char **argv)
 		}
 
 		navigation_repeat_tick();
+		web_tick();
 
 		for (i = 0; i < (size_t)count; i++) {
 			if (pfds[i].revents == 0)

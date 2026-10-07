@@ -1,0 +1,8 @@
+config BR2_PACKAGE_NUUBOS_JOBS
+	bool "nuubos-jobs"
+	select BR2_PACKAGE_NUUBOS_NOTIFY
+	depends on BR2_USE_MMU
+	help
+	  EPIC-007 Background Jobs: nuubos-jobd runs registered job
+	  types (/usr/share/nuubos/jobs/*.job) as low-priority workers,
+	  one Live Notification per job, with cancel and explicit retry.

@@ -3,10 +3,23 @@ config BR2_PACKAGE_NUUBOS_STREAMING
 	depends on BR2_TOOLCHAIN_HAS_THREADS # moonlight-embedded
 	depends on BR2_PACKAGE_HAS_UDEV # moonlight-embedded
 	depends on BR2_PACKAGE_WAYLAND # moonlight-embedded
+	depends on BR2_INSTALL_LIBSTDCPP # steamlink-runtime
+	depends on BR2_PACKAGE_HAS_LIBEGL # steamlink-runtime
+	depends on BR2_PACKAGE_HAS_LIBGLES # steamlink-runtime
+	depends on BR2_USE_MMU # steamlink-runtime
+	depends on !BR2_STATIC_LIBS # steamlink-runtime
+	depends on BR2_PACKAGE_LIBEPOXY # steamlink-runtime
 	select BR2_PACKAGE_NUUBOS_NOTIFY
 	select BR2_PACKAGE_MOONLIGHT_EMBEDDED
+	select BR2_PACKAGE_STEAMLINK_RUNTIME
+	select BR2_PACKAGE_LIBCURL # Steam Link download
+	select BR2_PACKAGE_ZLIB # Steam Link download
+	select BR2_PACKAGE_OPENSSL # Steam Link signature check
+	select BR2_PACKAGE_CA_CERTIFICATES # Steam Link download (TLS)
 	help
-	  PC game streaming service (EPIC-025): per-user GameStream /
-	  Sunshine hosts, pairing, host applications, stream settings
-	  and the running Moonlight stream (gamepads, Quick Menu,
-	  lifecycle). Moonlight runs as a child process.
+	  PC game streaming service (EPIC-025, EPIC-026): per-user
+	  GameStream / Sunshine hosts, pairing, host applications,
+	  stream settings and the running Moonlight stream (gamepads,
+	  Quick Menu, lifecycle). Moonlight runs as a child process.
+	  Steam Link: downloads Valve's application on request and runs
+	  it as a session like a stream.

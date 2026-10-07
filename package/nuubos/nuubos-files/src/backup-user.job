@@ -1,0 +1,6 @@
+# Backup of one profile (user id, destination, options)
+COMMAND=/usr/bin/nuubos-backupctl backup
+SCOPE=device
+CANCEL=1
+RETRY=1
+ARGS=4

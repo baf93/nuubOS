@@ -32,6 +32,7 @@ static void usage(void)
 		"  quit [close]                   end the stream (close: also the app)\n"
 		"  stats\n"
 		"  set resolution|fps|codec|bitrate VALUE\n"
+		"  steamlink check|install|cancel|remove|launch\n"
 		"  pre-power sleep|restart|poweroff\n");
 }
 
@@ -80,6 +81,16 @@ int main(int argc, char **argv)
 		snprintf(command, sizeof(command), "STATS\n");
 	} else if (!strcmp(verb, "set") && argc == 4) {
 		snprintf(command, sizeof(command), "SET\t%s\t%s\n", argv[2], argv[3]);
+	} else if (!strcmp(verb, "steamlink") && argc == 3 &&
+		   (!strcmp(argv[2], "check") || !strcmp(argv[2], "install") || !strcmp(argv[2], "cancel") ||
+		    !strcmp(argv[2], "remove") || !strcmp(argv[2], "launch"))) {
+		char upper[16];
+		size_t i;
+
+		for (i = 0; argv[2][i] && i + 1 < sizeof(upper); i++)
+			upper[i] = (char)(argv[2][i] - 'a' + 'A');
+		upper[i] = '\0';
+		snprintf(command, sizeof(command), "STEAMLINK_%s\n", upper);
 	} else if (!strcmp(verb, "pre-power") && argc == 3) {
 		snprintf(command, sizeof(command), "PRE_POWER\t%s\n", argv[2]);
 	} else {

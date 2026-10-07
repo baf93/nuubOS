@@ -4,7 +4,7 @@
 # Stop it together with Labwc; otherwise its old process can survive with a
 # dead Wayland connection and block the autostart session wrapper from
 # launching a fresh instance on the next compositor session.
-for NAME in nuubos-quick-menu nuubos-wl-output-watch nuubui-home labwc; do
+for NAME in nuubos-ui-supervisor nuubos-quick-menu nuubos-wl-output-watch nuubui-home labwc; do
     killall "$NAME" 2>/dev/null || true
 done
 

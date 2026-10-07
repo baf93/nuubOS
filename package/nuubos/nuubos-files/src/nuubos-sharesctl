@@ -1,0 +1,97 @@
+#!/bin/sh
+# nuubOS network shares, SMB client (EPIC-036).
+#
+#   list                              share=<name>\t<url>\t<user>\t<mounted> ... end=1
+#   add NAME //HOST/SHARE [USER]      password on stdin (empty line = guest)
+#   mount NAME | umount NAME | remove NAME
+#
+# Shares are mounted at /run/nuubos/shares/<name> for the File Manager and
+# media; they are never a ROM location (the Game Library reads USERDATA
+# only). Credentials stay in STATE, root only (/state/shares). Mounting is
+# bounded in time so an unreachable server never hangs a caller.
+# NUUBOS_ROOT prefixes paths for the host test.
+
+R="${NUUBOS_ROOT:-}"
+CONF_DIR="$R/state/shares"
+MOUNT_ROOT="$R/run/nuubos/shares"
+MOUNT_TIMEOUT=15
+
+valid_name() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$'; }
+
+value() { sed -n "s/^$2=//p" "$CONF_DIR/$1.conf" 2>/dev/null | head -n 1; }
+
+mounted() { grep -qs " $MOUNT_ROOT/$1 " /proc/mounts; }
+
+bounded()
+{
+    secs="$1"; shift
+    "$@" &
+    pid=$!
+    ( sleep "$secs"; kill "$pid" 2>/dev/null ) &
+    killer=$!
+    wait "$pid"; rc=$?
+    kill "$killer" 2>/dev/null
+    wait "$killer" 2>/dev/null
+    return "$rc"
+}
+
+case "${1:-}" in
+list)
+    for f in "$CONF_DIR"/*.conf; do
+        [ -f "$f" ] || continue
+        n="$(basename "$f" .conf)"
+        if mounted "$n"; then m=1; else m=0; fi
+        printf 'share=%s\t%s\t%s\t%s\n' "$n" "$(value "$n" URL)" "$(value "$n" USER)" "$m"
+    done
+    echo "end=1"
+    ;;
+add)
+    name="${2:-}"; url="${3:-}"; user="${4:-}"
+    valid_name "$name" || { echo "ERR name"; exit 1; }
+    printf '%s' "$url" | grep -Eq '^//[A-Za-z0-9._-]+/[^/,"]+$' || { echo "ERR url"; exit 1; }
+    printf '%s' "$user" | grep -q '[,=[:space:]]' && { echo "ERR user"; exit 1; }
+    IFS= read -r pass || pass=""
+    # The kernel option string cannot carry a comma in the password.
+    case "$pass" in *,*) echo "ERR password"; exit 1 ;; esac
+    mkdir -p "$CONF_DIR" && chmod 700 "$CONF_DIR" || { echo "ERR storage"; exit 1; }
+    umask 077
+    printf 'URL=%s\nUSER=%s\nPASSWORD=%s\n' "$url" "$user" "$pass" > "$CONF_DIR/$name.conf.tmp" &&
+        mv "$CONF_DIR/$name.conf.tmp" "$CONF_DIR/$name.conf" || { echo "ERR storage"; exit 1; }
+    echo OK
+    ;;
+mount)
+    name="${2:-}"
+    valid_name "$name" && [ -f "$CONF_DIR/$name.conf" ] || { echo "ERR name"; exit 1; }
+    mounted "$name" && { echo OK; exit 0; }
+    mkdir -p "$MOUNT_ROOT/$name"
+    user="$(value "$name" USER)"; pass="$(value "$name" PASSWORD)"
+    if [ -n "$user" ]; then opts="username=$user,password=$pass"; else opts="guest"; fi
+    if bounded "$MOUNT_TIMEOUT" mount -t cifs "$(value "$name" URL)" "$MOUNT_ROOT/$name" \
+        -o "$opts,vers=3.0,soft,noperm,nodev,nosuid,noexec,iocharset=utf8,echo_interval=10" 2>/dev/null; then
+        echo OK
+    else
+        rmdir "$MOUNT_ROOT/$name" 2>/dev/null
+        echo "ERR unreachable"
+        exit 1
+    fi
+    ;;
+umount)
+    name="${2:-}"
+    valid_name "$name" || { echo "ERR name"; exit 1; }
+    mounted "$name" && umount -l "$MOUNT_ROOT/$name"
+    rmdir "$MOUNT_ROOT/$name" 2>/dev/null
+    echo OK
+    ;;
+remove)
+    name="${2:-}"
+    valid_name "$name" || { echo "ERR name"; exit 1; }
+    mounted "$name" && umount -l "$MOUNT_ROOT/$name"
+    rmdir "$MOUNT_ROOT/$name" 2>/dev/null
+    rm -f "${CONF_DIR:?}/$name.conf"
+    echo OK
+    ;;
+*)
+    echo "Usage: nuubos-sharesctl list | add NAME //HOST/SHARE [USER] | mount|umount|remove NAME" >&2
+    exit 2
+    ;;
+esac

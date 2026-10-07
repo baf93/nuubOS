@@ -300,6 +300,13 @@ start_userdata()
     fi
 
     mount_userdata || return 1
+
+    # Second half of a scheduled factory reset (EPIC-049); no-op otherwise.
+    /usr/sbin/nuubos-recoveryctl apply-pending userdata || true
+    # An installed update not yet confirmed by nuubUI counts this boot and
+    # is rolled back on the third (EPIC-048).
+    /usr/sbin/nuubos-update-apply boot || true
+
     validate_or_initialize_marker || return 1
     prepare_layout || return 1
 

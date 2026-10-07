@@ -10,6 +10,8 @@ config BR2_PACKAGE_NUUBOS_EMULATION
 	select BR2_PACKAGE_RETROARCH
 	select BR2_PACKAGE_RETROARCH_ASSETS
 	select BR2_PACKAGE_LIBRETRO_CORE_INFO
+	select BR2_PACKAGE_LIBCURL # RetroAchievements login
+	select BR2_PACKAGE_CA_CERTIFICATES # RetroAchievements login (TLS)
 	# Default core matrix qualified for H700 (cores.conf). Other
 	# cores can be downloaded by the user from RetroArch.
 	select BR2_PACKAGE_LIBRETRO_FCEUMM

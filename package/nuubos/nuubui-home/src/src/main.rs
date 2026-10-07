@@ -1,6 +1,12 @@
+mod filesui;
+mod gameui;
 mod library;
+mod mediaui;
 mod moonlight;
 mod splash;
+mod steamlink;
+mod themes;
+mod webui;
 slint::include_modules!();
 
 use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, Timer, VecModel};
@@ -300,6 +306,7 @@ fn apply_language(ui: &HomeWindow, code: &str) {
     ui.set_ui_language_code(code.into());
     ui.set_ui_language_name(language_name(code).into());
     library::relocalize(ui);
+    gameui::relocalize(ui);
 }
 
 fn tr(ui: &HomeWindow, index: usize, fallback: &str) -> String {
@@ -424,7 +431,9 @@ fn apply_users(ui:&HomeWindow,s:&USnap,picker:&Arc<AtomicBool>){
     }).collect();
     ui.set_users(ModelRc::from(Rc::new(VecModel::from(rows))));
     ui.set_user_count(s.users.len() as i32);
+    let user_changed=ui.get_active_user_id().as_str()!=s.active;
     ui.set_active_user_id(s.active.clone().into());
+    if user_changed{themes::apply_active(ui);}
     ui.set_default_user_id(s.default_user.clone().into());
     ui.set_user_login_mode(s.mode.clone().into());
     ui.set_user_selection_required(s.selection);
@@ -473,6 +482,9 @@ fn apply_users(ui:&HomeWindow,s:&USnap,picker:&Arc<AtomicBool>){
     let open=!oob&&(s.selection||s.switch_requested);
     /* Moonlight shows the active user's PCs: it closes for a user switch. */
     if open&&moonlight::ACTIVE.load(Ordering::SeqCst){moonlight::leave(ui);}
+    if open&&steamlink::ACTIVE.load(Ordering::SeqCst){steamlink::leave(ui);}
+    /* Web bookmarks and history are the active user's too. */
+    if open&&webui::ACTIVE.load(Ordering::SeqCst){webui::leave(ui);}
     if open&&!ui.get_user_picker_open(){
         let i=s.users.iter()
             .position(|u|u.id==s.last_user)
@@ -2551,6 +2563,9 @@ fn apply_settings_choice(ui: &HomeWindow) {
 
     match context.as_str() {
         c if c.starts_with("moonlight-") => moonlight::apply_choice(c, &value),
+        "theme" => themes::select(ui, value),
+        c if c.starts_with("game-") => gameui::apply_choice(ui, c, value),
+        c if c.starts_with("files-") || c.starts_with("share-") || c.starts_with("backup-") => filesui::apply_choice(ui, c, value),
         "player-assignment" => {
             let player_index = ui.get_player_assignment_index().max(0) as usize;
             let Some(assignment) = ui.get_player_assignments().row_data(player_index) else {
@@ -3188,6 +3203,23 @@ fn navigate_settings_view(ui: &HomeWindow, next_view: i32) {
 
     ui.set_settings_view(next_view);
     set_system_info_live(next_view == 21);
+    if previous_view == 6 && next_view != 6 {
+        /* The physical keyboard navigates again. */
+        ui.invoke_focus_navigation();
+    }
+
+    if matches!(next_view, 27 | 28) {
+        ui.set_recovery_armed(-1);
+        ui.set_recovery_stage(0);
+        ui.set_recovery_notice("".into());
+        if next_view == 27 {
+            ui.set_diag_index(0);
+        } else {
+            let first = if ui.get_safe_mode() { 4 } else { 0 };
+            ui.set_recovery_index(first);
+            ui.set_recovery_scroll_offset(0);
+        }
+    }
 
     if previous_view != 2 && next_view == 2 {
         ui.set_wifi_network_index(0);
@@ -3589,6 +3621,10 @@ fn finish_system_keyboard(ui: &HomeWindow) {
             });
         }
         moonlight::KEYBOARD_PURPOSE_ADDRESS => moonlight::add_host(ui, &value),
+        gameui::KEYBOARD_COLLECTION..=gameui::KEYBOARD_SS_PASSWORD => gameui::keyboard_done(ui, purpose, value),
+        filesui::KEYBOARD_FOLDER..=filesui::KEYBOARD_SHARE_PASSWORD => filesui::keyboard_done(ui, purpose, value),
+        mediaui::KEYBOARD_SERVER..=mediaui::KEYBOARD_JF_PASSWORD => mediaui::keyboard_done(ui, purpose, value),
+        webui::KEYBOARD_ADDRESS => webui::keyboard_done(ui, value),
         _ => navigate_settings_view(ui, return_view),
     }
 }
@@ -4196,6 +4232,11 @@ fn refresh_hint_mapping(ui: &HomeWindow) {
             .map(face_position)
             .unwrap_or(-1),
     );
+    ui.set_details_face_position(
+        binding_code("face_west")
+            .map(face_position)
+            .unwrap_or(-1),
+    );
 }
 
 fn update_display_audio_scroll(ui: &HomeWindow, count: i32) {
@@ -4207,8 +4248,139 @@ fn update_display_audio_scroll(ui: &HomeWindow, count: i32) {
     ));
 }
 
+/// Diagnostics (EPIC-052): the redacted support bundle is a nuubos-jobd job
+/// (`support-bundle`, Live Notification with progress); the page shows the
+/// outcome.
+fn create_support_bundle(ui: &HomeWindow) {
+    ui.set_diag_busy(true);
+    ui.set_recovery_notice(tr(ui, 501, "Creating support bundle…").into());
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let result = std::process::Command::new("/usr/bin/nuubos-jobctl")
+            .args(["run", "support-bundle"])
+            .output();
+        let path = match result {
+            Ok(out) if out.status.success() => {
+                String::from_utf8_lossy(&out.stdout).trim().to_owned()
+            }
+            _ => String::new(),
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_diag_busy(false);
+                if path.is_empty() {
+                    ui.set_recovery_notice(tr(&ui, 503, "The support bundle could not be created").into());
+                } else {
+                    let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+                    ui.set_recovery_notice(format!("{}: {}", tr(&ui, 502, "Support bundle saved"), name).into());
+                }
+            }
+        });
+    });
+}
+
+/// Runs `nuubos-recoveryctl` off the UI thread. A reply that asks for a
+/// reboot or restart goes through the central lifecycle path (ACTION RESTART).
+fn recovery_run(ui: &HomeWindow, args: Vec<String>, ok_index: usize, ok_text: &'static str) {
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let result = std::process::Command::new("/usr/sbin/nuubos-recoveryctl")
+            .args(&args)
+            .output();
+        let reply = match result {
+            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+            _ => String::new(),
+        };
+        let ok = reply.starts_with("OK");
+        let restart = ok && (reply.contains("restart-required") || reply.contains("reboot-required"));
+        if restart {
+            if let Err(error) = system_command("ACTION RESTART") {
+                eprintln!("home: recovery restart failed={error}");
+            }
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                if ok && ok_index == 0 {
+                    ui.set_recovery_notice("".into());
+                } else if ok {
+                    ui.set_recovery_notice(tr(&ui, ok_index, ok_text).into());
+                } else {
+                    ui.set_recovery_notice(tr(&ui, 507, "The recovery operation failed").into());
+                }
+            }
+        });
+    });
+}
+
+/// Recovery (EPIC-049/050): rows 0 Repair, 1 Reset User Profile, 2 Factory
+/// Reset, 3 Factory Reset + Erase User Data, 4 Exit Safe Mode (safe mode only).
+/// Rows 1-3 are destructive: the first press arms the row, the next executes
+/// it; row 3 needs one more press. Any navigation disarms.
+fn handle_recovery_action(ui: &HomeWindow, action: &str) {
+    let count = if ui.get_safe_mode() { 5 } else { 4 };
+    match action {
+        "menu_up" | "menu_down" => {
+            let delta = if action == "menu_up" { -1 } else { 1 };
+            ui.set_recovery_index(move_model_selection(ui.get_recovery_index(), count, delta));
+            ui.set_recovery_armed(-1);
+            ui.set_recovery_stage(0);
+            ui.set_recovery_scroll_offset(guarded_scroll_offset(
+                ui.get_recovery_index(),
+                count,
+                ui.get_settings_list_visible_rows(),
+                ui.get_recovery_scroll_offset(),
+            ));
+        }
+        "menu_confirm" => {
+            let row = ui.get_recovery_index();
+            match row {
+                0 => recovery_run(ui, vec!["repair".into()], 506, "Configuration checked"),
+                1 | 2 | 3 => {
+                    if ui.get_recovery_armed() != row {
+                        ui.set_recovery_armed(row);
+                        ui.set_recovery_stage(0);
+                        return;
+                    }
+                    if row == 3 && ui.get_recovery_stage() == 0 {
+                        ui.set_recovery_stage(1);
+                        return;
+                    }
+                    ui.set_recovery_armed(-1);
+                    ui.set_recovery_stage(0);
+                    let args = match row {
+                        1 => {
+                            let id = ui.get_active_user_id().to_string();
+                            if id.is_empty() {
+                                return;
+                            }
+                            vec!["reset-user".into(), id]
+                        }
+                        2 => vec!["factory-reset".into(), "settings".into()],
+                        _ => vec!["factory-reset".into(), "userdata".into()],
+                    };
+                    if row == 1 {
+                        recovery_run(ui, args, 509, "Profile reset");
+                    } else {
+                        recovery_run(ui, args, 0, "");
+                    }
+                }
+                4 if ui.get_safe_mode() => {
+                    thread::spawn(|| {
+                        let _ = std::process::Command::new("/usr/sbin/nuubos-recoveryctl")
+                            .args(["safe-mode", "clear"])
+                            .output();
+                        let _ = system_command("ACTION RESTART");
+                    });
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
 fn update_system_scroll(ui: &HomeWindow) {
-    const COUNT: i32 = 8;
+    const COUNT: i32 = 13;
     ui.set_system_scroll_offset(guarded_scroll_offset(
         ui.get_system_index(),
         COUNT,
@@ -4218,7 +4390,7 @@ fn update_system_scroll(ui: &HomeWindow) {
 }
 
 fn update_system_storage_scroll(ui: &HomeWindow) {
-    const COUNT: i32 = 7;
+    const COUNT: i32 = 8;
     ui.set_system_storage_scroll_offset(guarded_scroll_offset(
         ui.get_system_storage_index(),
         COUNT,
@@ -4247,8 +4419,13 @@ fn handle_settings_action(
     if ui.get_avatar_picker_open(){if action=="menu_back"{ui.set_avatar_picker_open(false);return;}let n=ui.get_avatar_choices().row_count() as i32;match action{"menu_up" if n>0=>{ui.set_avatar_picker_index(move_model_selection(ui.get_avatar_picker_index(),n,-1));update_avatar_scroll(ui);},"menu_down" if n>0=>{ui.set_avatar_picker_index(move_model_selection(ui.get_avatar_picker_index(),n,1));update_avatar_scroll(ui);},"menu_confirm" if n>0=>{if let Some(a)=ui.get_avatar_choices().row_data(ui.get_avatar_picker_index().max(0) as usize){let id=ui.get_profile_edit_user_id().to_string();let spec=a.spec.to_string();ui.set_avatar_picker_open(false);thread::spawn(move||{let _=users_command(&format!("SET_AVATAR	{}	{}",id,spec));});}},_=>{}}return;}
 
     if ui.get_settings_choice_open() {
+        let theme_choice = ui.get_settings_choice_context().as_str() == "theme";
         if action == "menu_back" {
             ui.set_settings_choice_open(false);
+            if theme_choice {
+                /* Preview ended without a choice. */
+                themes::apply_active(ui);
+            }
             return;
         }
 
@@ -4269,11 +4446,20 @@ fn handle_settings_action(
             "menu_confirm" if count > 0 => apply_settings_choice(ui),
             _ => {}
         }
+        if theme_choice && matches!(action, "menu_up" | "menu_down") {
+            if let Some(e) = ui.get_settings_choice_options().row_data(ui.get_settings_choice_index().max(0) as usize) {
+                themes::preview(ui, e.value.as_str());
+            }
+        }
         return;
     }
     if action == "menu_back" && view == 17 && ui.get_lighting_preview_open() {
         ui.set_lighting_preview_open(false);
         lighting_stop_effect(ui);
+        return;
+    }
+    if (52..=66).contains(&view) {
+        gameui::handle_page(ui, view, action);
         return;
     }
 
@@ -4296,9 +4482,10 @@ fn handle_settings_action(
                 audio_stop_test_tone(ui);
                 navigate_settings_view(ui, 0);
             }
-            19 | 23 => navigate_settings_view(ui, 0),
+            19 | 23 | gameui::GAMING_VIEW => navigate_settings_view(ui, 0),
             24 | 25 => navigate_settings_view(ui, 23),
             26 => navigate_settings_view(ui, 25),
+            27 | 28 => navigate_settings_view(ui, 19),
             20 | 21 | 22 => {
                 ui.set_system_reset_confirm(false);
                 ui.set_system_storage_confirm(false);
@@ -4316,30 +4503,30 @@ fn handle_settings_action(
         0 => match action {
             "menu_up" => {
                 let current = ui.get_settings_selected_index();
-                let next = if current <= 0 { 4 } else { current - 1 };
+                let next = if current <= 0 { 5 } else { current - 1 };
                 ui.set_settings_selected_index(next);
-                if next == 3 {
+                if next == 4 {
                     /* The category rail already renders the real Display & Audio
                      * page, so refresh the exact model shown when focus moves here. */
                     ui.set_display_audio_scroll_offset(0);
                     refresh_display_state(ui);
                     refresh_audio(ui);
                     refresh_audio_policy(ui);
-                } else if next == 4 {
+                } else if next == 5 {
                     ui.set_system_scroll_offset(0);
                     refresh_system(ui);
                 }
             }
             "menu_down" => {
                 let current = ui.get_settings_selected_index();
-                let next = if current >= 4 { 0 } else { current + 1 };
+                let next = if current >= 5 { 0 } else { current + 1 };
                 ui.set_settings_selected_index(next);
-                if next == 3 {
+                if next == 4 {
                     ui.set_display_audio_scroll_offset(0);
                     refresh_display_state(ui);
                     refresh_audio(ui);
                     refresh_audio_policy(ui);
-                } else if next == 4 {
+                } else if next == 5 {
                     ui.set_system_scroll_offset(0);
                     refresh_system(ui);
                 }
@@ -4358,13 +4545,16 @@ fn handle_settings_action(
                     ui.set_controllers_menu_index(0);
                     navigate_settings_view(ui, 10);
                 } else if ui.get_settings_selected_index() == 3 {
+                    ui.set_gaming_index(0);
+                    navigate_settings_view(ui, gameui::GAMING_VIEW);
+                } else if ui.get_settings_selected_index() == 4 {
                     ui.set_display_audio_index(0);
                     ui.set_display_audio_scroll_offset(0);
                     navigate_settings_view(ui, 18);
                     refresh_display_state(ui);
                     refresh_audio(ui);
                     refresh_audio_policy(ui);
-                } else if ui.get_settings_selected_index() == 4 {
+                } else if ui.get_settings_selected_index() == 5 {
                     ui.set_system_index(0);
                     ui.set_system_scroll_offset(0);
                     navigate_settings_view(ui, 19);
@@ -4812,18 +5002,30 @@ fn handle_settings_action(
                 }
             }
         },
-        23 => match action {"menu_up"=>{ui.set_general_index(move_model_selection(ui.get_general_index(),12,-1));update_general_scroll(ui);},"menu_down"=>{ui.set_general_index(move_model_selection(ui.get_general_index(),12,1));update_general_scroll(ui);},_ if (6..=9).contains(&ui.get_general_index())=>date_time_row_action(ui,ui.get_general_index()-6,action),"menu_confirm"=>match ui.get_general_index(){0=>open_active_user(ui),1=>open_language_dropdown(ui),3=>{ui.set_user_list_index(0);ui.set_user_list_scroll(0);navigate_settings_view(ui,25);},4 if ui.get_user_count()>1=>open_startup(ui),5 if ui.get_user_count()>1&&ui.get_user_login_mode().as_str()=="default"=>open_default_user(ui),10 if ui.get_automatic_time()=>{ui.set_regional_notice(tr(ui,323,"Syncing…").into());let w=ui.as_weak();thread::spawn(move||{let ok=regional_sync_command().map(|r|r.starts_with("OK")).unwrap_or(false);let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){ui.set_regional_notice(if ok{tr(&ui,299,"Time synchronized").into()}else{tr(&ui,300,"Time synchronization failed").into()});});});},11=>open_keyboard_choice(ui),_=>{}},_=>{}},
-        24 => match action {"menu_up"=>ui.set_profile_index(move_model_selection(ui.get_profile_index(),2,-1)),"menu_down"=>ui.set_profile_index(move_model_selection(ui.get_profile_index(),2,1)),"menu_confirm" if ui.get_profile_index()==0=>open_system_keyboard(ui,&tr(ui,285,"Username"),8,24,"text",ui.get_profile_edit_name().as_str()),"menu_confirm" if ui.get_profile_index()==1=>open_avatar_picker(ui),_=>{}},
+        23 => match action {"menu_up"=>{ui.set_general_index(move_model_selection(ui.get_general_index(),12,-1));update_general_scroll(ui);},"menu_down"=>{ui.set_general_index(move_model_selection(ui.get_general_index(),12,1));update_general_scroll(ui);},_ if (6..=9).contains(&ui.get_general_index())=>date_time_row_action(ui,ui.get_general_index()-6,action),"menu_confirm"=>match ui.get_general_index(){0=>open_active_user(ui),1=>open_language_dropdown(ui),2=>themes::open_choice(ui),3=>{ui.set_user_list_index(0);ui.set_user_list_scroll(0);navigate_settings_view(ui,25);},4 if ui.get_user_count()>1=>open_startup(ui),5 if ui.get_user_count()>1&&ui.get_user_login_mode().as_str()=="default"=>open_default_user(ui),10 if ui.get_automatic_time()=>{ui.set_regional_notice(tr(ui,323,"Syncing…").into());let w=ui.as_weak();thread::spawn(move||{let ok=regional_sync_command().map(|r|r.starts_with("OK")).unwrap_or(false);let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){ui.set_regional_notice(if ok{tr(&ui,299,"Time synchronized").into()}else{tr(&ui,300,"Time synchronization failed").into()});});});},11=>open_keyboard_choice(ui),_=>{}},_=>{}},
+        24 => match action {"menu_up"|"menu_down"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),4,if action=="menu_up"{-1}else{1}));ui.set_profile_scroll(guarded_scroll_offset(ui.get_profile_index(),4,ui.get_settings_list_visible_rows(),ui.get_profile_scroll()));},"menu_confirm" if ui.get_profile_index()==3=>gameui::open_sync(ui),"menu_confirm" if ui.get_profile_index()==2=>filesui::open_backup(ui),"menu_confirm" if ui.get_profile_index()==0=>open_system_keyboard(ui,&tr(ui,285,"Username"),8,24,"text",ui.get_profile_edit_name().as_str()),"menu_confirm" if ui.get_profile_index()==1=>open_avatar_picker(ui),_=>{}},
         25 => {let n=ui.get_user_count()+1;match action{"menu_up"=>{ui.set_user_list_index(move_model_selection(ui.get_user_list_index(),n,-1));update_user_scroll(ui);},"menu_down"=>{ui.set_user_list_index(move_model_selection(ui.get_user_list_index(),n,1));update_user_scroll(ui);},"menu_confirm" if ui.get_user_list_index()==ui.get_user_count()=>open_system_keyboard(ui,&tr(ui,296,"Enter username"),9,25,"text",""),"menu_confirm"=>open_selected_user(ui),_=>{}}},
         26 => match action {"menu_up"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),3,-1));ui.set_user_delete_confirm(false);},"menu_down"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),3,1));ui.set_user_delete_confirm(false);},"menu_confirm" if ui.get_profile_index()==0=>open_system_keyboard(ui,&tr(ui,285,"Username"),8,26,"text",ui.get_profile_edit_name().as_str()),"menu_confirm" if ui.get_profile_index()==1=>open_avatar_picker(ui),"menu_confirm" if ui.get_profile_index()==2&&ui.get_profile_edit_user_id()!=ui.get_active_user_id()&&ui.get_user_count()>1=>{if ui.get_user_delete_confirm(){let id=ui.get_profile_edit_user_id().to_string();ui.set_user_delete_confirm(false);navigate_settings_view(ui,users_page_view(ui));thread::spawn(move||{let _=users_command(&format!("DELETE	{}	CONFIRM",id));});}else{ui.set_user_delete_confirm(true);}},_=>{}},
+        gameui::GAMING_VIEW => match action {
+            "menu_up" | "menu_down" => ui.set_gaming_index(move_model_selection(
+                ui.get_gaming_index(), 4, if action == "menu_up" { -1 } else { 1 })),
+            "menu_confirm" => match ui.get_gaming_index() {
+                0 => gameui::open_achievements(ui),
+                1 => gameui::open_hidden(ui),
+                2 => gameui::open_metadata(ui),
+                3 => gameui::open_bios(ui),
+                _ => {}
+            },
+            _ => {}
+        },
         19 => {
             match action {
                 "menu_up" => {
-                    ui.set_system_index(move_model_selection(ui.get_system_index(), 8, -1));
+                    ui.set_system_index(move_model_selection(ui.get_system_index(), 13, -1));
                     update_system_scroll(ui);
                 }
                 "menu_down" => {
-                    ui.set_system_index(move_model_selection(ui.get_system_index(), 8, 1));
+                    ui.set_system_index(move_model_selection(ui.get_system_index(), 13, 1));
                     update_system_scroll(ui);
                 }
                 "menu_confirm" => match ui.get_system_index() {
@@ -4848,6 +5050,11 @@ fn handle_settings_action(
                         ui.set_system_reset_confirm(false);
                         navigate_settings_view(ui, 22);
                     }
+                    8 => navigate_settings_view(ui, 27),
+                    9 => navigate_settings_view(ui, 28),
+                    10 => gameui::open_remote(ui),
+                    11 => gameui::open_update(ui),
+                    12 => gameui::open_online(ui),
                     _ => {}
                 },
                 _ => {}
@@ -4858,19 +5065,20 @@ fn handle_settings_action(
             match action {
                 "menu_up" => {
                     ui.set_system_storage_index(
-                        move_model_selection(ui.get_system_storage_index(), 7, -1)
+                        move_model_selection(ui.get_system_storage_index(), 8, -1)
                     );
                     ui.set_system_storage_confirm(false);
                     update_system_storage_scroll(ui);
                 }
                 "menu_down" => {
                     ui.set_system_storage_index(
-                        move_model_selection(ui.get_system_storage_index(), 7, 1)
+                        move_model_selection(ui.get_system_storage_index(), 8, 1)
                     );
                     ui.set_system_storage_confirm(false);
                     update_system_storage_scroll(ui);
                 }
                 /* Rows 0, 1, 2 and 6 are deliberately read-only: Confirm does nothing. */
+                "menu_confirm" if ui.get_system_storage_index() == 7 => filesui::open_media(ui),
                 "menu_confirm" if ui.get_system_storage_index() == 3 && !job_running => {
                     open_storage_backup_policy_dropdown(ui);
                 }
@@ -4937,6 +5145,13 @@ fn handle_settings_action(
                 }
             }
         }
+        27 => match action {
+            "menu_up" => ui.set_diag_index(move_model_selection(ui.get_diag_index(), 2, -1)),
+            "menu_down" => ui.set_diag_index(move_model_selection(ui.get_diag_index(), 2, 1)),
+            "menu_confirm" if ui.get_diag_index() == 0 && !ui.get_diag_busy() => create_support_bundle(ui),
+            _ => {}
+        },
+        28 => handle_recovery_action(ui, action),
         18 => {
             let count = if ui.get_display_color_temperature_available() { 10 } else { 9 };
             match action {
@@ -5050,6 +5265,249 @@ fn handle_power_action(ui: &HomeWindow, action: &str, power_active: &Arc<AtomicB
     }
 }
 
+/* One logical action (inputd, or the physical keyboard) routed to the
+ * screen that owns input: user picker, power menu, setup, Files/Details/
+ * Moonlight/Steam Link shells, Settings or Home. */
+fn route_input_action(
+    action: &str,
+    weak: &slint::Weak<HomeWindow>,
+    settings_active: &Arc<AtomicBool>,
+    power_active: &Arc<AtomicBool>,
+    user_picker_active: &Arc<AtomicBool>,
+) {
+    /* Playing media (EPIC-028): the player window covers nuubUI and the
+     * controller drives it. */
+    if mediaui::PLAYING.load(Ordering::SeqCst) {
+        mediaui::handle_player(action);
+        return;
+    }
+    if user_picker_active.load(Ordering::SeqCst) && matches!(action,"menu_left"|"menu_right"|"menu_up"|"menu_down"|"menu_confirm"|"menu_back"){let a=action.to_owned();let w=weak.clone();let p=user_picker_active.clone();let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){handle_user_picker(&ui,&a,&p);});return;}
+    /* Over a game the Quick Menu shows the power actions;
+     * Home is hidden underneath. */
+    if library::GAME_RUNNING.load(Ordering::SeqCst)
+        || moonlight::STREAM_RUNNING.load(Ordering::SeqCst)
+        || webui::RUNNING.load(Ordering::SeqCst)
+    {
+        return;
+    }
+
+    if matches!(action, "power" | "power_menu" | "power_button" | "sleep") {
+        let open = !power_active.swap(true, Ordering::SeqCst);
+        let weak = weak.clone();
+        let power_active = power_active.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                if open {
+                    ui.set_power_menu_index(0);
+                    ui.set_power_menu_confirm(false);
+                    ui.set_power_menu_open(true);
+                } else {
+                    close_power_menu(&ui, &power_active);
+                }
+            }
+        });
+        return;
+    }
+
+    if power_active.load(Ordering::SeqCst) && matches!(
+        action,
+        "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+        "menu_confirm" | "menu_back"
+    ) {
+        let action = action.to_owned();
+        let weak = weak.clone();
+        let power_active = power_active.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                handle_power_action(&ui, &action, &power_active);
+            }
+        });
+        return;
+    }
+
+    if OOB_ACTIVE.load(Ordering::SeqCst) {
+        if matches!(
+            action,
+            "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+            "menu_confirm" | "menu_back"
+        ) {
+            let action = action.to_owned();
+            let weak = weak.clone();
+            let settings_active = settings_active.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    handle_oob_action(&ui, &action, &settings_active);
+                }
+            });
+        }
+        /* Start (Settings) is not available during setup. */
+        return;
+    }
+
+    if webui::ACTIVE.load(Ordering::SeqCst) {
+        if matches!(
+            action,
+            "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+            "menu_confirm" | "menu_back" | "face_north"
+        ) {
+            let action = action.to_owned();
+            let weak = weak.clone();
+            let settings_active = settings_active.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    webui::handle_action(&ui, &action, &settings_active);
+                }
+            });
+        }
+        return;
+    }
+
+    if mediaui::ACTIVE.load(Ordering::SeqCst) {
+        if matches!(
+            action,
+            "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+            "menu_confirm" | "menu_back"
+        ) {
+            let action = action.to_owned();
+            let weak = weak.clone();
+            let settings_active = settings_active.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    mediaui::handle_action(&ui, &action, &settings_active);
+                }
+            });
+        }
+        return;
+    }
+
+    if filesui::ACTIVE.load(Ordering::SeqCst) {
+        if matches!(
+            action,
+            "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+            "menu_confirm" | "menu_back"
+        ) {
+            let action = action.to_owned();
+            let weak = weak.clone();
+            let settings_active = settings_active.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    filesui::handle_action(&ui, &action, &settings_active);
+                }
+            });
+        }
+        return;
+    }
+
+    if gameui::ACTIVE.load(Ordering::SeqCst) {
+        if matches!(
+            action,
+            "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+            "menu_confirm" | "menu_back"
+        ) {
+            let action = action.to_owned();
+            let weak = weak.clone();
+            let settings_active = settings_active.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    gameui::handle_details_action(&ui, &action, &settings_active);
+                }
+            });
+        }
+        /* Game Details is left with Back. */
+        return;
+    }
+
+    if moonlight::ACTIVE.load(Ordering::SeqCst) {
+        if matches!(
+            action,
+            "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+            "menu_confirm" | "menu_back"
+        ) {
+            let action = action.to_owned();
+            let weak = weak.clone();
+            let settings_active = settings_active.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    moonlight::handle_action(&ui, &action, &settings_active);
+                }
+            });
+        }
+        /* Moonlight is left with Back, not with Start. */
+        return;
+    }
+
+    if steamlink::ACTIVE.load(Ordering::SeqCst) {
+        if matches!(
+            action,
+            "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+            "menu_confirm" | "menu_back"
+        ) {
+            let action = action.to_owned();
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    steamlink::handle_action(&ui, &action);
+                }
+            });
+        }
+        return;
+    }
+
+    if action == "settings" {
+        if settings_active.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        play_ui_sound("settings");
+        set_ui_capture(true);
+        let weak = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_settings_selected_index(0);
+                navigate_settings_view(&ui, 0);
+                ui.set_settings_open(true);
+                write_ui_context("settings");
+                wifi_notice(&ui, "");
+            }
+        });
+        return;
+    }
+
+    if settings_active.load(Ordering::SeqCst) && matches!(
+        action,
+        "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+        "menu_confirm" | "menu_back"
+    ) {
+        let action = action.to_owned();
+        let weak = weak.clone();
+        let settings_active = settings_active.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                handle_settings_action(&ui, &action, &settings_active);
+            }
+        });
+        return;
+    }
+
+    /* Home carousels / library grid. */
+    if !settings_active.load(Ordering::SeqCst) &&
+        !user_picker_active.load(Ordering::SeqCst) &&
+        !power_active.load(Ordering::SeqCst) &&
+        matches!(
+            action,
+            "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+            "menu_confirm" | "menu_back" | "face_north" | "face_west"
+        )
+    {
+        let action = action.to_owned();
+        let weak = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                library::handle_home_action(&ui, &action);
+            }
+        });
+    }
+}
+
 fn start_input_listener(
     ui: &HomeWindow,
     settings_active: Arc<AtomicBool>,
@@ -5103,140 +5561,13 @@ fn start_input_listener(
                                 }
                             }
 
-                            if user_picker_active.load(Ordering::SeqCst) && matches!(fields[2],"menu_left"|"menu_right"|"menu_up"|"menu_down"|"menu_confirm"|"menu_back"){let a=fields[2].to_owned();let w=weak.clone();let p=user_picker_active.clone();let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){handle_user_picker(&ui,&a,&p);});continue;}
-                            /* Over a game the Quick Menu shows the power actions;
-                             * Home is hidden underneath. */
-                            if library::GAME_RUNNING.load(Ordering::SeqCst)
-                                || moonlight::STREAM_RUNNING.load(Ordering::SeqCst)
-                            {
-                                continue;
-                            }
-
-                            if matches!(fields[2], "power" | "power_menu" | "power_button" | "sleep") {
-                                let open = !power_active.swap(true, Ordering::SeqCst);
-                                let weak = weak.clone();
-                                let power_active = power_active.clone();
-                                let _ = slint::invoke_from_event_loop(move || {
-                                    if let Some(ui) = weak.upgrade() {
-                                        if open {
-                                            ui.set_power_menu_index(0);
-                                            ui.set_power_menu_confirm(false);
-                                            ui.set_power_menu_open(true);
-                                        } else {
-                                            close_power_menu(&ui, &power_active);
-                                        }
-                                    }
-                                });
-                                continue;
-                            }
-
-                            if power_active.load(Ordering::SeqCst) && matches!(
+                            route_input_action(
                                 fields[2],
-                                "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-                                "menu_confirm" | "menu_back"
-                            ) {
-                                let action = fields[2].to_owned();
-                                let weak = weak.clone();
-                                let power_active = power_active.clone();
-                                let _ = slint::invoke_from_event_loop(move || {
-                                    if let Some(ui) = weak.upgrade() {
-                                        handle_power_action(&ui, &action, &power_active);
-                                    }
-                                });
-                                continue;
-                            }
-
-                            if OOB_ACTIVE.load(Ordering::SeqCst) {
-                                if matches!(
-                                    fields[2],
-                                    "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-                                    "menu_confirm" | "menu_back"
-                                ) {
-                                    let action = fields[2].to_owned();
-                                    let weak = weak.clone();
-                                    let settings_active = settings_active.clone();
-                                    let _ = slint::invoke_from_event_loop(move || {
-                                        if let Some(ui) = weak.upgrade() {
-                                            handle_oob_action(&ui, &action, &settings_active);
-                                        }
-                                    });
-                                }
-                                /* Start (Settings) is not available during setup. */
-                                continue;
-                            }
-
-                            if moonlight::ACTIVE.load(Ordering::SeqCst) {
-                                if matches!(
-                                    fields[2],
-                                    "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-                                    "menu_confirm" | "menu_back"
-                                ) {
-                                    let action = fields[2].to_owned();
-                                    let weak = weak.clone();
-                                    let settings_active = settings_active.clone();
-                                    let _ = slint::invoke_from_event_loop(move || {
-                                        if let Some(ui) = weak.upgrade() {
-                                            moonlight::handle_action(&ui, &action, &settings_active);
-                                        }
-                                    });
-                                }
-                                /* Moonlight is left with Back, not with Start. */
-                                continue;
-                            }
-
-                            if fields[2] == "settings" {
-                                if settings_active.swap(true, Ordering::SeqCst) {
-                                    continue;
-                                }
-                                play_ui_sound("settings");
-                                set_ui_capture(true);
-                                let weak = weak.clone();
-                                let _ = slint::invoke_from_event_loop(move || {
-                                    if let Some(ui) = weak.upgrade() {
-                                        ui.set_settings_selected_index(0);
-                                        navigate_settings_view(&ui, 0);
-                                        ui.set_settings_open(true);
-                                        write_ui_context("settings");
-                                        wifi_notice(&ui, "");
-                                    }
-                                });
-                                continue;
-                            }
-
-                            if settings_active.load(Ordering::SeqCst) && matches!(
-                                fields[2],
-                                "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-                                "menu_confirm" | "menu_back"
-                            ) {
-                                let action = fields[2].to_owned();
-                                let weak = weak.clone();
-                                let settings_active = settings_active.clone();
-                                let _ = slint::invoke_from_event_loop(move || {
-                                    if let Some(ui) = weak.upgrade() {
-                                        handle_settings_action(&ui, &action, &settings_active);
-                                    }
-                                });
-                                continue;
-                            }
-
-                            /* Home carousels / library grid. */
-                            if !settings_active.load(Ordering::SeqCst) &&
-                                !user_picker_active.load(Ordering::SeqCst) &&
-                                !power_active.load(Ordering::SeqCst) &&
-                                matches!(
-                                    fields[2],
-                                    "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-                                    "menu_confirm" | "menu_back" | "face_north"
-                                )
-                            {
-                                let action = fields[2].to_owned();
-                                let weak = weak.clone();
-                                let _ = slint::invoke_from_event_loop(move || {
-                                    if let Some(ui) = weak.upgrade() {
-                                        library::handle_home_action(&ui, &action);
-                                    }
-                                });
-                            }
+                                &weak,
+                                &settings_active,
+                                &power_active,
+                                &user_picker_active,
+                            );
                         }
                         Err(error) => {
                             eprintln!("home: input read failed={}", error);
@@ -5639,6 +5970,8 @@ fn main() -> Result<(), slint::PlatformError> {
     library::start_library_listener(&ui);
     library::start_game_listener(&ui);
     moonlight::start_listener(&ui);
+    mediaui::start_listener(&ui);
+    webui::start_listener(&ui);
     let system_info_gate = Arc::new((Mutex::new(false), Condvar::new()));
     let _ = SYSTEM_INFO_GATE.set(system_info_gate.clone());
     start_system_info_live(&ui, system_info_gate);
@@ -5665,6 +5998,15 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let settings_active = Arc::new(AtomicBool::new(false));
     let power_active = Arc::new(AtomicBool::new(false));
+    {
+        let weak = ui.as_weak();
+        let settings_active = settings_active.clone();
+        let power_active = power_active.clone();
+        let user_picker_active = user_picker_active.clone();
+        ui.on_keyboard_action(move |action| {
+            route_input_action(action.as_str(), &weak, &settings_active, &power_active, &user_picker_active);
+        });
+    }
     start_input_listener(
         &ui,
         settings_active.clone(),
@@ -5673,7 +6015,17 @@ fn main() -> Result<(), slint::PlatformError> {
         screensaver_gate.clone(),
     );
 
-    if !OOB_ACTIVE.load(Ordering::SeqCst) {
+    if std::env::var("NUUBOS_SAFE_MODE").as_deref() == Ok("1") {
+        /* Safe mode (EPIC-050): the supervisor restarted nuubUI after a crash
+         * loop. Open the Recovery page directly; Back still reaches Settings. */
+        ui.set_safe_mode(true);
+        settings_active.store(true, Ordering::SeqCst);
+        ui.set_settings_selected_index(5);
+        navigate_settings_view(&ui, 28);
+        ui.set_settings_open(true);
+        write_ui_context("settings");
+        thread::spawn(|| set_ui_capture(true));
+    } else if !OOB_ACTIVE.load(Ordering::SeqCst) {
         write_ui_context("home");
     }
     let weak = ui.as_weak();
@@ -5681,6 +6033,13 @@ fn main() -> Result<(), slint::PlatformError> {
         if let Some(ui) = weak.upgrade() {
             mark_ready();
             start_boot_transition(&ui);
+            /* nuubUI is up: an installed update is kept (EPIC-048). Never
+             * from safe mode, which exists because nuubUI kept failing. */
+            if std::env::var("NUUBOS_SAFE_MODE").as_deref() != Ok("1") {
+                thread::spawn(|| {
+                    let _ = std::process::Command::new("/usr/sbin/nuubos-update-apply").arg("confirm").output();
+                });
+            }
         }
     });
 

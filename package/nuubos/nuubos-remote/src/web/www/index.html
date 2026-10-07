@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nuubOS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header><span class="brand">nuub<b>OS</b></span><span id="device"></span></header>
+<main>
+  <section>
+    <h2 data-t="device"></h2>
+    <dl class="facts">
+      <dt data-t="version"></dt><dd id="version">–</dd>
+      <dt data-t="games"></dt><dd id="games">–</dd>
+      <dt data-t="storage"></dt><dd id="storage">–</dd>
+    </dl>
+    <button id="scan" data-t="scan"></button>
+  </section>
+
+  <section>
+    <h2 data-t="upload_roms"></h2>
+    <label><span data-t="system"></span> <select id="upload-system"></select></label>
+    <p class="hint" id="upload-exts"></p>
+    <input type="file" id="upload-files" multiple>
+    <button id="upload" data-t="upload"></button>
+    <progress id="upload-progress" max="100" value="0" hidden></progress>
+    <p id="upload-status" class="status"></p>
+  </section>
+
+  <section>
+    <h2 data-t="library"></h2>
+    <label><span data-t="system"></span> <select id="library-system"></select></label>
+    <ul id="library-games" class="list"></ul>
+  </section>
+
+  <section>
+    <h2 data-t="bios"></h2>
+    <p class="hint" data-t="bios_hint"></p>
+    <label><span data-t="bios_file"></span> <select id="bios-target"></select></label>
+    <input type="file" id="bios-file">
+    <button id="bios-upload" data-t="upload"></button>
+    <p id="bios-status" class="status"></p>
+    <table id="bios-table"></table>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

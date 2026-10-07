@@ -1,0 +1,4 @@
+# nuubOS: USB storage volumes are mounted under /media (nuubos-mediactl).
+# The SD cards are owned by the storage scripts, never by this rule.
+SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", ACTION=="add", RUN+="/usr/sbin/nuubos-mediactl hotplug add %k"
+SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ACTION=="remove", RUN+="/usr/sbin/nuubos-mediactl hotplug remove %k"

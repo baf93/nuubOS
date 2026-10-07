@@ -1,0 +1,39 @@
+#!/bin/sh
+# nuubOS Background Jobs (EPIC-007).
+
+DAEMON=/usr/sbin/nuubos-jobd
+PIDFILE=/run/nuubos/jobd.pid
+SOCKET=/run/nuubos/jobd.sock
+
+jobd_running()
+{
+    [ -r "$PIDFILE" ] || return 1
+    PID="$(cat "$PIDFILE" 2>/dev/null)"
+    [ -n "$PID" ] || return 1
+    [ "$(tr '\0' '\n' < "/proc/$PID/cmdline" 2>/dev/null | sed -n '1p')" = "$DAEMON" ]
+}
+
+start_service()
+{
+    mkdir -p /run/nuubos
+    jobd_running && return 0
+    rm -f "$PIDFILE" "$SOCKET"
+    "$DAEMON" >/run/nuubos/jobd.log 2>&1 &
+    return 0
+}
+
+stop_service()
+{
+    if jobd_running; then
+        kill -TERM "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null || true
+    fi
+    rm -f "$PIDFILE" "$SOCKET"
+    return 0
+}
+
+case "${1:-}" in
+    start) start_service ;;
+    stop) stop_service ;;
+    restart) stop_service; start_service ;;
+    *) echo "Usage: $0 {start|stop|restart}" >&2; exit 1 ;;
+esac

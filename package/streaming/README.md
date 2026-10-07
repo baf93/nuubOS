@@ -52,9 +52,22 @@ whole system 6-9 % of four cores including labwc composition.
 
 ## FFmpeg
 
-`patches/packages/ffmpeg/6.1.5/` is Jonas Karlman's V4L2 request API hwaccel
-series (branch `v4l2-request-n6.1.1` of github.com/Kwiboo/FFmpeg, as used by
-LibreELEC), applied unchanged to FFmpeg 6.1.5. The defconfig builds only the
+FFmpeg 7.1.5 (Buildroot bump in `patches/buildroot/0002-ffmpeg-7.1.5-*.patch`:
+version, hash, no `--disable-crystalhd`, Buildroot patches that are upstream
+or MIPS/x86/MMAL-only dropped) with `patches/packages/ffmpeg/7.1.5/`:
+
+- 0001-0014: Jonas Karlman's V4L2 request API hwaccel series, branch
+  `v4l2-request-n7.1.3` of github.com/Kwiboo/FFmpeg, unchanged. This series
+  has its own hwdevice type (`AV_HWDEVICE_TYPE_V4L2REQUEST`).
+- 0015 (nuubOS): a client that passes a DRM device for DRM_PRIME output (the
+  earlier series' interface) gets a V4L2 request device instead. Both
+  moonlight-embedded and the Valve Steam Link application do that.
+- 0016: the earlier series' "do not require drm device" hack (a DRM device
+  created without a path), needed by the same clients.
+
+FFmpeg 7.1 is required by Steam Link (libavcodec.so.61). Moonlight was
+re-qualified on it with `tools/moonlight-vdec` (RG40XX-V, 900 frames, 0
+errors: H.264 640x480 1.63 ms/frame, HEVC 1280x720 2.03 ms). The defconfig builds only the
 h264/hevc decoders and parsers with the h264/hevc V4L2 request hwaccels (no
 programs, formats, filters, encoders or swscale; ~2 MB libavcodec).
 
@@ -67,7 +80,7 @@ programs, formats, filters, encoders or swscale; ~2 MB libavcodec).
 | enet (bundled in moonlight-common-c) | MIT | |
 | h264bitstream (bundled) | LGPL-2.1+ | |
 | SDL_GameControllerDB (bundled, installed) | Zlib | |
-| FFmpeg 6.1.5 + V4L2 request patches | LGPL-2.1+ | built without GPL components |
+| FFmpeg 7.1.5 + V4L2 request patches | LGPL-2.1+ | built without GPL components |
 | Opus | BSD-3-Clause | |
 | libcurl | curl (MIT-style) | |
 | Moonlight application icon | MIT (nuubOS original artwork, `nuubos-streaming/src/app/moonlight.svg`) | the Moonlight project logo is not shipped |
@@ -75,3 +88,71 @@ programs, formats, filters, encoders or swscale; ~2 MB libavcodec).
 GPL-3.0 redistribution: nuubOS ships the corresponding source through
 Buildroot (`make legal-info`) and does not restrict modified software on the
 device.
+
+# Steam Link (EPIC-026)
+
+Steam Link is Valve's proprietary remote play client. There is no open
+implementation of Steam's remote play protocol, so nuubOS runs Valve's own
+application, and never ships it.
+
+## What is in the image, what is not
+
+- **Not in the image:** the Steam Link application. On the user's request
+  (Home → Applications → Steam Link → Download) `nuubos-steamlink-get`
+  reads Valve's public build pointer
+  (`https://media.steampowered.com/steamlink/rpi/trixie/arm64/public_build.txt`,
+  the same one Valve's Raspberry Pi launcher uses) and downloads that arm64
+  build over HTTPS (system CA bundle). The page tells the user that the
+  download means accepting the Steam Subscriber Agreement (Valve's
+  `LICENSE.txt`). It is extracted while it downloads into
+  `/userdata/steamlink/app` (shared by all users; exFAT, so the archive's
+  symbolic links become copies, ~110 MB), then swapped in atomically.
+- **In the image (`steamlink-runtime`):** only open source pieces the
+  application needs and does not bundle: FFmpeg 7.1 (above), libepoxy,
+  double-conversion, md4c (`package/streaming/md4c`), zstd, the Kerberos
+  GSSAPI library its Qt links, and the Qt 5.14.1 Wayland platform plugin.
+
+## Display: Qt Wayland plugin for Valve's Qt
+
+Valve bundles Qt 5.14.1 with the xcb, eglfs, linuxfb and vnc platforms only
+(on Raspberry Pi OS its interface runs on XWayland). nuubOS has no X server,
+so `steamlink-runtime` builds `libQt5WaylandClient` and the `wayland-egl`
+platform, `wayland-egl` client buffer integration and `xdg-shell` plugins
+from the same Qt release. qtbase 5.14.1 is configured like Valve's build
+(OpenGL ES 2, EGL, Vulkan, D-Bus, GLib; the Vulkan feature changes
+`QPlatformIntegration`'s vtable, so it must match) and used only as a build
+SDK; nothing else from it is installed. At run time the plugins load
+Valve's own Qt libraries (`QT_PLUGIN_PATH` lists ours first). qtbase needs
+one GCC 15 fix (`steamlink-runtime/qtbase/0001`).
+
+The stream itself is not drawn by Qt: Steam Link's SDL3 video path decodes
+with libavcodec and shows NV12 dma-bufs on a Wayland subsurface
+(`zwp_linux_dmabuf_v1` + `wp_viewporter`), the same model as Moonlight's
+nuubOS platform. It asks libavcodec for a hw config with DRM_PRIME output and
+creates a DRM device, which FFmpeg patch 0015 maps to the V4L2 request
+hwaccel (Cedrus).
+
+## Session
+
+`nuubos-streamd` runs it like a Moonlight stream (`stream_client=steamlink`):
+game gamepads on for its lifetime (SDL3 reads `nuubOS Gamepad` with the same
+SDL mapping as Moonlight), Home hidden and Home Music stopped, Quick Menu
+section STEAM LINK (Resume, Quit Steam Link), Sleep/Restart/Power Off end it
+first. Valve's interface handles the PCs, pairing (PIN shown on the
+handheld, entered in Steam on the PC) and streams; leaving it from its own
+menu returns to nuubUI. Per-user data (pairing, settings):
+`/userdata/users/<id>/appdata/steamlink` (`HOME`). Interface language from
+the user's nuubOS language (`--locale`). Started with `--skip-update`:
+updates go through nuubOS (Check for Updates / Update to x.y).
+
+## Licences
+
+| Component | Licence | Notes |
+|---|---|---|
+| Valve Steam Link application | Proprietary (Steam Subscriber Agreement) | **not distributed**: downloaded from Valve by the user on the device |
+| Qt Wayland 5.14.1 (libQt5WaylandClient + 3 plugins) | LGPL-3.0 (or GPL-2.0+/GPL-3.0) | shared libraries, replaceable; source via `make legal-info` |
+| qtbase 5.14.1 | LGPL-3.0 | build-time SDK only, nothing installed |
+| Vulkan-Headers 1.2.131 | Apache-2.0 | build time only |
+| md4c 0.5.2 | MIT | |
+| libepoxy, double-conversion, zstd, libkrb5, ca-certificates | MIT / BSD-3-Clause / BSD-3-Clause or GPL-2.0 / MIT-style / MPL-2.0 | Buildroot packages |
+| Steam Link application icon | MIT (nuubOS original artwork, `nuubos-streaming/src/app/steamlink.svg`) | Valve's Steam and Steam Link logos are not used |

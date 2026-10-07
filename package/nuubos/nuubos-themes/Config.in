@@ -1,0 +1,6 @@
+config BR2_PACKAGE_NUUBOS_THEMES
+	bool "nuubos-themes"
+	help
+	  EPIC-008 Themes: nuubos-themectl (validation, install, update,
+	  removal and the per-user selection of theme packages) and the
+	  built-in themes. Packages hold presentation tokens only.

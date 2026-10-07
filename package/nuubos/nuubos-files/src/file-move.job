@@ -1,0 +1,6 @@
+# File Manager move (source, destination folder)
+COMMAND=/usr/bin/nuubos-filesctl move
+SCOPE=device
+CANCEL=1
+RETRY=1
+ARGS=2

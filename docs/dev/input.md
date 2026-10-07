@@ -1,0 +1,7 @@
+# Input / controllers
+
+## Product rules (§26)
+Controller-first with logical actions, never controller-brand semantics. Required before the relevant final milestone: Controller Mapping, Input Tester, RGB Lighting where supported. Mapping reset belongs to Reset System Settings. Extra logical actions: `face_north` (Favorite on Home, home-users-oob.md), `face_west` (Game Details, emulation.md §37.18). Game gamepads/hotkeys: emulation.md §37.13. Physical keyboard: ui.md §37.24.
+
+## Controller mapping (§37.3)
+- Controller mapping (owner `nuubos-controllersd`, D-Bus `org.nuubOS.Controllers1`): 17 button controls + `left_x/left_y/right_x/right_y`; each bound to one source `key:CODE`, `abs:CODE:+|-` (half axis; on a stick axis = normal/inverted), `abs:CODE:>|<` (full trigger travel from min/max) or `none`. Defaults are derived from the device's evdev capabilities (D-pad keys or hat, L2/R2 keys/Z-RZ/BRAKE-GAS, right stick RX/RY or Z/RZ); `/state/users/<u>/controllers/<hex-id>.conf` stores only differences (legacy `action=305` still read). Capture: `BeginRemap` → inputd sends `RAWBASE`/`RAWREADY` baselines (normalized -100..100) → stick vs trigger is told apart by rest position; 5 s timeout (`RemapCancelled`), any button cancels a stick capture; a source already in use is swapped (same kind) or unassigned (other kind). inputd only consumes the navigation actions + `left_x/left_y` (stick navigation) and parses the same format. Input Tester `InputEvent` carries the resolved logical control and value (buttons 0..100, sticks -100..100).

@@ -1020,7 +1020,6 @@ The exact UX for entering Guest Mode is left to nuubUI refinement, but Guest mus
 | `EPIC-009` Localization | per-user UI language |
 | `EPIC-011` Game Library | favorites, recents, collections and personal metadata state |
 | `EPIC-013` RetroArch Integration | per-user RetroArch configuration |
-| `EPIC-014` Standalone Emulators | per-user emulator configuration |
 | `EPIC-017` RetroAchievements | per-user online identity |
 | `EPIC-019` Saves & Save States | per-user save/state namespaces |
 | `EPIC-020` Play Statistics | per-user statistics/history |
@@ -1977,7 +1976,6 @@ Examples:
 | `EPIC-004` Settings | shared settings semantics and safe persistence |
 | `EPIC-006` Notification System | success/error feedback for runtime operations |
 | `EPIC-013` RetroArch Integration | save-state/runtime emulator integration |
-| `EPIC-014` Standalone Emulators | standalone runtime control integration |
 | `EPIC-019` Saves & Save States | save-state behavior and safety |
 | `EPIC-021` Screenshots & Capture | screenshot implementation and storage |
 | `EPIC-022` Controller Management | mappings, order, player assignment and rumble |
@@ -4993,36 +4991,10 @@ EPIC-013 is considered **REFINED**. Exact implementation technologies and final 
 
 ## EPIC-014 — Standalone Emulators
 
-**Status:** `REFINED`
+**Status:** `REMOVED` (product decision 2026-10-07)
 
-### Product contract
-
-Support standalone emulators when they provide materially better compatibility, performance or UX than available libretro cores.
-
-**MUST**
-- explicit per-system emulator support matrix;
-- standardized nuubOS launch/exit contract;
-- clean return to nuubUI;
-- common controller, save-path, screenshot and performance-profile integration where the emulator permits it;
-- per-user configuration and EPIC-018 overrides;
-- emulator-specific settings isolated from other users;
-- failures reported without trapping the user outside nuubUI.
-
-**Product decisions**
-- standalone emulators are first-class backends, not exceptions hacked into launch scripts;
-- nuubOS may support both RetroArch and standalone choices for one system;
-- only validated emulator builds/configurations are exposed as normal choices;
-- unsupported native emulator UI features need not be reimplemented globally.
-
-**Acceptance baseline**
-Every officially supported standalone emulator passes launch → gameplay/input → save where applicable → exit → return-to-shell regression and has documented content/config/save paths.
-
-**Platform/GAP**
-Requires emulator adapter interface, lifecycle/session manager, per-user configuration layout and license/provenance review. Exact emulator list remains implementation-time qualification.
-
-### Refinement result
-
-EPIC-014 is considered **REFINED**. Exact implementation technologies and final per-device qualification remain subject to the relevant platform Enablers and regression matrices.
+Removed from the product scope: RetroArch/libretro is the only emulation
+backend. The number is kept so other Epic references stay stable.
 
 ---
 
@@ -5542,39 +5514,44 @@ EPIC-028 is considered **REFINED**. Exact implementation technologies and final 
 
 ## EPIC-029 — Wireless Casting to TV
 
-**Status:** `REFINED`
+**Status:** `PLANNED AFTER RC` (product decision 2026-10-07: casting is a key feature; every protocol that is technically and legally feasible on H700 is in scope, including the driver work it needs. Order after the RC: Linux 7.3, deep sleep, then this Epic)
 
 ### Product contract
 
-Support wireless output to TVs only through protocols that are realistically implementable and validated on H700.
+Show what the console plays on a TV without a cable. Product forms stay distinct:
+- media casting (a video, music or picture is played by the TV/receiver itself);
+- remote playback control of that media from the console;
+- screen mirroring (the live console screen, including games).
 
-**Baseline status: `DEFERRED` until protocol selection/feasibility is proven.**
-
-Potential product forms are distinct:
-- media casting;
-- remote playback control;
-- screen mirroring.
+**Protocols in scope** (each one is a separate qualification row; none is advertised before it passes):
+- DLNA/UPnP AV (MediaRenderer control point + HTTP media server);
+- Google Cast (CASTV2 sender: Default Media Receiver for media; Cast Streaming for mirroring);
+- AirPlay (media URL playback to receivers that accept it; mirroring only if it can be done without proprietary keys);
+- Miracast (Wi-Fi Direct) and Miracast over Infrastructure (MS-MICE).
 
 **Product decisions**
-- nuubOS will not advertise generic “Cast” support until at least one explicit protocol/device matrix passes validation.
-- AirPlay/Google Cast/Miracast/DLNA are not treated as interchangeable.
+- AirPlay/Google Cast/Miracast/DLNA are not treated as interchangeable; the UI shows one list of receivers with what each can do.
 - wired HDMI/TV Mode remains the reliable baseline external-display path.
+- mirroring latency is documented per protocol; games are offered mirroring only where latency is acceptable.
+- no proprietary keys, DRM bypass or redistributed SDKs without verified licences.
 
-**Acceptance baseline for future activation**
-A selected protocol must discover a qualified receiver, establish playback/mirroring, recover from disconnect and have documented codec/network limitations.
+**Acceptance baseline**
+For each protocol: discover a qualified receiver, establish playback/mirroring, control it, recover from disconnect and document codec/network/latency limits.
 
-**Platform/GAP**
-Protocol/client licensing, DRM, Wi-Fi performance, encode requirements and receiver compatibility must be researched before moving this Epic out of DEFERRED.
+**Platform/GAP (H700, 2026-10-07)**
+- RTL8821CS (rtw88) offers no P2P (Wi-Fi Direct) interface modes: classic Miracast is not possible without driver work; only MS-MICE (over the existing Wi-Fi network) remains.
+- Cedrus is decode-only: every mirroring form needs software encoding (H.264/VP8) on the Cortex-A53 cores, competing with the running game.
+- AirPlay mirroring uses FairPlay-protected sessions: not implementable with redistributable software.
 
 ### Refinement result
 
-EPIC-029 is considered **REFINED**. Exact implementation technologies and final per-device qualification remain subject to the relevant platform Enablers and regression matrices.
+EPIC-029 starts after the RC (after Linux 7.3 and deep sleep); protocol order and per-receiver qualification follow the feasibility above.
 
 ---
 
 ## EPIC-030 — Web Mode
 
-**Status:** `REFINED`
+**Status:** `PARKED UNTIL AFTER RC` (product decision 2026-10-07: after Linux 7.3, deep sleep, casting and Spotify Connect (EPIC-056); implementation exists, disabled in the build)
 
 ### Product contract
 
@@ -6539,6 +6516,43 @@ EPIC-055 is considered **REFINED**. Exact implementation technologies and final 
 
 ---
 
+## EPIC-056 — Spotify Connect
+
+**Status:** `PLANNED AFTER RC` (product decision 2026-10-07: after Linux 7.3, deep sleep and casting, before Web Mode)
+
+### Product contract
+
+Let the console act as a Spotify Connect speaker: a phone/PC Spotify app selects the console as playback device and controls playback, while audio plays through the console's current output.
+
+**MUST**
+- the console appears as a Spotify Connect device on the local network while the feature is enabled;
+- playback goes through the Product Audio graph (Speaker, Headphones, HDMI, Bluetooth) and follows output changes like every product stream;
+- its volume is an application stream volume governed by Product Audio; remote volume from the Spotify app maps to it predictably;
+- playback pauses/yields cleanly when a game, stream or other exclusive media session starts, and Home Music does not play on top of it;
+- now-playing (track/artist) is shown through a global notification; Quick Menu offers basic control (pause/resume, next, stop) while it is active;
+- Sleep/Restart/Power Off go through the central lifecycle path (playback stopped before power actions);
+- disabled by default; enabling/disabling is listed in Online Services (EPIC-055);
+- credentials/tokens, if stored, are per-user and kept under `secrets/` (EPIC-039).
+
+**Product decisions**
+- receiver only: nuubOS does not provide a Spotify browsing/library UI.
+- Spotify Premium is a Spotify requirement for Connect playback; the UI says so instead of failing silently.
+- no DRM bypass, no caching of protected audio to storage.
+
+**Acceptance baseline**
+With the feature on, a phone on the same Wi-Fi selects the console, plays, pauses, skips and changes volume; audio follows Speaker → Headphones → Bluetooth while playing; starting a game stops it; sleep/resume and disabling the feature leave no stale stream or network service.
+
+**Platform/GAP**
+- candidate implementation: librespot (Rust, MIT) with its built-in zeroconf (no avahi) and PipeWire/ALSA backend, run as a child of a small nuubOS service that owns enable state, routing and lifecycle;
+- librespot is an unofficial client: Spotify's terms for redistributing it in an image and the stability of its authentication (OAuth/zeroconf) must be verified before release;
+- CPU/RAM/wakeup cost on H700 and idle behaviour (mDNS responder only while enabled) must be measured.
+
+### Refinement result
+
+EPIC-056 is considered **REFINED** as a product contract; implementation starts after the RC, after EPIC-029 and before EPIC-030.
+
+---
+
 # L. Platform / architecture enablers
 
 The following are not necessarily user-facing Product Epics, but they are required technical enablers for the final nuubOS platform contract.
@@ -6747,7 +6761,7 @@ These are intentionally not resolved yet.
 1. Exact nuubUI technology/stack.
 2. Exact storage layout and user-profile ownership model.
 3. Exact RetroArch core matrix.
-4. Which systems require standalone emulators.
+4. ~~Which systems require standalone emulators.~~ Resolved 2026-10-07: none (EPIC-014 removed).
 5. ScreenScraper account/credential model.
 6. RetroAchievements local bridge design.
 7. Moonlight integration and target performance profiles.
@@ -6766,6 +6780,7 @@ These are intentionally not resolved yet.
 20. Backup format and restore semantics.
 21. Accessibility scope.
 22. Privacy/telemetry policy — no telemetry is currently implied by this backlog.
+23. Spotify Connect implementation (librespot candidate) and its redistribution terms.
 
 ---
 
@@ -6786,7 +6801,7 @@ Game Library
   ↓
 Automatic ROM Discovery
   ↓
-RetroArch / Standalone Emulators
+RetroArch
   ↓
 Game Details / Metadata / ScreenScraper
   ↓
@@ -6811,9 +6826,9 @@ Security / Licensing / Regression
 
 At this stage:
 
-- **55 Product Epics identified**
+- **56 Product Epics identified**
 - **9 Technical Enablers identified**
-- **55 Product Epics refined** (`EPIC-001` through `EPIC-055`)
+- **56 Product Epics refined** (`EPIC-001` through `EPIC-056`)
 - **0 Epics frozen**
 - remaining Epics remain subject to refinement;
 - no new platform implementation should be derived from an unrefined Epic until it has been decomposed into explicit requirements.
@@ -7214,7 +7229,6 @@ Complete one excellent end-to-end gaming vertical slice before broad emulator co
 
 - `EPIC-011` Game Library
 - `EPIC-013` RetroArch Integration
-- `EPIC-014` Standalone Emulators
 - `EPIC-016` Game Details
 - `EPIC-018` Per-game Configuration
 - `EPIC-019` Saves & Save States
@@ -7497,6 +7511,7 @@ health/recovery path
 ### Product Epics
 
 - `EPIC-029` Wireless Casting to TV
+- `EPIC-056` Spotify Connect (after EPIC-029, before EPIC-030 Web Mode)
 - future product requirements accepted after the baseline release
 
 ### Wireless casting gate

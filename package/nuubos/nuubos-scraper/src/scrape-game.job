@@ -1,0 +1,6 @@
+# EPIC-015: scrape one game (argument: game id, optional "force").
+COMMAND=/usr/bin/nuubos-scraper game
+SCOPE=device
+CANCEL=1
+RETRY=1
+ARGS=2

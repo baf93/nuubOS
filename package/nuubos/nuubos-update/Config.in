@@ -1,0 +1,13 @@
+config BR2_PACKAGE_NUUBOS_UPDATE
+	bool "nuubos-update"
+	depends on BR2_USE_MMU
+	select BR2_PACKAGE_NUUBOS_JOBS
+	select BR2_PACKAGE_LIBCURL
+	select BR2_PACKAGE_CA_CERTIFICATES
+	select BR2_PACKAGE_LIBSODIUM
+	help
+	  EPIC-048 OTA updates: signed release manifest (Ed25519, public
+	  key from board/nuubos/common/ota/update-key.pub), resumable
+	  verified download, installation on the next restart with a
+	  rollback of the replaced system files when the new system does
+	  not reach nuubUI.

@@ -1,0 +1,16 @@
+From: nuubOS <noreply@nuubos.invalid>
+Subject: [PATCH] corelib: include <limits> in qglobal.h (GCC 11+)
+
+qfloat16.h and qendian.h use std::numeric_limits; libstdc++ no longer
+includes <limits> through <algorithm>. Same fix as later Qt 5.15 releases.
+---
+--- a/src/corelib/global/qglobal.h
++++ b/src/corelib/global/qglobal.h
+@@ -140,6 +140,7 @@
+ #ifdef __cplusplus
+ 
+ #include <algorithm>
++#include <limits>
+ 
+ #if !defined(QT_NAMESPACE) || defined(Q_MOC_RUN) /* user namespace */
+ 

@@ -1,0 +1,11 @@
+config BR2_PACKAGE_NUUBOS_SYNC
+	bool "nuubos-sync"
+	depends on BR2_USE_MMU
+	depends on BR2_PACKAGE_HOST_GO_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_SYNCTHING
+	select BR2_PACKAGE_CJSON
+	select BR2_PACKAGE_LIBCURL
+	help
+	  EPIC-034: optional per-user Syncthing (saves, save states,
+	  screenshots) run for the active user only (nuubos-syncd) and
+	  configured through nuubos-syncctl.

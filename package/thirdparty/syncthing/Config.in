@@ -1,0 +1,10 @@
+config BR2_PACKAGE_SYNCTHING
+	bool "syncthing"
+	depends on BR2_PACKAGE_HOST_GO_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_HOST_GO
+	help
+	  Continuous peer-to-peer file synchronization (EPIC-034), run by
+	  nuubos-syncd for the active user only. Built without the
+	  self-upgrade feature.
+
+	  https://syncthing.net

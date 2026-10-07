@@ -38,10 +38,20 @@
  *   game.slot               slot=      (changed with a controller hotkey)
  *   game.fastforward        state=on|off
  *   game.failed             reason=start|crash
+ *   game.screenshot.saved              (screenshot written)
+ *   game.screenshot.failed
+ *   media.failed                       (playback could not start / ended in error)
+ *   web.failed              reason=start|crash  (Web Mode browser could not start / closed)
+ *   media.connected         name=      (USB storage mounted)
+ *   media.removed           name=
+ *   job                     type= state=queued|running|succeeded|failed|cancelled
+ *                           [progress=] [step=] [reason=]   (nuubos-jobd)
  *   stream.paired           name=      (PC streaming host paired)
  *   stream.pair.failed      name=
- *   stream.failed           reason=unreachable|unpaired|app|start|connection
+ *   stream.failed           reason=unreachable|unpaired|app|start|connection|steamlink
  *                           [name=]    (stream could not start / was lost)
+ *   stream.steamlink.installed version=   (Valve Steam Link downloaded)
+ *   stream.steamlink.failed reason=network|space|archive|write
  *
  * Values are percent-encoded. Sending is fire-and-forget and never blocks:
  * a missing or busy router simply drops a transient notification.

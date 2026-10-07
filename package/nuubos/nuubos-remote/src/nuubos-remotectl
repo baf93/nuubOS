@@ -1,0 +1,240 @@
+#!/bin/sh
+# nuubOS Remote Services and device credential (EPIC-037, EPIC-039).
+#
+#   start | stop                  boot/shutdown: prepare, then run the enabled services
+#   status                        ssh= smb= web= (enabled) running_*= address= user=
+#   set ssh|smb|web 0|1           enable/disable a service (persists device-wide)
+#   credential show               the device password (local trusted console only)
+#   credential regenerate         new random password; the old one stops working
+#
+# One device-global credential (user "root") for SMB file sharing and Web
+# administration. It is generated randomly per device on first start and
+# never shipped. Secrets live in STATE, root only:
+#   /state/remote/credential      the password
+#   /state/remote/web.htdigest    Web administration digest file
+#   /state/remote/ksmbd/          SMB user database
+# SSH/SCP/SFTP (Dropbear) keeps its existing policy: public-key login only
+# (/state/ssh/root/authorized_keys, options in /etc/default/dropbear); the
+# credential is not a login password and /etc/shadow is not touched, so the
+# serial console behaves as before. Every service is disabled by default; a
+# device that already has an authorized SSH key (development cards) keeps
+# SSH enabled.
+# Services only listen on the local network the console is on; Internet
+# exposure is not supported.
+# NUUBOS_ROOT prefixes the STATE/etc paths for the host test; daemons are
+# not touched when NUUBOS_REMOTE_NO_DAEMONS=1.
+
+R="${NUUBOS_ROOT:-}"
+DIR="$R/state/remote"
+CONF="$R/state/config/remote.conf"
+CRED="$DIR/credential"
+HTDIGEST="$DIR/web.htdigest"
+KSMBD_DIR="$DIR/ksmbd"
+AUTH_KEYS="$R/state/ssh/root/authorized_keys"
+REALM="nuubOS"
+USER_NAME=root
+NO_DAEMONS="${NUUBOS_REMOTE_NO_DAEMONS:-0}"
+
+log() { echo "nuubos-remote: $*" >&2; }
+
+conf_get()
+{
+    sed -n "s/^$1=//p" "$CONF" 2>/dev/null | tail -n 1
+}
+
+conf_set()
+{
+    mkdir -p "${CONF%/*}"
+    tmp="$CONF.tmp.$$"
+    { grep -v "^$1=" "$CONF" 2>/dev/null; echo "$1=$2"; } > "$tmp" &&
+        chmod 600 "$tmp" && mv "$tmp" "$CONF"
+}
+
+# 12 random characters without look-alikes, shown as xxxx-xxxx-xxxx.
+new_password()
+{
+    raw="$(tr -dc 'abcdefghjkmnpqrstuvwxyz23456789' < /dev/urandom 2>/dev/null | head -c 12)"
+    [ "${#raw}" -eq 12 ] || return 1
+    printf '%s-%s-%s\n' "$(echo "$raw" | cut -c1-4)" "$(echo "$raw" | cut -c5-8)" "$(echo "$raw" | cut -c9-12)"
+}
+
+md5_hex()
+{
+    printf '%s' "$1" | md5sum | cut -d' ' -f1
+}
+
+prepare_dir()
+{
+    mkdir -p "$DIR" && chmod 700 "$DIR"
+}
+
+# Apply a password to every consumer.
+apply_password()
+{
+    pw="$1"
+    printf '%s:%s:%s\n' "$USER_NAME" "$REALM" "$(md5_hex "$USER_NAME:$REALM:$pw")" > "$HTDIGEST.tmp" &&
+        chmod 600 "$HTDIGEST.tmp" && mv "$HTDIGEST.tmp" "$HTDIGEST" || return 1
+    mkdir -p "$KSMBD_DIR" && chmod 700 "$KSMBD_DIR"
+    if [ "$NO_DAEMONS" != 1 ] && command -v ksmbd.adduser >/dev/null 2>&1; then
+        rm -f "$KSMBD_DIR/ksmbdpwd.db"
+        ksmbd.adduser -P "$KSMBD_DIR/ksmbdpwd.db" -C /etc/nuubos/ksmbd.conf -a "$USER_NAME" -p "$pw" >/dev/null 2>&1 ||
+            log "SMB user update failed"
+    fi
+    sync
+}
+
+ensure_credential()
+{
+    if [ ! -s "$CRED" ]; then
+        pw="$(new_password)" || { log "no randomness for the credential"; return 1; }
+        printf '%s\n' "$pw" > "$CRED.tmp" && chmod 600 "$CRED.tmp" && mv "$CRED.tmp" "$CRED" || return 1
+        apply_password "$pw" || return 1
+        log "generated the device credential"
+    elif [ ! -s "$HTDIGEST" ]; then
+        apply_password "$(cat "$CRED")"
+    fi
+    chmod 600 "$CRED"
+}
+
+ensure_conf()
+{
+    [ -f "$CONF" ] && return 0
+    # First start with this feature: a development card that already has
+    # an authorized SSH key keeps SSH; everything else starts disabled.
+    if [ -s "$AUTH_KEYS" ]; then ssh=1; else ssh=0; fi
+    mkdir -p "${CONF%/*}" || return 1
+    printf 'NUUBOS_REMOTE_VERSION=1\nSSH=%s\nSMB=0\nWEB=0\n' "$ssh" > "$CONF.tmp" &&
+        chmod 600 "$CONF.tmp" && mv "$CONF.tmp" "$CONF"
+}
+
+prepare()
+{
+    prepare_dir && ensure_credential && ensure_conf
+}
+
+enabled() { [ "$(conf_get "$(echo "$1" | tr a-z A-Z)")" = 1 ]; }
+
+# ------------------------------------------------------------------ daemons
+
+pid_alive() { [ -r "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
+
+start_ssh()
+{
+    pid_alive /var/run/dropbear.pid && return 0
+    DROPBEAR_ARGS=""
+    # shellcheck disable=SC1091
+    [ -r /etc/default/dropbear ] && . /etc/default/dropbear
+    # -R: create host keys on demand (they live in /state/ssh/dropbear).
+    umask 077
+    # shellcheck disable=SC2086
+    start-stop-daemon -S -q -p /var/run/dropbear.pid --exec /usr/sbin/dropbear -- $DROPBEAR_ARGS -R
+}
+
+stop_ssh()
+{
+    start-stop-daemon -K -q -p /var/run/dropbear.pid 2>/dev/null
+    rm -f /var/run/dropbear.pid
+}
+
+start_smb()
+{
+    pidof ksmbd.mountd >/dev/null 2>&1 && return 0
+    modprobe ksmbd 2>/dev/null
+    [ -s "$KSMBD_DIR/ksmbdpwd.db" ] || apply_password "$(cat "$CRED")"
+    ksmbd.mountd -C /etc/nuubos/ksmbd.conf -P "$KSMBD_DIR/ksmbdpwd.db" >/dev/null 2>&1
+}
+
+stop_smb()
+{
+    ksmbd.control -s >/dev/null 2>&1
+    rmmod ksmbd 2>/dev/null
+    return 0
+}
+
+start_web()
+{
+    pid_alive /var/run/nuubos-web.pid && return 0
+    mkdir -p /userdata/.nuubos-upload
+    lighttpd -f /etc/nuubos/web/lighttpd.conf
+}
+
+stop_web()
+{
+    [ -r /var/run/nuubos-web.pid ] && kill "$(cat /var/run/nuubos-web.pid)" 2>/dev/null
+    rm -f /var/run/nuubos-web.pid
+}
+
+running()
+{
+    case "$1" in
+        ssh) pid_alive /var/run/dropbear.pid ;;
+        smb) pidof ksmbd.mountd >/dev/null 2>&1 ;;
+        web) pid_alive /var/run/nuubos-web.pid ;;
+    esac
+}
+
+apply()
+{
+    [ "$NO_DAEMONS" = 1 ] && return 0
+    for s in ssh smb web; do
+        if enabled "$s"; then "start_$s"; else "stop_$s"; fi
+    done
+}
+
+address()
+{
+    ip -4 addr show wlan0 2>/dev/null | awk '/inet / { sub(/\/.*/, "", $2); print $2; exit }'
+}
+
+case "${1:-}" in
+    start)
+        prepare || exit 1
+        apply
+        ;;
+    stop)
+        [ "$NO_DAEMONS" = 1 ] || { stop_web; stop_smb; stop_ssh; }
+        ;;
+    status)
+        prepare >/dev/null 2>&1
+        for s in ssh smb web; do
+            if enabled "$s"; then e=1; else e=0; fi
+            if [ "$NO_DAEMONS" != 1 ] && running "$s"; then r=1; else r=0; fi
+            printf '%s=%s\nrunning_%s=%s\n' "$s" "$e" "$s" "$r"
+        done
+        printf 'address=%s\nuser=%s\nend=1\n' "$(address)" "$USER_NAME"
+        ;;
+    set)
+        case "${2:-}:${3:-}" in
+            ssh:0|ssh:1|smb:0|smb:1|web:0|web:1) ;;
+            *) echo "ERR usage"; exit 2 ;;
+        esac
+        prepare || { echo "ERR prepare"; exit 1; }
+        conf_set "$(echo "$2" | tr a-z A-Z)" "$3" || { echo "ERR storage"; exit 1; }
+        if [ "$NO_DAEMONS" != 1 ]; then
+            if [ "$3" = 1 ]; then "start_$2"; else "stop_$2"; fi
+        fi
+        echo OK
+        ;;
+    credential)
+        prepare || { echo "ERR prepare"; exit 1; }
+        case "${2:-}" in
+            show) cat "$CRED" ;;
+            regenerate)
+                pw="$(new_password)" || { echo "ERR random"; exit 1; }
+                printf '%s\n' "$pw" > "$CRED.tmp" && chmod 600 "$CRED.tmp" && mv "$CRED.tmp" "$CRED" || { echo "ERR storage"; exit 1; }
+                apply_password "$pw" || { echo "ERR apply"; exit 1; }
+                # Running SMB and Web servers reload their databases.
+                if [ "$NO_DAEMONS" != 1 ]; then
+                    enabled smb && { stop_smb; start_smb; }
+                    enabled web && { stop_web; start_web; }
+                fi
+                echo OK
+                ;;
+            *) echo "ERR usage"; exit 2 ;;
+        esac
+        ;;
+    *)
+        echo "Usage: nuubos-remotectl start|stop|status|set ssh|smb|web 0|1|credential show|regenerate" >&2
+        exit 2
+        ;;
+esac
