@@ -22,6 +22,8 @@ case "$1" in
 esac
 EOC
 printf '#!/bin/sh\nprintf "system=psx\\tPlayStation\\tpcsx\\tmissing\\t0\\t1\\nfile=psx\\tscph5501.bin\\t1\\tmissing\\tUS BIOS\\nend=1\\n"\n' > "$T/bin/biosctl"
+# Fake busybox mkpasswd: deterministic "hash" of the password on fd 0.
+printf '#!/bin/sh\nprintf "\\$6\\$t\\$%%s\\n" "$(md5sum | cut -c1-16)"\n' > "$T/bin/mkpasswd"
 chmod +x "$T/bin/"*
 export PATH="$T/bin:$PATH" LOG="$T/calls"
 
@@ -34,7 +36,11 @@ ctl start
 PW="$(ctl credential show)"
 ck "credential generated, formatted" 'echo "$PW" | grep -Eq "^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$"'
 ck "credential root-only" '[ "$(stat -c %a "$R/state/remote/credential")" = 600 ]'
-ck "/etc/shadow untouched (no login password)" '[ ! -L "$R/etc/shadow" ] && [ "$(head -n1 "$R/etc/shadow")" = "root::::::::" ]'
+hash_of() { printf '%s' "$1" | mkpasswd -m sha512 -P 0; }
+ck "root password = credential" '[ "$(head -n1 "$R/etc/shadow")" = "root:$(hash_of "$PW"):::::::" ] && [ "$(sed -n 2p "$R/etc/shadow")" = "daemon:*:::::::" ]'
+ck "shadow root-only" '[ "$(stat -c %a "$R/etc/shadow")" = 600 ]'
+printf 'root::::::::\ndaemon:*:::::::\n' > "$R/etc/shadow"
+ck "start re-applies shadow after an image update" 'ctl start; [ "$(head -n1 "$R/etc/shadow")" = "root:$(hash_of "$PW"):::::::" ]'
 ck "web digest written" '[ "$(cut -d: -f1,2 "$R/state/remote/web.htdigest")" = "root:nuubOS" ]'
 ck "digest value" '[ "$(cut -d: -f3 "$R/state/remote/web.htdigest")" = "$(printf "%s" "root:nuubOS:$PW" | md5sum | cut -d" " -f1)" ]'
 ck "services disabled by default" 'ctl status | grep -q "^ssh=0" && ctl status | grep -q "^web=0" && ctl status | grep -q "^smb=0"'
@@ -44,12 +50,13 @@ ck "bad service rejected" '! ctl set telnet 1 >/dev/null'
 ctl credential regenerate >/dev/null
 PW2="$(ctl credential show)"
 ck "regenerate changes it" '[ "$PW2" != "$PW" ] && [ "$(cut -d: -f3 "$R/state/remote/web.htdigest")" = "$(printf "%s" "root:nuubOS:$PW2" | md5sum | cut -d" " -f1)" ]'
+ck "regenerate updates root password" '[ "$(head -n1 "$R/etc/shadow")" = "root:$(hash_of "$PW2"):::::::" ]'
 
-# A development card with an authorized SSH key keeps SSH on migration.
+# Keys no longer sign in: an authorized_keys file does not enable SSH.
 R2="$T/root2"; mkdir -p "$R2/etc" "$R2/state/ssh/root"
 printf 'root::::::::\n' > "$R2/etc/shadow"; echo "ssh-ed25519 AAAA dev" > "$R2/state/ssh/root/authorized_keys"
 NUUBOS_ROOT="$R2" NUUBOS_REMOTE_NO_DAEMONS=1 sh "$CTL" start
-ck "dev card keeps SSH" 'NUUBOS_ROOT="$R2" NUUBOS_REMOTE_NO_DAEMONS=1 sh "$CTL" status | grep -q "^ssh=1"'
+ck "SSH off by default even with keys" 'NUUBOS_ROOT="$R2" NUUBOS_REMOTE_NO_DAEMONS=1 sh "$CTL" status | grep -q "^ssh=0"'
 ck "two devices, two credentials" '[ "$(NUUBOS_ROOT="$R2" NUUBOS_REMOTE_NO_DAEMONS=1 sh "$CTL" credential show)" != "$PW2" ]'
 
 # Web API

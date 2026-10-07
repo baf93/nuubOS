@@ -123,8 +123,8 @@ struct control_def {
 static const struct control_def controls[] = {
 	/* Stable Settings order: face cluster, D-pad, shoulders/triggers,
 	 * stick clicks, system/navigation buttons, then stick axes. */
-	{ "menu_back", CONTROL_BUTTON, BTN_SOUTH },
-	{ "menu_confirm", CONTROL_BUTTON, BTN_EAST },
+	{ "menu_confirm", CONTROL_BUTTON, BTN_SOUTH },
+	{ "menu_back", CONTROL_BUTTON, BTN_EAST },
 	{ "face_north", CONTROL_BUTTON, BTN_NORTH },
 	{ "face_west", CONTROL_BUTTON, BTN_WEST },
 	{ "menu_up", CONTROL_BUTTON, BTN_DPAD_UP },

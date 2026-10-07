@@ -517,7 +517,9 @@ component SettingsSelectableRow inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 28px;
         height: 28px;
-        border-radius: 14px;
+        /* Avatar frames: rounded square, corner = 22% of the side (as the
+         * Rust mask, AVATAR_CORNER in main.rs). */
+        border-radius: self.width * 0.22;
         border-width: 1px;
         border-color: root.selected ? Theme.accent : Theme.border-soft;
         background: #11151a;
@@ -1188,7 +1190,7 @@ export component HomeWindow inherits Window {
     callback splash-size-changed();
     changed width => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
     changed height => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
-    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Create Support Bundle", "Creating support bundle…", "Support bundle saved", "The support bundle could not be created", "No ROMs, saves, passwords or Wi-Fi keys are included. Saved in the diagnostics folder of USERDATA.", "Repair Configuration", "Configuration checked", "The recovery operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Factory Reset and Erase User Data", "Checks and repairs damaged settings. Nothing is deleted.", "Resets the active user's preferences and app data. Saves and states are kept.", "Erases users, settings, Wi-Fi and Bluetooth pairings. ROMs, BIOS, saves and states are kept.", "Also erases saves, states, screenshots and app data of every user. ROMs and BIOS are kept.", "Press again • the console will restart", "Press again to erase user data", "Safe Mode", "nuubUI stopped repeatedly and started with the default appearance. Repair or reset, then exit safe mode.", "Exit Safe Mode", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Integer Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available in this build", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Support bundle", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in with an authorized SSH key", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Theme", "Theme installed", "This is not a valid nuubOS theme", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY"];
+    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Create Support Bundle", "Creating support bundle…", "Support bundle saved", "The support bundle could not be created", "No ROMs, saves, passwords or Wi-Fi keys are included. Saved in the diagnostics folder of USERDATA.", "Repair Configuration", "Configuration checked", "The recovery operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Factory Reset and Erase User Data", "Checks and repairs damaged settings. Nothing is deleted.", "Resets the active user's preferences and app data. Saves and states are kept.", "Erases users, settings, Wi-Fi and Bluetooth pairings. ROMs, BIOS, saves and states are kept.", "Also erases saves, states, screenshots and app data of every user. ROMs and BIOS are kept.", "Press again • the console will restart", "Press again to erase user data", "Safe Mode", "nuubUI stopped repeatedly and started with the default appearance. Repair or reset, then exit safe mode.", "Exit Safe Mode", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Integer Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available in this build", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Support bundle", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in with an authorized SSH key", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Theme", "Theme installed", "This is not a valid nuubOS theme", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY", "Connect with WPS", "Cancel WPS", "Press the WPS button on your router…", "WPS timed out. Press the router button and try again.", "Several routers are in WPS mode. Try again in a few minutes.", "WPS failed: {0}", "WPS connection failed"];
 
     in-out property <string> topbar-time: "--:--";
     in-out property <string> current-user-name: root.i18n-strings[204];
@@ -1292,7 +1294,19 @@ export component HomeWindow inherits Window {
     in-out property <bool> avatar-picker-open: false;
     in-out property <[AvatarChoiceEntry]> avatar-choices: [];
     in-out property <int> avatar-picker-index: 0;
+    /* First visible grid row. */
     in-out property <int> avatar-picker-scroll: 0;
+    /* Avatar picker grid: large tiles, as many columns/rows as the screen
+     * holds (4×2 at 640×480); Rust reads both for navigation and scroll. */
+    property <length> avatar-picker-card-width: min(root.width - 32px, 820px);
+    property <length> avatar-picker-card-height: root.height - 32px;
+    out property <int> avatar-picker-columns:
+        max(1, floor((root.avatar-picker-card-width - 32px) / (root.layout-class == 2 ? 168px : 140px)));
+    out property <int> avatar-picker-rows:
+        max(1, floor((root.avatar-picker-card-height - 112px) / (root.layout-class == 2 ? 172px : 150px)));
+    /* Rows share the whole height (no empty band below the grid). */
+    property <length> avatar-picker-tile-height:
+        min((root.avatar-picker-card-height - 112px) / root.avatar-picker-rows, 220px);
     in-out property <string> timezone: "UTC";
     in-out property <bool> automatic-time: true;
     in-out property <string> manual-date-label: "---- -- --";
@@ -1507,10 +1521,10 @@ export component HomeWindow inherits Window {
 
     /* Initial setup / OOB (EPIC-002). nuubos-usersd owns the setup state; the
      * OOB is the Settings shell with a step rail instead of the categories and
-     * reuses the real Settings pages and dropdowns. oob-step: 0 Welcome,
+     * reuses the real Settings pages and dropdowns. oob-step: 0 Language,
      * 1 Date & Time (settings-view 30), 2 Wi-Fi (31, then the Wi-Fi pages 2/4
      * and keyboard 6), 3 Users (32, user detail 26, keyboard 6), 4 Ready.
-     * Welcome and Ready are full-screen. */
+     * Language and Ready are full-screen. */
     in-out property <bool> oob-active: false;
     in-out property <int> oob-step: 0;
     in-out property <int> oob-index: 0;
@@ -1613,9 +1627,10 @@ export component HomeWindow inherits Window {
             : false)
         : root.settings-view == 18 && root.display-audio-index == 0 ? root.display-brightness-available
         : root.settings-view == 18 && root.display-audio-index == 2 ? root.audio-volume-supported
-        : root.settings-view == 4 && root.wifi-detail-index == 1 ? root.wifi-selected-security != root.i18n-strings[212]
-        : root.settings-view == 4 && root.wifi-detail-index >= 3 && root.wifi-detail-index <= 6 ? root.wifi-ip-mode == "manual"
-        : root.settings-view == 4 && root.wifi-detail-index == 8 ? root.wifi-selected-saved
+        : root.settings-view == 4 && root.wifi-detail-index == 1 ? root.wifi-wps-active || root.wifi-wps-available
+        : root.settings-view == 4 && root.wifi-detail-index == 2 ? root.wifi-selected-security != root.i18n-strings[212]
+        : root.settings-view == 4 && root.wifi-detail-index >= 4 && root.wifi-detail-index <= 7 ? root.wifi-ip-mode == "manual"
+        : root.settings-view == 4 && root.wifi-detail-index == 9 ? root.wifi-selected-saved
         : root.settings-view == 1 && root.connectivity-selected-index == 1 ? root.wifi-enabled
         : root.settings-view == 1 && (root.connectivity-selected-index == 4 || root.connectivity-selected-index == 5) ? root.bluetooth-enabled
         : root.settings-view == 10 && root.controllers-menu-index == 2 ? root.rumble-supported
@@ -1816,6 +1831,13 @@ export component HomeWindow inherits Window {
     in-out property <bool> wifi-selected-saved: false;
     in-out property <bool> wifi-selected-current: false;
     in-out property <bool> wifi-pending-hidden: false;
+    /* A WPS push-button session runs in the Wi-Fi service. */
+    in-out property <bool> wifi-wps-active: false;
+    /* WPS only applies to personal (PSK/SAE) networks; raw service values. */
+    property <bool> wifi-wps-available: !root.wifi-selected-current
+        && root.wifi-selected-security != "Open"
+        && root.wifi-selected-security != "Enterprise"
+        && root.wifi-selected-security != "WEP";
 
     /* System virtual keyboard. Layout is a product setting boundary: Language/Region
      * can change keyboard-layout later without any Wi-Fi-specific UI changes. */
@@ -1944,32 +1966,33 @@ export component HomeWindow inherits Window {
                 spacing: 0px;
                 alignment: start;
 
-                Text {
+                wordmark-nuub := Text {
                     text: "nuub";
                     color: Theme.text;
                     font-size: 21px;
                     font-weight: 700;
                 }
-                Text {
+                wordmark-os := Text {
                     text: "OS";
                     color: Theme.accent;
                     font-size: 21px;
                     font-weight: 700;
                 }
             }
+            /* Current user right after the wordmark. */
             Rectangle {
-                x: 118px;
+                x: 18px + wordmark-nuub.preferred-width + wordmark-os.preferred-width + 8px;
                 y: 11px;
                 width: 28px;
                 height: 28px;
-                border-radius: 14px;
+                border-radius: self.width * 0.22;
                 border-width: 1px;
                 border-color: root.current-user-avatar-available ? Theme.accent : Theme.border-soft;
                 background: #11151a;
                 clip: true;
 
-                /* Avatar arrives pre-cropped round (Rust round_avatar); inset it
-                 * inside the ring so the border stays visible. */
+                /* Avatar arrives pre-masked (Rust round_avatar); inset it
+                 * inside the frame so the border stays visible. */
                 Image {
                     x: parent.border-width;
                     y: parent.border-width;
@@ -2374,7 +2397,7 @@ export component HomeWindow inherits Window {
                 }
 
                 /* OOB: the rail shows setup progress; it never takes focus. */
-                for step[i] in [387, 46, 157, 275, 397]: SettingsCategory {
+                for step[i] in [193, 46, 157, 275, 397]: SettingsCategory {
                     x: 8px;
                     y: 8px + i * root.settings-row-step;
                     width: parent.width - 16px;
@@ -3551,6 +3574,11 @@ export component HomeWindow inherits Window {
                         enabled: true,
                     },
                     {
+                        title: root.wifi-wps-active ? root.i18n-strings[706] : root.i18n-strings[705],
+                        value: "",
+                        enabled: root.wifi-wps-active || root.wifi-wps-available,
+                    },
+                    {
                         title: root.i18n-strings[172],
                         value: root.wifi-selected-security == root.i18n-strings[212] ? root.i18n-strings[173] : root.i18n-strings[174],
                         enabled: root.wifi-selected-security != root.i18n-strings[212],
@@ -3574,25 +3602,25 @@ export component HomeWindow inherits Window {
                 }
                 SettingsActionButton {
                     x: root.settings-content-x;
-                    y: root.srow-y(7, root.wifi-detail-scroll-offset, 0);
+                    y: root.srow-y(8, root.wifi-detail-scroll-offset, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     label: root.i18n-strings[181];
-                    selected: root.settings-view == 4 && root.wifi-detail-index == 7;
+                    selected: root.settings-view == 4 && root.wifi-detail-index == 8;
                     visible: root.settings-view == 4
-                        && root.srow-visible(7, root.wifi-detail-scroll-offset, root.wifi-detail-visible-rows);
+                        && root.srow-visible(8, root.wifi-detail-scroll-offset, root.wifi-detail-visible-rows);
                 }
                 SettingsActionButton {
                     x: root.settings-content-x;
-                    y: root.srow-y(8, root.wifi-detail-scroll-offset, 0);
+                    y: root.srow-y(9, root.wifi-detail-scroll-offset, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     label: root.i18n-strings[182];
                     danger: true;
                     enabled: root.wifi-selected-saved;
-                    selected: root.settings-view == 4 && root.wifi-detail-index == 8;
+                    selected: root.settings-view == 4 && root.wifi-detail-index == 9;
                     visible: root.settings-view == 4
-                        && root.srow-visible(8, root.wifi-detail-scroll-offset, root.wifi-detail-visible-rows);
+                        && root.srow-visible(9, root.wifi-detail-scroll-offset, root.wifi-detail-visible-rows);
                 }
 
                 /* Bluetooth discovery is active only while this page is open. */
@@ -3868,9 +3896,11 @@ export component HomeWindow inherits Window {
         }
     }
 
-    /* OOB Welcome (step 0) and Ready (step 4): one obvious action each. The
+    /* OOB Language (step 0) and Ready (step 4): one obvious action each. The
      * column is centred in the logical window and only its type sizes grow
-     * mildly with the height, so 640x480 stays compact and TV stays legible. */
+     * mildly with the height, so 640x480 stays compact and TV stays legible.
+     * Step 0 greets in every UI language on a rolling drum (the Timer runs
+     * only on that step) above the language selector (left/right). */
     oob-hero := Rectangle {
         x: 0; y: 0; width: parent.width; height: parent.height;
         background: Theme.background;
@@ -3879,6 +3909,19 @@ export component HomeWindow inherits Window {
 
         property <float> type-scale: max(1.0, min(1.35, root.height / 480px));
         property <bool> ready: root.oob-step == 4;
+        /* Endonyms, deliberately not translated; order = UI_LANGUAGES. */
+        property <[string]> greetings: ["Welcome", "Benvenuto", "Bienvenue", "Willkommen", "Bienvenido", "Bem-vindo", "Welkom"];
+        property <float> greet-tick: 0;
+        animate greet-tick { duration: 700ms; easing: ease-in-out; }
+        property <int> greet-n: floor(self.greet-tick);
+        property <float> greet-p: self.greet-tick - self.greet-n;
+        property <length> greet-h: 26px * self.type-scale * 1.5;
+
+        Timer {
+            interval: 2600ms;
+            running: root.oob-active && root.oob-step == 0;
+            triggered => { oob-hero.greet-tick += 1; }
+        }
 
         VerticalLayout {
             x: 32px;
@@ -3899,13 +3942,35 @@ export component HomeWindow inherits Window {
                 Rectangle { width: 86px; height: 3px; background: Theme.accent; border-radius: 2px; }
             }
             Rectangle { height: 4px; }
-            Text {
-                text: oob-hero.ready ? root.i18n-strings[394] : root.i18n-strings[388];
+            if oob-hero.ready: Text {
+                text: root.i18n-strings[394];
                 color: Theme.text;
                 font-size: 26px * oob-hero.type-scale;
                 font-weight: 700;
                 horizontal-alignment: center;
                 wrap: word-wrap;
+            }
+            /* Drum: the current greeting rolls up and away while the next
+             * one rolls in from below (scale-y fakes the rotation). */
+            if !oob-hero.ready: Rectangle {
+                height: oob-hero.greet-h;
+                clip: true;
+                for k in 2: Text {
+                    property <float> p: k == 0 ? 1 - oob-hero.greet-p : oob-hero.greet-p;
+                    x: 0;
+                    y: (k == 0 ? -1 : 1) * (1 - self.p) * oob-hero.greet-h * 0.6;
+                    width: parent.width;
+                    height: oob-hero.greet-h;
+                    text: oob-hero.greetings[Math.mod(oob-hero.greet-n + k, oob-hero.greetings.length)];
+                    color: Theme.text;
+                    font-size: 26px * oob-hero.type-scale;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    opacity: self.p;
+                    transform-scale-y: self.p;
+                    transform-origin: { x: self.width / 2, y: k == 0 ? 0px : self.height };
+                }
             }
             HorizontalLayout {
                 alignment: center;
@@ -3924,7 +3989,7 @@ export component HomeWindow inherits Window {
                 SettingsActionButton {
                     width: min(300px, root.width - 64px);
                     height: root.settings-row-height;
-                    label: oob-hero.ready ? root.i18n-strings[396] : root.i18n-strings[390];
+                    label: oob-hero.ready ? root.i18n-strings[396] : "‹   " + root.ui-language-name + "   ›";
                     selected: true;
                 }
             }
@@ -3949,7 +4014,11 @@ export component HomeWindow inherits Window {
                 x: 18px; y: 0; width: parent.width - 36px; height: parent.height;
                 spacing: 20px;
                 alignment: start;
-                ActionHint { kind: "face"; face-position: root.select-face-position; label: root.i18n-strings[185]; }
+                if root.oob-step == 0: ActionHint { kind: "nav"; label: root.i18n-strings[193]; }
+                ActionHint {
+                    kind: "face"; face-position: root.select-face-position;
+                    label: root.oob-step == 0 ? root.i18n-strings[390] : root.i18n-strings[185];
+                }
                 if root.oob-step == 4: ActionHint {
                     kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[186];
                 }
@@ -4011,7 +4080,7 @@ export component HomeWindow inherits Window {
                 y: user-card.focused ? 24px : 36px;
                 width: user-card.focused ? 112px : 88px;
                 height: user-card.focused ? 112px : 88px;
-                border-radius: user-card.focused ? 56px : 44px;
+                border-radius: self.width * 0.22;
                 border-width: user-card.focused ? 2px : 1px;
                 border-color: user-card.focused ? #5b9cff : #343a43;
                 background: #11151a;
@@ -4068,8 +4137,8 @@ export component HomeWindow inherits Window {
         z: 185;
 
         Rectangle {
-            width: min(parent.width - 48px, 540px);
-            height: min(parent.height - 64px, 66px + 5 * root.settings-row-step + 34px);
+            width: root.avatar-picker-card-width;
+            height: root.avatar-picker-card-height;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             background: #0d1014;
@@ -4093,16 +4162,54 @@ export component HomeWindow inherits Window {
                 background: Theme.accent;
                 border-radius: 2px;
             }
-            for avatar[i] in root.avatar-choices : SettingsSelectableRow {
-                x: 22px;
-                y: 66px + (i - root.avatar-picker-scroll) * root.settings-row-step;
-                width: parent.width - 44px;
-                height: root.settings-row-height;
-                title: avatar.label;
-                preview: avatar.avatar;
-                show-preview: true;
-                selected: root.avatar-picker-index == i;
-                visible: i >= root.avatar-picker-scroll && i < root.avatar-picker-scroll + 5;
+            for avatar[i] in root.avatar-choices : tile := Rectangle {
+                property <bool> focused: root.avatar-picker-index == i;
+                property <int> grid-row: floor(i / root.avatar-picker-columns);
+                property <length> cell-width: (parent.width - 32px) / root.avatar-picker-columns;
+                property <length> size: min(tile.cell-width - 28px, root.avatar-picker-tile-height - 46px);
+                x: 16px + mod(i, root.avatar-picker-columns) * tile.cell-width + 4px;
+                y: 62px + (tile.grid-row - root.avatar-picker-scroll) * root.avatar-picker-tile-height;
+                width: tile.cell-width - 8px;
+                height: root.avatar-picker-tile-height - 8px;
+                border-radius: 14px;
+                background: tile.focused ? #151c27 : transparent;
+                border-width: tile.focused ? 2px : 0px;
+                border-color: Theme.accent;
+                visible: tile.grid-row >= root.avatar-picker-scroll
+                    && tile.grid-row < root.avatar-picker-scroll + root.avatar-picker-rows;
+
+                Rectangle {
+                    x: (parent.width - tile.size) / 2;
+                    y: 8px;
+                    width: tile.size;
+                    height: tile.size;
+                    border-radius: tile.size * 0.22;
+                    border-width: tile.focused ? 2px : 1px;
+                    border-color: tile.focused ? #5b9cff : #343a43;
+                    background: #11151a;
+                    clip: true;
+
+                    Image {
+                        x: parent.border-width;
+                        y: parent.border-width;
+                        width: parent.width - 2 * parent.border-width;
+                        height: parent.height - 2 * parent.border-width;
+                        source: avatar.avatar;
+                        image-fit: contain;
+                    }
+                }
+                MarqueeText {
+                    x: 6px;
+                    y: parent.height - 30px;
+                    width: parent.width - 12px;
+                    height: 24px;
+                    label: avatar.label;
+                    text-color: tile.focused ? #ffffff : #a9afb8;
+                    text-size: 13px;
+                    text-weight: tile.focused ? 700 : 600;
+                    active: tile.focused;
+                    align-center: true;
+                }
             }
             MarqueeText {
                 x: 22px;

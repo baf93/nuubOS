@@ -78,22 +78,33 @@ static void localization_path(char *out, size_t size)
     snprintf(out, size, "/state/users/%s/localization.conf", current_user);
 }
 
-static void refresh_language(void)
+static bool read_language(const char *path)
 {
-    char path[384], line[128];
-    FILE *f;
-    snprintf(current_language, sizeof(current_language), "en");
-    localization_path(path, sizeof(path));
-    f = fopen(path, "r");
-    if (!f) return;
+    char line[128];
+    bool found = false;
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
     while (fgets(line, sizeof(line), f)) {
         char value[32];
         if (sscanf(line, "LANGUAGE=%31s", value) == 1 && language_supported(value)) {
             snprintf(current_language, sizeof(current_language), "%.15s", value);
+            found = true;
             break;
         }
     }
     fclose(f);
+    return found;
+}
+
+/* A user without an own choice gets the device language: the one set while
+ * no user is active ("default": initial setup, user picker), else en. */
+static void refresh_language(void)
+{
+    char path[384];
+    snprintf(current_language, sizeof(current_language), "en");
+    localization_path(path, sizeof(path));
+    if (!read_language(path))
+        (void)read_language("/state/users/default/localization.conf");
 }
 
 static int save_language(const char *code)

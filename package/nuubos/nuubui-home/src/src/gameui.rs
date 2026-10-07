@@ -580,7 +580,7 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
             rows.push(("info".into(), row(tr(ui, 599, "Remote Services"), String::new(),
                 tr(ui, 604, "Only on networks you trust. Never exposed to the Internet.")), false));
             rows.push(("svc:ssh".into(), toggle(tr(ui, 600, "SSH, SCP and SFTP"), get("ssh") == "1",
-                tr(ui, 601, "Sign in with an authorized SSH key")), true));
+                tr(ui, 601, "Sign in as root with the device password")), true));
             rows.push(("svc:smb".into(), toggle(tr(ui, 602, "File Sharing (SMB)"), get("smb") == "1",
                 if address.is_empty() { String::new() } else { format!("\\\\{address}\\nuubOS") }), true));
             rows.push(("svc:web".into(), toggle(tr(ui, 603, "Web Administration"), get("web") == "1",

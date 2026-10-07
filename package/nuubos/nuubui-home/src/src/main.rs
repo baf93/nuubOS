@@ -362,22 +362,28 @@ fn start_localization_listener(ui: &HomeWindow) {
     });
 }
 
+/* Order of the Language dropdown and the OOB language selector (same order
+ * as the greetings in home.slint `oob-hero`). */
+const UI_LANGUAGES: [&str; 7] = ["en", "it", "fr", "de", "es", "pt", "nl"];
+
 fn open_language_dropdown(ui: &HomeWindow) {
     open_settings_choice(
         ui,
         "ui-language",
         &tr(ui, 193, "Language"),
-        vec![
-            ("en".to_owned(), "English".to_owned()),
-            ("it".to_owned(), "Italiano".to_owned()),
-            ("fr".to_owned(), "Français".to_owned()),
-            ("de".to_owned(), "Deutsch".to_owned()),
-            ("es".to_owned(), "Español".to_owned()),
-            ("pt".to_owned(), "Português".to_owned()),
-            ("nl".to_owned(), "Nederlands".to_owned()),
-        ],
+        UI_LANGUAGES.iter().map(|c| (c.to_string(), language_name(c).to_owned())).collect(),
         ui.get_ui_language_code().as_str(),
     );
+}
+
+/* OOB Language step: left/right picks the neighbour language. localizationd
+ * stores it as the device language (no user is active yet); its snapshot
+ * retranslates the UI. */
+fn oob_step_language(ui: &HomeWindow, delta: i32) {
+    let cur = ui.get_ui_language_code();
+    let i = UI_LANGUAGES.iter().position(|c| *c == cur.as_str()).unwrap_or(0) as i32;
+    let next = UI_LANGUAGES[(i + delta).rem_euclid(UI_LANGUAGES.len() as i32) as usize];
+    thread::spawn(move || { let _ = localization_command(&format!("SET LANGUAGE {next}")); });
 }
 
 #[derive(Clone,Default)] struct UEntry{id:String,name:String,spec:String,path:String,active:bool,default_user:bool}
@@ -388,12 +394,14 @@ fn product_command(path:&str,cmd:&str)->std::io::Result<String>{product_command_
 fn users_command(c:&str)->std::io::Result<String>{product_command(USERS_SOCKET,c)}
 fn regional_command(c:&str)->std::io::Result<String>{product_command(REGIONAL_SOCKET,c)}
 fn regional_sync_command()->std::io::Result<String>{product_command_timeout(REGIONAL_SOCKET,"SYNC_NOW",Duration::from_secs(15))}
-/* Profile pictures are shown in circles. The software renderer clips to
- * rectangles only (border-radius is ignored), so every avatar is turned into a
- * round image here: centre square crop (cover), box downscale to at most
- * AVATAR_MAX_PX (largest circle 112 logical px x HDMI scale 3) and an
- * anti-aliased circular alpha mask. Slint then scales it to the circle size. */
+/* Profile pictures are shown as rounded squares. The software renderer clips
+ * to rectangles only (border-radius is ignored), so every avatar is masked
+ * here: centre square crop (cover), box downscale to at most AVATAR_MAX_PX
+ * (largest tile 112 logical px x HDMI scale 3) and an anti-aliased
+ * rounded-square alpha mask. Slint frames use the same corner ratio
+ * (`avatar-corner` in home.slint). */
 const AVATAR_MAX_PX:u32=384;
+const AVATAR_CORNER:f32=0.22;
 fn round_avatar(src:&Image)->Option<Image>{
     let b=src.to_rgba8_premultiplied()?;
     let (w,h)=(b.width(),b.height());
@@ -402,7 +410,8 @@ fn round_avatar(src:&Image)->Option<Image>{
     let n=side.min(AVATAR_MAX_PX);
     let px=b.as_slice();
     let mut out=slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(n,n);
-    let r=n as f32/2.0;
+    /* Rounded square (corner radius 22% of the side), anti-aliased. */
+    let half=n as f32/2.0;let rr=n as f32*AVATAR_CORNER;
     for (i,o) in out.make_mut_slice().iter_mut().enumerate(){
         let (x,y)=(i as u32%n,i as u32/n);
         let (x0,x1)=(ox+x*side/n,ox+((x+1)*side/n).max(x*side/n+1));
@@ -410,8 +419,9 @@ fn round_avatar(src:&Image)->Option<Image>{
         let mut acc=[0u32;4];
         for sy in y0..y1{for sx in x0..x1{let p=px[(sy*w+sx) as usize];acc[0]+=p.r as u32;acc[1]+=p.g as u32;acc[2]+=p.b as u32;acc[3]+=p.a as u32;}}
         let cnt=((x1-x0)*(y1-y0)) as f32;
-        let (dx,dy)=(x as f32+0.5-r,y as f32+0.5-r);
-        let cov=(r-(dx*dx+dy*dy).sqrt()+0.5).clamp(0.0,1.0)/cnt;
+        let qx=((x as f32+0.5-half).abs()-(half-rr)).max(0.0);
+        let qy=((y as f32+0.5-half).abs()-(half-rr)).max(0.0);
+        let cov=(rr-(qx*qx+qy*qy).sqrt()+0.5).clamp(0.0,1.0)/cnt;
         let c=|v:u32|(v as f32*cov+0.5) as u8;
         *o=slint::Rgba8Pixel{r:c(acc[0]),g:c(acc[1]),b:c(acc[2]),a:c(acc[3])};
     }
@@ -515,7 +525,10 @@ fn update_general_scroll(ui:&HomeWindow){
         index,COUNT,rows,ui.get_general_scroll_offset().clamp(0,COUNT-1)
     ));
 }
-fn update_user_scroll(ui:&HomeWindow){ui.set_user_list_scroll(guarded_scroll_offset(ui.get_user_list_index(),ui.get_user_count()+1,ui.get_settings_list_visible_rows(),ui.get_user_list_scroll()));}fn update_avatar_scroll(ui:&HomeWindow){ui.set_avatar_picker_scroll(guarded_scroll_offset(ui.get_avatar_picker_index(),ui.get_avatar_choices().row_count() as i32,5,ui.get_avatar_picker_scroll()));}
+fn update_user_scroll(ui:&HomeWindow){ui.set_user_list_scroll(guarded_scroll_offset(ui.get_user_list_index(),ui.get_user_count()+1,ui.get_settings_list_visible_rows(),ui.get_user_list_scroll()));}fn update_avatar_scroll(ui:&HomeWindow){let cols=ui.get_avatar_picker_columns().max(1);let n=ui.get_avatar_choices().row_count() as i32;ui.set_avatar_picker_scroll(guarded_scroll_offset(ui.get_avatar_picker_index()/cols,(n+cols-1)/cols,ui.get_avatar_picker_rows().max(1),ui.get_avatar_picker_scroll()));}
+/* Grid move: left/right by one, up/down by a row (down from a partial last
+ * row lands on the last avatar). */
+fn move_avatar_selection(ui:&HomeWindow,action:&str){let n=ui.get_avatar_choices().row_count() as i32;if n==0{return;}let cols=ui.get_avatar_picker_columns().max(1);let i=ui.get_avatar_picker_index();let next=match action{"menu_left"=>(i-1).max(0),"menu_right"=>(i+1).min(n-1),"menu_up" if i>=cols=>i-cols,"menu_down" if i/cols<(n-1)/cols=>(i+cols).min(n-1),_=>i};ui.set_avatar_picker_index(next);update_avatar_scroll(ui);}
 fn users_page_view(ui:&HomeWindow)->i32{if ui.get_oob_active(){32}else{25}}
 fn open_user(ui:&HomeWindow,u:UserProfileEntry,v:i32){ui.set_profile_edit_user_id(u.id);ui.set_profile_edit_name(u.name);ui.set_profile_edit_avatar_spec(u.avatar_spec);ui.set_profile_edit_avatar(u.avatar);ui.set_profile_index(0);ui.set_user_delete_confirm(false);navigate_settings_view(ui,v);}fn open_active_user(ui:&HomeWindow){for i in 0..ui.get_users().row_count(){if let Some(u)=ui.get_users().row_data(i){if u.active{open_user(ui,u,24);return;}}}}fn open_selected_user(ui:&HomeWindow){if let Some(u)=ui.get_users().row_data(ui.get_user_list_index().max(0) as usize){open_user(ui,u,26);}}
 fn open_avatar_picker(ui:&HomeWindow){let id=ui.get_profile_edit_user_id().to_string();let weak=ui.as_weak();thread::spawn(move||if let Ok(r)=users_command(&format!("LIST_AVATARS\t{}",id)){let mut raw=Vec::new();for l in r.lines(){if let Some(v)=l.strip_prefix("avatar="){let f:Vec<&str>=v.split('\t').collect();if f.len()>=3{raw.push((f[0].to_owned(),f[1].to_owned(),f[2].to_owned()));}}}let _=slint::invoke_from_event_loop(move||if let Some(ui)=weak.upgrade(){let rows:Vec<AvatarChoiceEntry>=raw.into_iter().map(|(spec,label,path)|{let lab=if let Some(n)=spec.strip_prefix("builtin:"){tr_arg(&ui,314,"Avatar {0}",n)}else{label};AvatarChoiceEntry{spec:spec.into(),label:lab.into(),path:path.clone().into(),avatar:avatar_image(&path)}}).collect();ui.set_avatar_choices(ModelRc::from(Rc::new(VecModel::from(rows))));ui.set_avatar_picker_index(0);ui.set_avatar_picker_scroll(0);ui.set_avatar_picker_open(true);});});}
@@ -898,7 +911,19 @@ fn apply_wifi_product_state(ui: &HomeWindow, state: WifiProductState) {
 
     ui.set_connectivity_wifi_status(status.into());
     ui.set_connectivity_wifi_detail(detail.into());
+    let newly_connected = state.state == "connected" && !ui.get_connectivity_wifi_active();
     ui.set_connectivity_wifi_active(state.state == "connected");
+    /* OOB: once the network list/detail pages (reused from Settings) reach a
+     * connection, go back to the Wi-Fi step, which shows it, on Continue. */
+    if newly_connected
+        && OOB_ACTIVE.load(Ordering::SeqCst)
+        && matches!(ui.get_settings_view(), 2 | 4)
+        && !ui.get_settings_choice_open()
+    {
+        wifi_notice(ui, "");
+        navigate_settings_view(ui, 31);
+        ui.set_oob_index(2);
+    }
     ui.set_wifi_enabled(state.enabled);
     ui.set_wifi_current_ssid(state.ssid.clone().into());
 
@@ -1451,8 +1476,8 @@ fn refresh_controllers(ui: &HomeWindow) {
 /// Localized name of a logical controller control (Controllers service ids).
 fn control_label(ui: &HomeWindow, control: &str) -> String {
     let (index, fallback) = match control {
-        "menu_back" => (337, "Face South"),
-        "menu_confirm" => (338, "Face East"),
+        "menu_confirm" => (337, "Face South"),
+        "menu_back" => (338, "Face East"),
         "face_north" => (339, "Face North"),
         "face_west" => (340, "Face West"),
         "menu_up" => (341, "D-Pad Up"),
@@ -1483,8 +1508,8 @@ fn control_label(ui: &HomeWindow, control: &str) -> String {
 /// the logical control names; anything else is a numbered button.
 fn key_source_label(ui: &HomeWindow, code: i32) -> String {
     let control = match code {
-        304 => "menu_back",
-        305 => "menu_confirm",
+        304 => "menu_confirm",
+        305 => "menu_back",
         307 => "face_north",
         308 => "face_west",
         544 => "menu_up",
@@ -1594,8 +1619,8 @@ fn set_tester_visual_state(ui: &HomeWindow, control: &str, value: i32) {
     let pressed = value >= 50;
     let axis = value.clamp(-100, 100);
     match control {
-        "menu_back" => ui.set_tester_face_south(pressed),
-        "menu_confirm" => ui.set_tester_face_east(pressed),
+        "menu_confirm" => ui.set_tester_face_south(pressed),
+        "menu_back" => ui.set_tester_face_east(pressed),
         "face_north" => ui.set_tester_face_north(pressed),
         "face_west" => ui.set_tester_face_west(pressed),
         "menu_up" => ui.set_tester_dpad_up(pressed),
@@ -3293,6 +3318,49 @@ fn wifi_connect(ui: &HomeWindow, ssid: String, password: String, hidden: bool) {
     });
 }
 
+fn wifi_start_wps(ui: &HomeWindow, ssid: String) {
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let result = (|| -> zbus::Result<()> {
+            let connection = zbus::blocking::Connection::system()?;
+            let proxy = wifi_proxy(&connection)?;
+            proxy.call("StartWps", &(ssid.as_str(),))
+        })();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                /* The active state and its instruction come with WpsStateChanged. */
+                if let Err(error) = result {
+                    wifi_notice(&ui, tr_arg(&ui, 710, "WPS failed: {0}", &error.to_string()));
+                }
+            }
+        });
+    });
+}
+
+fn wifi_cancel_wps() {
+    thread::spawn(move || {
+        let result = (|| -> zbus::Result<()> {
+            let connection = zbus::blocking::Connection::system()?;
+            let proxy = wifi_proxy(&connection)?;
+            proxy.call("CancelWps", &())
+        })();
+        if let Err(error) = result {
+            eprintln!("home: Wi-Fi CancelWps failed={error}");
+        }
+    });
+}
+
+fn apply_wifi_wps_active(ui: &HomeWindow, active: bool) {
+    ui.set_wifi_wps_active(active);
+    let instruction = tr(ui, 707, "Press the WPS button on your router…");
+    if active {
+        wifi_notice(ui, instruction);
+    } else if ui.get_wifi_notice().as_str() == instruction {
+        /* Failures replace the instruction through OperationFailed. */
+        wifi_notice(ui, "");
+    }
+}
+
 fn wifi_disconnect(ui: &HomeWindow) {
     let weak = ui.as_weak();
     wifi_notice(ui, tr(ui, 256, "Disconnecting…"));
@@ -3444,7 +3512,8 @@ fn open_system_keyboard(
     ui.set_keyboard_value(initial.into());
     ui.set_keyboard_page(0);
     ui.set_keyboard_index(0);
-    ui.set_keyboard_shift(false);
+    /* User names start capitalized; Shift is one-shot (off after a letter). */
+    ui.set_keyboard_shift(matches!(purpose, 8 | 9) && initial.is_empty());
     apply_keyboard_layout(ui);
     navigate_settings_view(ui, 6);
     ui.invoke_focus_system_keyboard();
@@ -3751,7 +3820,7 @@ fn update_scroll_offset(ui: &HomeWindow, saved: bool) {
 }
 
 fn update_wifi_detail_scroll(ui: &HomeWindow) {
-    const DETAIL_ROWS: i32 = 9;
+    const DETAIL_ROWS: i32 = 10;
     ui.set_wifi_detail_scroll_offset(guarded_scroll_offset(
         ui.get_wifi_detail_index(),
         DETAIL_ROWS,
@@ -3787,6 +3856,17 @@ fn start_wifi_aux_signal_listener(ui: &HomeWindow, signal_name: &'static str) {
                 continue;
             }
         };
+        if signal_name == "WpsStateChanged" {
+            /* Snapshot after subscribing, so no transition is missed. */
+            if let Ok(active) = proxy.call::<_, _, bool>("GetWpsActive", &()) {
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak.upgrade() {
+                        apply_wifi_wps_active(&ui, active);
+                    }
+                });
+            }
+        }
         for message in &mut signals {
             match signal_name {
                 "NetworksSnapshotChanged" => {
@@ -3822,7 +3902,7 @@ fn start_wifi_aux_signal_listener(ui: &HomeWindow, signal_name: &'static str) {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = weak.upgrade() {
                                 ui.set_wifi_scanning(scanning);
-                                if !scanning {
+                                if !scanning && !ui.get_wifi_wps_active() {
                                     wifi_notice(&ui, "");
                                     refresh_wifi_networks(&ui, false);
                                 }
@@ -3836,7 +3916,27 @@ fn start_wifi_aux_signal_listener(ui: &HomeWindow, signal_name: &'static str) {
                         let weak = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = weak.upgrade() {
-                                wifi_notice(&ui, format!("{operation}: {text}"));
+                                if operation == "wps" {
+                                    let notice = match text.as_str() {
+                                        "timeout" => tr(&ui, 708, "WPS timed out. Press the router button and try again."),
+                                        "overlap" => tr(&ui, 709, "Several routers are in WPS mode. Try again in a few minutes."),
+                                        _ => tr(&ui, 711, "WPS connection failed"),
+                                    };
+                                    wifi_notice(&ui, notice);
+                                } else {
+                                    wifi_notice(&ui, format!("{operation}: {text}"));
+                                }
+                            }
+                        });
+                    }
+                }
+                "WpsStateChanged" => {
+                    let body = message.body().deserialize::<(bool,)>();
+                    if let Ok((active,)) = body {
+                        let weak = weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak.upgrade() {
+                                apply_wifi_wps_active(&ui, active);
                             }
                         });
                     }
@@ -3866,6 +3966,7 @@ fn start_wifi_product_listener(ui: &HomeWindow) {
     start_wifi_aux_signal_listener(ui, "NetworksChanged");
     start_wifi_aux_signal_listener(ui, "ScanStateChanged");
     start_wifi_aux_signal_listener(ui, "OperationFailed");
+    start_wifi_aux_signal_listener(ui, "WpsStateChanged");
     start_wifi_aux_signal_listener(ui, "IpConfigurationChanged");
 
     let weak = ui.as_weak();
@@ -4416,7 +4517,7 @@ fn handle_settings_action(
 ) {
     play_ui_sound(action);
     let view = ui.get_settings_view();
-    if ui.get_avatar_picker_open(){if action=="menu_back"{ui.set_avatar_picker_open(false);return;}let n=ui.get_avatar_choices().row_count() as i32;match action{"menu_up" if n>0=>{ui.set_avatar_picker_index(move_model_selection(ui.get_avatar_picker_index(),n,-1));update_avatar_scroll(ui);},"menu_down" if n>0=>{ui.set_avatar_picker_index(move_model_selection(ui.get_avatar_picker_index(),n,1));update_avatar_scroll(ui);},"menu_confirm" if n>0=>{if let Some(a)=ui.get_avatar_choices().row_data(ui.get_avatar_picker_index().max(0) as usize){let id=ui.get_profile_edit_user_id().to_string();let spec=a.spec.to_string();ui.set_avatar_picker_open(false);thread::spawn(move||{let _=users_command(&format!("SET_AVATAR	{}	{}",id,spec));});}},_=>{}}return;}
+    if ui.get_avatar_picker_open(){if action=="menu_back"{ui.set_avatar_picker_open(false);return;}let n=ui.get_avatar_choices().row_count() as i32;match action{"menu_up"|"menu_down"|"menu_left"|"menu_right"=>move_avatar_selection(ui,action),"menu_confirm" if n>0=>{if let Some(a)=ui.get_avatar_choices().row_data(ui.get_avatar_picker_index().max(0) as usize){let id=ui.get_profile_edit_user_id().to_string();let spec=a.spec.to_string();ui.set_avatar_picker_open(false);thread::spawn(move||{let _=users_command(&format!("SET_AVATAR	{}	{}",id,spec));});}},_=>{}}return;}
 
     if ui.get_settings_choice_open() {
         let theme_choice = ui.get_settings_choice_context().as_str() == "theme";
@@ -4642,14 +4743,14 @@ fn handle_settings_action(
         }
         4 => match action {
             "menu_up" => {
-                ui.set_wifi_detail_index((ui.get_wifi_detail_index() + 8).rem_euclid(9));
+                ui.set_wifi_detail_index((ui.get_wifi_detail_index() + 9).rem_euclid(10));
                 update_wifi_detail_scroll(ui);
             }
             "menu_down" => {
-                ui.set_wifi_detail_index((ui.get_wifi_detail_index() + 1).rem_euclid(9));
+                ui.set_wifi_detail_index((ui.get_wifi_detail_index() + 1).rem_euclid(10));
                 update_wifi_detail_scroll(ui);
             }
-            "menu_left" | "menu_right" if ui.get_wifi_detail_index() == 2 => {
+            "menu_left" | "menu_right" if ui.get_wifi_detail_index() == 3 => {
                 let manual = ui.get_wifi_ip_mode().as_str() != "manual";
                 if manual {
                     ui.set_wifi_ip_mode("manual".into());
@@ -4679,11 +4780,17 @@ fn handle_settings_action(
                     let ssid = ui.get_wifi_selected_ssid().to_string();
                     open_system_keyboard(ui, &format!("Password • {ssid}"), 0, 4, "password", "");
                 }
-                1 if ui.get_wifi_selected_security().as_str() != "Open" => {
+                1 if ui.get_wifi_wps_active() => wifi_cancel_wps(),
+                1 if !ui.get_wifi_selected_current()
+                    && !matches!(ui.get_wifi_selected_security().as_str(), "Open" | "Enterprise" | "WEP") =>
+                {
+                    wifi_start_wps(ui, ui.get_wifi_selected_ssid().to_string());
+                }
+                2 if ui.get_wifi_selected_security().as_str() != "Open" => {
                     let ssid = ui.get_wifi_selected_ssid().to_string();
                     open_system_keyboard(ui, &format!("Password • {ssid}"), 0, 4, "password", "");
                 }
-                2 => {
+                3 => {
                     let manual = ui.get_wifi_ip_mode().as_str() != "manual";
                     if manual {
                         ui.set_wifi_ip_mode("manual".into());
@@ -4698,20 +4805,20 @@ fn handle_settings_action(
                         ui.set_wifi_ip_mode("automatic".into());
                     }
                 }
-                3 if ui.get_wifi_ip_mode().as_str() == "manual" => {
+                4 if ui.get_wifi_ip_mode().as_str() == "manual" => {
                     open_system_keyboard(ui, "IPv4 Address", 2, 4, "ipv4", &ui.get_wifi_ip_address());
                 }
-                4 if ui.get_wifi_ip_mode().as_str() == "manual" => {
+                5 if ui.get_wifi_ip_mode().as_str() == "manual" => {
                     open_system_keyboard(ui, "Subnet Mask", 6, 4, "ipv4", &ui.get_wifi_ip_netmask());
                 }
-                5 if ui.get_wifi_ip_mode().as_str() == "manual" => {
+                6 if ui.get_wifi_ip_mode().as_str() == "manual" => {
                     open_system_keyboard(ui, "Gateway (optional)", 4, 4, "ipv4", &ui.get_wifi_ip_gateway());
                 }
-                6 if ui.get_wifi_ip_mode().as_str() == "manual" => {
+                7 if ui.get_wifi_ip_mode().as_str() == "manual" => {
                     open_system_keyboard(ui, "DNS", 5, 4, "dns", &ui.get_wifi_ip_dns());
                 }
-                7 => save_wifi_ip_configuration(ui),
-                8 if ui.get_wifi_selected_saved() => {
+                8 => save_wifi_ip_configuration(ui),
+                9 if ui.get_wifi_selected_saved() => {
                     wifi_forget(ui, ui.get_wifi_selected_ssid().to_string());
                 }
                 _ => {}
@@ -5682,6 +5789,8 @@ fn handle_oob_action(ui:&HomeWindow,action:&str,settings_active:&Arc<AtomicBool>
     if step==0||step==4{
         play_ui_sound(action);
         match action{
+            "menu_left"|"menu_up" if step==0=>oob_step_language(ui,-1),
+            "menu_right"|"menu_down" if step==0=>oob_step_language(ui,1),
             "menu_confirm" if step==0=>oob_go(ui,1),
             "menu_confirm"=>oob_finish(ui),
             "menu_back" if step==4=>oob_go(ui,3),

@@ -380,8 +380,8 @@ fn main() {
         ui.set_user_picker_index(1);
         ui.set_user_picker_open(true);
     })));
-    /* Initial setup (OOB): Welcome/Ready full-screen, steps in the shell. */
-    scenes.push(("oob_welcome", Box::new(|ui| {
+    /* Initial setup (OOB): Language/Ready full-screen, steps in the shell. */
+    scenes.push(("oob_language", Box::new(|ui| {
         ui.set_user_picker_open(false);
         ui.set_settings_open(true); ui.set_oob_active(true); ui.set_oob_step(0); ui.set_settings_view(30);
     })));
@@ -401,7 +401,20 @@ fn main() {
         ui.set_users(ModelRc::from(Rc::new(VecModel::from(users))));
         ui.set_user_count(1); ui.set_oob_index(1);
     })));
-    scenes.push(("oob_ready", Box::new(|ui| { ui.set_oob_step(4); })));
+    /* Avatar picker over the Users step: the shipped built-in avatars. */
+    scenes.push(("oob_avatar_picker", Box::new(|ui| {
+        let choices: Vec<AvatarChoiceEntry> = (1..=24).map(|n| AvatarChoiceEntry {
+            spec: format!("builtin:{n:02}").into(), label: format!("Avatar {n}").into(), path: "".into(),
+            avatar: slint::Image::load_from_path(std::path::Path::new(
+                &format!("/workspace/package/nuubos/nuubos-users/src/avatars/{n:02}.png"))).unwrap_or_default(),
+        }).collect();
+        ui.set_avatar_choices(ModelRc::from(Rc::new(VecModel::from(choices))));
+        ui.set_profile_edit_user_id("u0".into());
+        ui.set_current_user_avatar(ui.get_avatar_choices().row_data(9).map(|a| a.avatar).unwrap_or_default());
+        ui.set_current_user_avatar_available(true);
+        ui.set_avatar_picker_index(5); ui.set_avatar_picker_scroll(0); ui.set_avatar_picker_open(true);
+    })));
+    scenes.push(("oob_ready", Box::new(|ui| { ui.set_avatar_picker_open(false); ui.set_oob_step(4); })));
     /* Moonlight (EPIC-025): the Settings shell with the PCs rail. */
     fn ml_host(id: &str, name: &str, address: &str, paired: bool, online: &str, probing: bool) -> MoonlightHostEntry {
         MoonlightHostEntry { id: id.into(), name: name.into(), address: address.into(), paired, online: online.into(), probing }

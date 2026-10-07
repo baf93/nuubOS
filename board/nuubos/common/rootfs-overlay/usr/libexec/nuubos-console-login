@@ -1,0 +1,4 @@
+#!/bin/sh
+# Serial console (getty -n -l): root without a password. It needs physical
+# access to the board, unlike SSH, which uses the device credential.
+exec /bin/login -f root

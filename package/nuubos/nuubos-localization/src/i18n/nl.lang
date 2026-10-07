@@ -599,7 +599,7 @@
 598=Druk nogmaals om te herstellen
 599=Externe diensten
 600=SSH, SCP en SFTP
-601=Aanmelden met een geautoriseerde SSH-sleutel
+601=Aanmelden als root met het apparaatwachtwoord
 602=Bestanden delen (SMB)
 603=Webbeheer
 604=Alleen op vertrouwde netwerken. Nooit bereikbaar via internet.
@@ -703,3 +703,10 @@
 702=Games
 703=GAMES
 704=BIBLIOTHEEK
+705=Verbinden met WPS
+706=WPS annuleren
+707=Druk op de WPS-knop van de router…
+708=WPS-time-out. Druk op de knop van de router en probeer het opnieuw.
+709=Meerdere routers staan in WPS-modus. Probeer het over een paar minuten opnieuw.
+710=WPS mislukt: {0}
+711=WPS-verbinding mislukt

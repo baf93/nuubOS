@@ -599,7 +599,7 @@
 598=Erneut drücken zum Zurücksetzen
 599=Fernzugriff
 600=SSH, SCP und SFTP
-601=Anmeldung mit einem autorisierten SSH-Schlüssel
+601=Anmeldung als root mit dem Gerätepasswort
 602=Dateifreigabe (SMB)
 603=Web-Verwaltung
 604=Nur in vertrauenswürdigen Netzwerken. Nie im Internet erreichbar.
@@ -703,3 +703,10 @@
 702=Spiele
 703=SPIELE
 704=BIBLIOTHEK
+705=Mit WPS verbinden
+706=WPS abbrechen
+707=Jetzt die WPS-Taste am Router drücken…
+708=WPS-Zeitlimit abgelaufen. Taste am Router drücken und erneut versuchen.
+709=Mehrere Router sind im WPS-Modus. In einigen Minuten erneut versuchen.
+710=WPS fehlgeschlagen: {0}
+711=WPS-Verbindung fehlgeschlagen

@@ -29,8 +29,6 @@ define NUUBOS_WIFI_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/sbin/nuubos-wifid
 	$(INSTALL) -D -m 0755 $(@D)/S44nuubos-wifid \
 		$(TARGET_DIR)/etc/init.d/S44nuubos-wifid
-	$(INSTALL) -D -m 0755 $(@D)/nuubos-wifi-event \
-		$(TARGET_DIR)/usr/libexec/nuubos-wifi-event
 	$(INSTALL) -D -m 0755 $(@D)/nuubos-wifi-udhcpc \
 		$(TARGET_DIR)/usr/libexec/nuubos-wifi-udhcpc
 	$(INSTALL) -D -m 0644 $(@D)/org.nuubOS.Wifi.conf \

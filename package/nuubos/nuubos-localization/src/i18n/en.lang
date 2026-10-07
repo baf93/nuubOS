@@ -599,7 +599,7 @@
 598=Press again to reset
 599=Remote Services
 600=SSH, SCP and SFTP
-601=Sign in with an authorized SSH key
+601=Sign in as root with the device password
 602=File Sharing (SMB)
 603=Web Administration
 604=Only on networks you trust. Never exposed to the Internet.
@@ -703,3 +703,10 @@
 702=Gaming
 703=GAMING
 704=LIBRARY
+705=Connect with WPS
+706=Cancel WPS
+707=Press the WPS button on your router…
+708=WPS timed out. Press the router button and try again.
+709=Several routers are in WPS mode. Try again in a few minutes.
+710=WPS failed: {0}
+711=WPS connection failed

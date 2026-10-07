@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -32,7 +33,8 @@
 #define WIFI_PROFILE_DIR WIFI_STATE_DIR "/profiles"
 #define WIFI_ENABLED_FILE WIFI_STATE_DIR "/enabled"
 #define WIFI_BACKEND_MARKER WIFI_STATE_DIR "/backend-v2"
-#define WIFI_LAST_EVENT "/run/nuubos/wifi-last-event"
+#define WPA_CTRL_SOCKET "/var/run/wpa_supplicant/" WIFI_IFACE
+#define WPA_MONITOR_DIR "/run/nuubos"
 #define MAX_NETWORKS 64
 #define MAX_CAPTURE 32768
 #define SCAN_SESSION_INTERVAL_MS 5000ULL
@@ -73,7 +75,12 @@ struct ip_config {
 
 static volatile sig_atomic_t running = 1;
 static volatile sig_atomic_t refresh_requested = 0;
-static volatile sig_atomic_t scan_results_requested = 0;
+static bool scan_results_requested = false;
+/* Own wpa_supplicant control-interface monitor (ATTACH): unlike the
+ * `wpa_cli -a` action script it receives every event, including
+ * CTRL-EVENT-SCAN-RESULTS, WRONG_KEY and SSID-TEMP-DISABLED. */
+static int wpa_monitor_fd = -1;
+static char wpa_monitor_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
 static bool scan_session_active = false;
 static bool scan_in_flight = false;
 static uint64_t next_scan_due_ms = 0;
@@ -82,6 +89,9 @@ static uint64_t next_scan_due_ms = 0;
 static uint64_t loss_due_ms = 0;
 static uint64_t loss_suspended_ms = 0;
 static char loss_ssid[128];
+/* A WPS push-button session is running in wpa_supplicant. It ends with
+ * WPS-SUCCESS, WPS-FAIL, WPS-TIMEOUT (walk time), an overlap or a cancel. */
+static bool wps_active = false;
 
 static const char introspection_xml[] =
     "<node>"
@@ -111,6 +121,13 @@ static const char introspection_xml[] =
     "<arg name='hidden' type='b' direction='in'/>"
     "</method>"
     "<method name='Disconnect'/>"
+    "<method name='StartWps'>"
+    "<arg name='ssid' type='s' direction='in'/>"
+    "</method>"
+    "<method name='CancelWps'/>"
+    "<method name='GetWpsActive'>"
+    "<arg name='active' type='b' direction='out'/>"
+    "</method>"
     "<method name='Forget'>"
     "<arg name='ssid' type='s' direction='in'/>"
     "</method>"
@@ -150,6 +167,9 @@ static const char introspection_xml[] =
     "<signal name='NetworksSnapshotChanged'>"
     "<arg name='networks' type='a(ssibb)'/>"
     "</signal>"
+    "<signal name='WpsStateChanged'>"
+    "<arg name='active' type='b'/>"
+    "</signal>"
     "<signal name='IpConfigurationChanged'>"
     "<arg name='ssid' type='s'/>"
     "</signal>"
@@ -179,8 +199,6 @@ static void on_signal(int signo)
         running = 0;
     else if (signo == SIGUSR1)
         refresh_requested = 1;
-    else if (signo == SIGUSR2)
-        scan_results_requested = 1;
     if (wake_pipe[1] >= 0)
         if (write(wake_pipe[1], "w", 1) < 0) {
             /* Pipe full: a wakeup is already pending. */
@@ -199,11 +217,11 @@ static bool open_wake_pipe(void)
     return true;
 }
 
-/* Sleep until D-Bus traffic, a signal (wpa event, child exit, stop) or the
- * next scan of an active scan session. */
+/* Sleep until D-Bus traffic, a wpa_supplicant event, a signal (child exit,
+ * DHCP lease, stop) or the next scan of an active scan session. */
 static void wait_for_work(DBusConnection *conn, int dbus_fd)
 {
-    struct pollfd fds[2];
+    struct pollfd fds[3];
     nfds_t count = 0;
     int timeout = -1;
     char buf[64];
@@ -226,6 +244,10 @@ static void wait_for_work(DBusConnection *conn, int dbus_fd)
     fds[count++].events = POLLIN;
     if (wake_pipe[0] >= 0) {
         fds[count].fd = wake_pipe[0];
+        fds[count++].events = POLLIN;
+    }
+    if (wpa_monitor_fd >= 0) {
+        fds[count].fd = wpa_monitor_fd;
         fds[count++].events = POLLIN;
     }
     (void)poll(fds, count, timeout);
@@ -533,6 +555,9 @@ static int wpa_network_id_for_ssid(const char *ssid)
     return -1;
 }
 
+static bool rewrite_wpa_config(const char *remove_ssid, const char *add_ssid,
+                               const char *password, bool hidden);
+
 static bool wpa_ping(void)
 {
     char output[128];
@@ -540,13 +565,82 @@ static bool wpa_ping(void)
     return run_capture(argv, output, sizeof(output)) == 0 && strstr(output, "PONG") != NULL;
 }
 
+static void close_wpa_monitor(void)
+{
+    if (wpa_monitor_fd >= 0)
+        close(wpa_monitor_fd);
+    wpa_monitor_fd = -1;
+    if (wpa_monitor_path[0] != '\0')
+        unlink(wpa_monitor_path);
+    wpa_monitor_path[0] = '\0';
+}
+
+/* Same protocol as wpa_ctrl: a bound datagram socket connected to the
+ * interface socket, registered with ATTACH. Events then arrive as
+ * "<level>EVENT ..." datagrams and wake the main loop. */
+static bool open_wpa_monitor(void)
+{
+    struct sockaddr_un local;
+    struct sockaddr_un dest;
+    struct pollfd pfd;
+    char reply[256];
+    ssize_t len;
+    int fd;
+
+    if (wpa_monitor_fd >= 0)
+        return true;
+
+    fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (fd < 0)
+        return false;
+    memset(&local, 0, sizeof(local));
+    local.sun_family = AF_UNIX;
+    snprintf(local.sun_path, sizeof(local.sun_path), WPA_MONITOR_DIR "/wifid-wpa-%ld",
+             (long)getpid());
+    (void)mkdir(WPA_MONITOR_DIR, 0755);
+    unlink(local.sun_path);
+    memset(&dest, 0, sizeof(dest));
+    dest.sun_family = AF_UNIX;
+    copy_string(dest.sun_path, sizeof(dest.sun_path), WPA_CTRL_SOCKET);
+    if (bind(fd, (struct sockaddr *)&local, sizeof(local)) < 0) {
+        close(fd);
+        return false;
+    }
+    copy_string(wpa_monitor_path, sizeof(wpa_monitor_path), local.sun_path);
+    wpa_monitor_fd = fd;
+    if (connect(fd, (struct sockaddr *)&dest, sizeof(dest)) < 0 ||
+        send(fd, "ATTACH", 6, 0) != 6) {
+        close_wpa_monitor();
+        return false;
+    }
+    /* wpa_supplicant answers immediately; events only follow the OK. */
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    while (poll(&pfd, 1, 2000) > 0) {
+        len = recv(fd, reply, sizeof(reply) - 1, 0);
+        if (len < 0)
+            break;
+        reply[len] = '\0';
+        if (strncmp(reply, "OK", 2) == 0)
+            return true;
+        if (reply[0] != '<')
+            break;
+    }
+    close_wpa_monitor();
+    return false;
+}
+
 static bool ensure_wpa_running(void)
 {
     pid_t pid;
     int status;
-    if (wpa_ping())
+    if (wpa_ping()) {
+        if (!open_wpa_monitor())
+            fprintf(stderr, "nuubos-wifid: cannot attach to wpa_supplicant\n");
         return true;
-    if (access(WPA_CONF, R_OK) != 0)
+    }
+    /* Clean STATE has no config yet: write the base one (no networks). */
+    if (access(WPA_CONF, R_OK) != 0 && !rewrite_wpa_config(NULL, NULL, NULL, false))
         return false;
 
     pid = fork();
@@ -562,7 +656,13 @@ static bool ensure_wpa_running(void)
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         return false;
     usleep(150000);
-    return wpa_ping();
+    if (!wpa_ping())
+        return false;
+    /* A previous instance's monitor died with it. */
+    close_wpa_monitor();
+    if (!open_wpa_monitor())
+        fprintf(stderr, "nuubos-wifid: cannot attach to wpa_supplicant\n");
+    return true;
 }
 
 static void refresh_signal_strength(struct wifi_state *state)
@@ -1478,11 +1578,15 @@ static bool request_scan(char *error, size_t error_size)
         copy_string(error, error_size, "Wi-Fi is disabled");
         return false;
     }
-    if (!ensure_wpa_running()) {
+    /* Without the monitor the completion would never be seen. */
+    if (!ensure_wpa_running() || wpa_monitor_fd < 0) {
         copy_string(error, error_size, "wpa_supplicant is unavailable");
         return false;
     }
-    if (run_capture(argv, output, sizeof(output)) != 0 || strstr(output, "OK") == NULL) {
+    /* FAIL-BUSY: wpa_supplicant is already scanning on its own (reconnect,
+     * autoscan); its CTRL-EVENT-SCAN-RESULTS completes this request too. */
+    if (run_capture(argv, output, sizeof(output)) != 0 ||
+        (strstr(output, "OK") == NULL && strstr(output, "FAIL-BUSY") == NULL)) {
         copy_string(error, error_size, "Unable to start Wi-Fi scan");
         return false;
     }
@@ -1511,6 +1615,88 @@ static bool disconnect_current(char *error, size_t error_size)
     (void)run_quiet(del_default);
     (void)write_resolv_conf("");
     return true;
+}
+
+/* Strongest BSSID of SSID that advertises WPS; empty when none does, so
+ * wpa_supplicant then looks for any access point in push-button mode. */
+static void wps_bssid_for_ssid(const char *ssid, char *bssid, size_t bssid_size)
+{
+    char output[MAX_CAPTURE];
+    char *saveptr = NULL;
+    char *line;
+    int32_t best = INT32_MIN;
+    char *const argv[] = {"wpa_cli", "-i", WIFI_IFACE, "scan_results", NULL};
+
+    copy_string(bssid, bssid_size, "");
+    if (ssid[0] == '\0' || run_capture(argv, output, sizeof(output)) != 0)
+        return;
+    line = strtok_r(output, "\n", &saveptr);
+    while (line != NULL) {
+        char *fields[5] = {0};
+        char *cursor = line;
+        int field = 0;
+        char *tab;
+
+        while (field < 4 && (tab = strchr(cursor, '\t')) != NULL) {
+            *tab = '\0';
+            fields[field++] = cursor;
+            cursor = tab + 1;
+        }
+        fields[field++] = cursor;
+        if (field == 5 && strcmp(fields[4], ssid) == 0 &&
+            strstr(fields[3], "[WPS") != NULL) {
+            int32_t signal = (int32_t)strtol(fields[2], NULL, 10);
+            if (signal > best) {
+                best = signal;
+                copy_string(bssid, bssid_size, fields[0]);
+            }
+        }
+        line = strtok_r(NULL, "\n", &saveptr);
+    }
+}
+
+static bool start_wps(const char *ssid, char *error, size_t error_size)
+{
+    char output[256];
+    char bssid[32];
+    char *const set_update[] = {"wpa_cli", "-i", WIFI_IFACE, "set",
+                                "update_config", "1", NULL};
+    char *const pbc_any[] = {"wpa_cli", "-i", WIFI_IFACE, "wps_pbc", NULL};
+    char *const pbc_bssid[] = {"wpa_cli", "-i", WIFI_IFACE, "wps_pbc", bssid, NULL};
+
+    if (ssid[0] != '\0' && !valid_ssid(ssid)) {
+        copy_string(error, error_size, "Invalid SSID");
+        return false;
+    }
+    if (!read_enabled_preference()) {
+        copy_string(error, error_size, "Wi-Fi is disabled");
+        return false;
+    }
+    if (!ensure_wpa_running()) {
+        copy_string(error, error_size, "wpa_supplicant is unavailable");
+        return false;
+    }
+    /* wpa_supplicant persists the received credentials itself, but only
+     * with update_config set (older STATE files carry update_config=0). */
+    if (run_capture(set_update, output, sizeof(output)) != 0 || strstr(output, "OK") == NULL) {
+        copy_string(error, error_size, "Unable to prepare WPS");
+        return false;
+    }
+    wps_bssid_for_ssid(ssid, bssid, sizeof(bssid));
+    if (run_capture(bssid[0] != '\0' ? pbc_bssid : pbc_any, output, sizeof(output)) != 0 ||
+        strstr(output, "OK") == NULL) {
+        copy_string(error, error_size, "WPS is not supported");
+        return false;
+    }
+    return true;
+}
+
+static void cancel_wps(void)
+{
+    char output[256];
+    char *const argv[] = {"wpa_cli", "-i", WIFI_IFACE, "wps_cancel", NULL};
+
+    (void)run_capture(argv, output, sizeof(output));
 }
 
 static bool set_ip_configuration(const char *ssid, const char *mode,
@@ -1720,8 +1906,19 @@ static void handle_message(DBusConnection *conn, DBusMessage *message,
     if (dbus_message_is_method_call(message, INTERFACE_NAME, "SetEnabled") ||
         dbus_message_is_method_call(message, INTERFACE_NAME, "Connect") ||
         dbus_message_is_method_call(message, INTERFACE_NAME, "Disconnect") ||
-        dbus_message_is_method_call(message, INTERFACE_NAME, "Forget"))
+        dbus_message_is_method_call(message, INTERFACE_NAME, "Forget") ||
+        dbus_message_is_method_call(message, INTERFACE_NAME, "StartWps"))
         loss_due_ms = 0;
+
+    /* Connecting, disconnecting or turning Wi-Fi off ends a WPS session. */
+    if (wps_active &&
+        (dbus_message_is_method_call(message, INTERFACE_NAME, "SetEnabled") ||
+         dbus_message_is_method_call(message, INTERFACE_NAME, "Connect") ||
+         dbus_message_is_method_call(message, INTERFACE_NAME, "Disconnect"))) {
+        cancel_wps();
+        wps_active = false;
+        emit_bool_signal(conn, "WpsStateChanged", false);
+    }
 
     if (dbus_message_is_method_call(message, INTERFACE_NAME, "GetSnapshot")) {
         struct wifi_state next;
@@ -1881,6 +2078,53 @@ static void handle_message(DBusConnection *conn, DBusMessage *message,
         return;
     }
 
+    if (dbus_message_is_method_call(message, INTERFACE_NAME, "StartWps")) {
+        DBusError error = DBUS_ERROR_INIT;
+        const char *ssid = NULL;
+        char text[160];
+        if (!dbus_message_get_args(message, &error,
+                                   DBUS_TYPE_STRING, &ssid,
+                                   DBUS_TYPE_INVALID)) {
+            reply_error(conn, message, DBUS_ERROR_INVALID_ARGS,
+                        dbus_error_is_set(&error) ? error.message : "Expected SSID");
+            if (dbus_error_is_set(&error)) dbus_error_free(&error);
+            return;
+        }
+        if (!start_wps(ssid, text, sizeof(text))) {
+            reply_error(conn, message, "org.nuubOS.Wifi.Error.WpsFailed", text);
+            return;
+        }
+        wps_active = true;
+        emit_bool_signal(conn, "WpsStateChanged", true);
+        reply_empty(conn, message);
+        return;
+    }
+
+    if (dbus_message_is_method_call(message, INTERFACE_NAME, "CancelWps")) {
+        if (wps_active) {
+            cancel_wps();
+            wps_active = false;
+            emit_bool_signal(conn, "WpsStateChanged", false);
+        }
+        reply_empty(conn, message);
+        return;
+    }
+
+    if (dbus_message_is_method_call(message, INTERFACE_NAME, "GetWpsActive")) {
+        dbus_bool_t active = wps_active ? TRUE : FALSE;
+        reply = dbus_message_new_method_return(message);
+        if (reply == NULL)
+            return;
+        if (!dbus_message_append_args(reply, DBUS_TYPE_BOOLEAN, &active, DBUS_TYPE_INVALID)) {
+            dbus_message_unref(reply);
+            reply_error(conn, message, DBUS_ERROR_NO_MEMORY, "Unable to serialize WPS state");
+            return;
+        }
+        (void)dbus_connection_send(conn, reply, NULL);
+        dbus_message_unref(reply);
+        return;
+    }
+
     if (dbus_message_is_method_call(message, INTERFACE_NAME, "Forget")) {
         DBusError error = DBUS_ERROR_INIT;
         const char *ssid = NULL;
@@ -2015,23 +2259,85 @@ static void handle_message(DBusConnection *conn, DBusMessage *message,
         reply_error(conn, message, DBUS_ERROR_UNKNOWN_METHOD, "Unknown method");
 }
 
-static void inspect_last_event(DBusConnection *conn)
+static void finish_wps(DBusConnection *conn, const char *failure)
 {
-    FILE *fp = fopen(WIFI_LAST_EVENT, "r");
-    char event[512];
-    if (fp == NULL)
+    struct wifi_state state;
+
+    if (!wps_active)
         return;
-    if (fgets(event, sizeof(event), fp) != NULL) {
-        trim_newline(event);
+    wps_active = false;
+    emit_bool_signal(conn, "WpsStateChanged", false);
+    if (failure != NULL) {
+        /* Stable codes: the UI localizes them. */
+        emit_operation_failed(conn, "wps", failure);
+        return;
+    }
+    /* wpa_supplicant wrote the new network with group access. */
+    (void)chmod(WPA_CONF, 0600);
+    refresh_state(&state);
+    emit_networks_snapshot(conn, state.ssid);
+    emit_empty_signal(conn, "NetworksChanged");
+}
+
+/* Events are handled in arrival order, so a WPS-SUCCESS is processed
+ * before the CTRL-EVENT-CONNECTED that follows it. */
+static void handle_wpa_event(DBusConnection *conn, const char *event)
+{
+    if (event[0] == '<' && (event = strchr(event, '>')) != NULL)
+        event++;
+    if (event == NULL)
+        return;
+
+    if (strncmp(event, "CTRL-EVENT-SCAN-RESULTS", 23) == 0)
+        scan_results_requested = true;
+    else if (strncmp(event, "CTRL-EVENT-SCAN-FAILED", 22) == 0) {
+        emit_operation_failed(conn, "scan", "Wi-Fi scan failed");
+        scan_results_requested = true;
+    } else if (strncmp(event, "CTRL-EVENT-CONNECTED", 20) == 0 ||
+               strncmp(event, "CTRL-EVENT-DISCONNECTED", 23) == 0)
+        refresh_requested = 1;
+    else if (strncmp(event, "CTRL-EVENT-SSID-TEMP-DISABLED", 29) == 0) {
         if (strstr(event, "WRONG_KEY") != NULL)
             emit_operation_failed(conn, "connect", "Authentication failed: wrong password");
-        else if (strstr(event, "SSID-TEMP-DISABLED") != NULL && strstr(event, "AUTH_FAILED") != NULL)
+        else if (strstr(event, "AUTH_FAILED") != NULL)
             emit_operation_failed(conn, "connect", "Authentication failed");
-        else if (strstr(event, "CTRL-EVENT-SCAN-FAILED") != NULL)
-            emit_operation_failed(conn, "scan", "Wi-Fi scan failed");
+        refresh_requested = 1;
+    } else if (strncmp(event, "WPS-SUCCESS", 11) == 0)
+        finish_wps(conn, NULL);
+    else if (strncmp(event, "WPS-TIMEOUT", 11) == 0)
+        finish_wps(conn, "timeout");
+    else if (strncmp(event, "WPS-OVERLAP-DETECTED", 20) == 0) {
+        /* wpa_supplicant keeps waiting for the walk time: stop now. */
+        if (wps_active)
+            cancel_wps();
+        finish_wps(conn, "overlap");
+    } else if (strncmp(event, "WPS-FAIL", 8) == 0)
+        finish_wps(conn, "failed");
+    else if (strncmp(event, "CTRL-EVENT-TERMINATING", 22) == 0) {
+        /* The next ensure_wpa_running() attaches to the new instance. */
+        close_wpa_monitor();
+        refresh_requested = 1;
     }
-    fclose(fp);
-    unlink(WIFI_LAST_EVENT);
+}
+
+static void drain_wpa_monitor(DBusConnection *conn)
+{
+    char event[4096];
+    ssize_t len;
+
+    while (wpa_monitor_fd >= 0) {
+        len = recv(wpa_monitor_fd, event, sizeof(event) - 1, 0);
+        if (len < 0) {
+            if (errno == EINTR)
+                continue;
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
+                close_wpa_monitor();
+            return;
+        }
+        event[len] = '\0';
+        trim_newline(event);
+        handle_wpa_event(conn, event);
+    }
 }
 
 int main(void)
@@ -2052,7 +2358,6 @@ int main(void)
     (void)sigaction(SIGTERM, &sa, NULL);
     (void)sigaction(SIGINT, &sa, NULL);
     (void)sigaction(SIGUSR1, &sa, NULL);
-    (void)sigaction(SIGUSR2, &sa, NULL);
     /* Child exits (IP profile/DHCP helpers) wake the loop so they are reaped. */
     sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
     (void)sigaction(SIGCHLD, &sa, NULL);
@@ -2123,11 +2428,11 @@ int main(void)
             handle_message(conn, message, &current);
             dbus_message_unref(message);
         }
+        drain_wpa_monitor(conn);
 
         if (refresh_requested) {
             struct wifi_state next;
             refresh_requested = 0;
-            inspect_last_event(conn);
             refresh_state(&next);
             if (!state_equal(&current, &next)) {
                 bool newly_connected = strcmp(next.state, "connected") == 0 &&
@@ -2138,7 +2443,7 @@ int main(void)
                  * not a loss. */
                 bool lost = strcmp(current.state, "connected") == 0 &&
                     strcmp(next.state, "connected") != 0 && next.enabled &&
-                    strcmp(next.ssid, current.ssid) != 0;
+                    strcmp(next.ssid, current.ssid) != 0 && !wps_active;
                 char lost_ssid[sizeof(current.ssid)];
                 copy_string(lost_ssid, sizeof(lost_ssid), current.ssid);
                 current = next;
@@ -2173,15 +2478,18 @@ int main(void)
         }
 
         if (scan_results_requested) {
-            scan_results_requested = 0;
-            inspect_last_event(conn);
-            scan_in_flight = false;
+            scan_results_requested = false;
             refresh_state(&current);
             emit_networks_snapshot(conn, current.ssid);
             emit_empty_signal(conn, "NetworksChanged");
-            emit_bool_signal(conn, "ScanStateChanged", false);
-            if (scan_session_active)
-                next_scan_due_ms = monotonic_ms() + SCAN_SESSION_INTERVAL_MS;
+            /* wpa_supplicant also scans on its own: only a requested scan
+             * ends the scanning state and schedules the next one. */
+            if (scan_in_flight) {
+                scan_in_flight = false;
+                emit_bool_signal(conn, "ScanStateChanged", false);
+                if (scan_session_active)
+                    next_scan_due_ms = monotonic_ms() + SCAN_SESSION_INTERVAL_MS;
+            }
         }
 
         if (scan_session_active && !scan_in_flight && next_scan_due_ms != 0 &&
@@ -2205,6 +2513,7 @@ int main(void)
             break;
     }
 
+    close_wpa_monitor();
     dbus_connection_unref(conn);
     if (dbus_error_is_set(&error)) dbus_error_free(&error);
     return 0;

@@ -7,7 +7,7 @@ config BR2_PACKAGE_NUUBOS_REMOTE
 	select BR2_PACKAGE_NUUBOS_LIBRARY
 	help
 	  EPIC-037/038/039: Remote Services, each disabled by default and
-	  switched in Settings: SSH/SCP/SFTP (Dropbear, public-key login),
+	  switched in Settings: SSH/SCP/SFTP (Dropbear, root + device password),
 	  SMB file sharing (kernel ksmbd) and the authenticated Web
-	  administration (lighttpd), the last two with a random
+	  administration (lighttpd), all with one random
 	  per-device credential kept in STATE.

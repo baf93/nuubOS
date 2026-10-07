@@ -79,6 +79,11 @@ struct audio_state {
 	/* Route whose default sink + master volume were last applied to
 	 * PipeWire; empty until an apply succeeds. */
 	char applied_route[16];
+	/* PipeWire object id of the sink selected for applied_route. Master
+	 * volume targets it directly: right after `wpctl set-default`
+	 * WirePlumber may not have resolved @DEFAULT_AUDIO_SINK@ yet (always
+	 * the case on first boot, with no stored WirePlumber state). */
+	char sink_id[16];
 
 	int volume_speaker;
 	int volume_headphones;
@@ -336,13 +341,16 @@ out:
 	return rc < 0 ? -1 : 0;
 }
 
-static int apply_pipewire_volume(const char *selected, int volume)
+static int apply_pipewire_volume(const struct audio_state *state, int volume)
 {
+	const char *selected = state->selected;
+	const char *target = state->sink_id[0] != '\0' ?
+			     state->sink_id : "@DEFAULT_AUDIO_SINK@";
 	char value[16];
 	pid_t pid;
 	int status;
 
-	if (selected == NULL || volume < 0 || volume > 100)
+	if (volume < 0 || volume > 100)
 		return -1;
 
 	if (strcmp(selected, "speaker") != 0 &&
@@ -365,7 +373,7 @@ static int apply_pipewire_volume(const char *selected, int volume)
 		(void)setenv("XDG_RUNTIME_DIR", PIPEWIRE_RUNTIME, 1);
 		(void)setenv("PIPEWIRE_RUNTIME_DIR", PIPEWIRE_RUNTIME, 1);
 		execl(WPCTL_PATH, WPCTL_PATH,
-		      "set-volume", "@DEFAULT_AUDIO_SINK@", value,
+		      "set-volume", target, value,
 		      (char *)NULL);
 		_exit(127);
 	}
@@ -484,7 +492,8 @@ static bool system_sound_allowed(const struct audio_state *state,
 	return false;
 }
 
-static void apply_selected_analog_volume(const struct audio_state *state)
+/* Master volume of the selected route; HDMI has none (TV/receiver owned). */
+static int apply_selected_master_volume(const struct audio_state *state)
 {
 	int volume;
 
@@ -492,18 +501,26 @@ static void apply_selected_analog_volume(const struct audio_state *state)
 		volume = state->volume_speaker;
 	else if (strcmp(state->selected, "headphones") == 0)
 		volume = state->volume_headphones;
+	else if (strcmp(state->selected, "bluetooth") == 0)
+		volume = state->volume_bluetooth;
 	else
-		return;
+		return 0;
 
-	if (apply_pipewire_volume(state->selected, volume) < 0)
-		fprintf(stderr,
-			"nuubos-audiod: failed to set PipeWire analog volume\n");
+	return apply_pipewire_volume(state, volume);
 }
 
-static int apply_pipewire_default(const char *selected)
+/* Runs `nuubos-pw-route select` and stores the selected sink id it prints
+ * (empty when unknown). */
+static int apply_pipewire_default(const char *selected,
+				  char *sink_id, size_t sink_id_size)
 {
+	char out[32];
+	size_t len = 0;
+	int pipefd[2];
 	pid_t pid;
 	int status;
+
+	sink_id[0] = '\0';
 
 	/* Every physical output, including Bluetooth, is a PipeWire target. */
 	if (selected == NULL)
@@ -512,34 +529,57 @@ static int apply_pipewire_default(const char *selected)
 	if (access(PW_ROUTE_HELPER, X_OK) != 0)
 		return -1;
 
-	pid = fork();
-	if (pid < 0)
+	if (pipe2(pipefd, O_CLOEXEC) != 0)
 		return -1;
 
+	pid = fork();
+	if (pid < 0) {
+		close(pipefd[0]);
+		close(pipefd[1]);
+		return -1;
+	}
+
 	if (pid == 0) {
+		(void)dup2(pipefd[1], STDOUT_FILENO);
 		execl(PW_ROUTE_HELPER, PW_ROUTE_HELPER,
 		      "select", selected, (char *)NULL);
 		_exit(127);
 	}
+	close(pipefd[1]);
+	(void)fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
 
 	/* Never let a policy helper stall audiod (and therefore the overlay).
 	 * It takes ~300 ms idle on H700 and longer while WirePlumber is busy
 	 * creating a just-connected Bluetooth sink. */
 	for (int i = 0; i < 150; i++) {
 		pid_t rc = waitpid(pid, &status, WNOHANG);
+		ssize_t n;
+
+		while (len + 1 < sizeof(out) &&
+		       (n = read(pipefd[0], out + len,
+				 sizeof(out) - 1 - len)) > 0)
+			len += (size_t)n;
 
 		if (rc == pid) {
+			close(pipefd[0]);
 			if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
 				return -1;
+			out[len] = '\0';
+			out[strspn(out, "0123456789")] = '\0';
+			if (out[0] != '\0')
+				(void)copy_string(sink_id, sink_id_size, out);
 			return 0;
 		}
 
-		if (rc < 0)
+		if (rc < 0) {
+			close(pipefd[0]);
 			return -1;
+		}
 
 		usleep(10000);
 	}
 
+	close(pipefd[0]);
 	(void)kill(pid, SIGKILL);
 	(void)waitpid(pid, &status, 0);
 	return -1;
@@ -602,19 +642,20 @@ static void reconcile_selection(struct audio_state *state)
 		return;
 	state->applied_route[0] = '\0';
 
-	if (apply_pipewire_default(state->selected) != 0) {
+	if (apply_pipewire_default(state->selected, state->sink_id,
+				   sizeof(state->sink_id)) != 0) {
 		fprintf(stderr,
 			"nuubos-audiod: PipeWire default route sync failed for %s\n",
 			state->selected);
 		return;
 	}
-	if (strcmp(state->selected, "bluetooth") == 0) {
-		if (apply_pipewire_volume("bluetooth", state->volume_bluetooth) < 0) {
-			fprintf(stderr, "nuubos-audiod: failed to set Bluetooth PipeWire volume\n");
-			return;
-		}
-	} else {
-		apply_selected_analog_volume(state);
+	/* A route without its master volume is not applied: leave
+	 * applied_route empty so the next sink event retries. */
+	if (apply_selected_master_volume(state) < 0) {
+		fprintf(stderr,
+			"nuubos-audiod: failed to set %s PipeWire volume\n",
+			state->selected);
+		return;
 	}
 	(void)copy_string(state->applied_route,
 			  sizeof(state->applied_route),
@@ -654,6 +695,7 @@ static void load_config(struct audio_state *state)
 	snprintf(state->mode, sizeof(state->mode), DEFAULT_OUTPUT_MODE);
 	snprintf(state->selected, sizeof(state->selected), "unresolved");
 	state->applied_route[0] = '\0';
+	state->sink_id[0] = '\0';
 	state->subscriber_count = 0;
 
 	state->volume_speaker = DEFAULT_VOLUME_SPEAKER;
@@ -886,7 +928,7 @@ static int flush_pipewire_volume(struct audio_state *state)
 		state->pipewire_volume_dirty = false;
 		return 0;
 	}
-	if (apply_pipewire_volume(state->selected, volume) < 0)
+	if (apply_pipewire_volume(state, volume) < 0)
 		return -1;
 	state->pipewire_volume_dirty = false;
 	return 0;

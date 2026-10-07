@@ -7,18 +7,17 @@
 #   credential show               the device password (local trusted console only)
 #   credential regenerate         new random password; the old one stops working
 #
-# One device-global credential (user "root") for SMB file sharing and Web
-# administration. It is generated randomly per device on first start and
-# never shipped. Secrets live in STATE, root only:
+# One device-global credential (user "root") for SSH/SCP/SFTP, SMB file
+# sharing and Web administration. It is generated randomly per device on
+# first start and never shipped. Secrets live in STATE, root only:
 #   /state/remote/credential      the password
+#   /state/remote/root.hash       its crypt(3) hash for /etc/shadow
 #   /state/remote/web.htdigest    Web administration digest file
 #   /state/remote/ksmbd/          SMB user database
-# SSH/SCP/SFTP (Dropbear) keeps its existing policy: public-key login only
-# (/state/ssh/root/authorized_keys, options in /etc/default/dropbear); the
-# credential is not a login password and /etc/shadow is not touched, so the
-# serial console behaves as before. Every service is disabled by default; a
-# device that already has an authorized SSH key (development cards) keeps
-# SSH enabled.
+# SSH (Dropbear) is password login only: public-key login is not built. The
+# rootfs /etc/shadow is replaced by image updates, so every start re-applies
+# the hash. The serial console logs in without a password (getty -n -l
+# nuubos-console-login). Every service is disabled by default.
 # Services only listen on the local network the console is on; Internet
 # exposure is not supported.
 # NUUBOS_ROOT prefixes the STATE/etc paths for the host test; daemons are
@@ -30,7 +29,8 @@ CONF="$R/state/config/remote.conf"
 CRED="$DIR/credential"
 HTDIGEST="$DIR/web.htdigest"
 KSMBD_DIR="$DIR/ksmbd"
-AUTH_KEYS="$R/state/ssh/root/authorized_keys"
+ROOT_HASH="$DIR/root.hash"
+SHADOW="$R/etc/shadow"
 REALM="nuubOS"
 USER_NAME=root
 NO_DAEMONS="${NUUBOS_REMOTE_NO_DAEMONS:-0}"
@@ -68,10 +68,23 @@ prepare_dir()
     mkdir -p "$DIR" && chmod 700 "$DIR"
 }
 
+# root's /etc/shadow field = the stored hash (rootfs copy, may be stale).
+apply_shadow()
+{
+    h="$(cat "$ROOT_HASH" 2>/dev/null)"
+    [ -n "$h" ] && [ -f "$SHADOW" ] || return 1
+    [ "$(sed -n 's/^root:\([^:]*\):.*/\1/p' "$SHADOW")" = "$h" ] && return 0
+    awk -F: -v OFS=: -v h="$h" '$1 == "root" { $2 = h } { print }' "$SHADOW" > "$SHADOW.tmp" &&
+        chmod 600 "$SHADOW.tmp" && mv "$SHADOW.tmp" "$SHADOW"
+}
+
 # Apply a password to every consumer.
 apply_password()
 {
     pw="$1"
+    h="$(printf '%s' "$pw" | mkpasswd -m sha512 -P 0)" && [ -n "$h" ] || return 1
+    printf '%s\n' "$h" > "$ROOT_HASH.tmp" && chmod 600 "$ROOT_HASH.tmp" &&
+        mv "$ROOT_HASH.tmp" "$ROOT_HASH" && apply_shadow || return 1
     printf '%s:%s:%s\n' "$USER_NAME" "$REALM" "$(md5_hex "$USER_NAME:$REALM:$pw")" > "$HTDIGEST.tmp" &&
         chmod 600 "$HTDIGEST.tmp" && mv "$HTDIGEST.tmp" "$HTDIGEST" || return 1
     mkdir -p "$KSMBD_DIR" && chmod 700 "$KSMBD_DIR"
@@ -90,8 +103,10 @@ ensure_credential()
         printf '%s\n' "$pw" > "$CRED.tmp" && chmod 600 "$CRED.tmp" && mv "$CRED.tmp" "$CRED" || return 1
         apply_password "$pw" || return 1
         log "generated the device credential"
-    elif [ ! -s "$HTDIGEST" ]; then
-        apply_password "$(cat "$CRED")"
+    elif [ ! -s "$HTDIGEST" ] || [ ! -s "$ROOT_HASH" ]; then
+        apply_password "$(cat "$CRED")" || return 1
+    else
+        apply_shadow || return 1
     fi
     chmod 600 "$CRED"
 }
@@ -99,11 +114,8 @@ ensure_credential()
 ensure_conf()
 {
     [ -f "$CONF" ] && return 0
-    # First start with this feature: a development card that already has
-    # an authorized SSH key keeps SSH; everything else starts disabled.
-    if [ -s "$AUTH_KEYS" ]; then ssh=1; else ssh=0; fi
     mkdir -p "${CONF%/*}" || return 1
-    printf 'NUUBOS_REMOTE_VERSION=1\nSSH=%s\nSMB=0\nWEB=0\n' "$ssh" > "$CONF.tmp" &&
+    printf 'NUUBOS_REMOTE_VERSION=1\nSSH=0\nSMB=0\nWEB=0\n' > "$CONF.tmp" &&
         chmod 600 "$CONF.tmp" && mv "$CONF.tmp" "$CONF"
 }
 
@@ -223,7 +235,8 @@ case "${1:-}" in
                 pw="$(new_password)" || { echo "ERR random"; exit 1; }
                 printf '%s\n' "$pw" > "$CRED.tmp" && chmod 600 "$CRED.tmp" && mv "$CRED.tmp" "$CRED" || { echo "ERR storage"; exit 1; }
                 apply_password "$pw" || { echo "ERR apply"; exit 1; }
-                # Running SMB and Web servers reload their databases.
+                # Running SMB and Web servers reload their databases; Dropbear
+                # reads /etc/shadow on each login.
                 if [ "$NO_DAEMONS" != 1 ]; then
                     enabled smb && { stop_smb; start_smb; }
                     enabled web && { stop_web; start_web; }

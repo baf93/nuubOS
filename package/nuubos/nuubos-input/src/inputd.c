@@ -53,15 +53,15 @@ struct binding {
 	int code;
 };
 
-static struct binding bindings[] = {
+static const struct binding default_bindings[] = {
 	{ "quick_menu", 316 },
 	{ "settings", 315 },
 	{ "menu_up", 544 },
 	{ "menu_down", 545 },
 	{ "menu_left", 546 },
 	{ "menu_right", 547 },
-	{ "menu_confirm", 305 },
-	{ "menu_back", 304 },
+	{ "menu_confirm", 304 },
+	{ "menu_back", 305 },
 	/* Contextual UI actions (EPIC-001 X/Y): Favorite and Game Details
 	 * on Home. */
 	{ "face_north", 307 },
@@ -73,6 +73,9 @@ static struct binding bindings[] = {
 	 */
 	{ "power", KEY_POWER },
 };
+
+/* Working copy: defaults + DEFAULT_CONFIG + STATE_CONFIG (load_bindings). */
+static struct binding bindings[sizeof(default_bindings) / sizeof(default_bindings[0])];
 
 struct nav_axis {
 	bool present;
@@ -566,16 +569,7 @@ static void log_bindings(void)
 
 static void load_bindings(void)
 {
-	bindings[0].code = 316;
-	bindings[1].code = 315;
-	bindings[2].code = 544;
-	bindings[3].code = 545;
-	bindings[4].code = 546;
-	bindings[5].code = 547;
-	bindings[6].code = 305;
-	bindings[7].code = 304;
-	bindings[8].code = 307;
-	bindings[9].code = KEY_POWER;
+	memcpy(bindings, default_bindings, sizeof(bindings));
 
 	load_config_file(DEFAULT_CONFIG);
 	load_config_file(STATE_CONFIG);
@@ -1323,8 +1317,8 @@ struct pad_control_def {
 };
 
 static const struct pad_control_def pad_controls[PAD_CONTROL_COUNT] = {
-	{ "menu_back", BTN_SOUTH },
-	{ "menu_confirm", BTN_EAST },
+	{ "menu_back", BTN_EAST },
+	{ "menu_confirm", BTN_SOUTH },
 	{ "face_north", BTN_NORTH },
 	{ "face_west", BTN_WEST },
 	{ "menu_up", -1 },

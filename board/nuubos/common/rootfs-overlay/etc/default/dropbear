@@ -1,1 +1,3 @@
-DROPBEAR_ARGS="-s -g"
+# Password login for root with the device credential (nuubos-remotectl);
+# public-key login is not built (board/nuubos/common/dropbear-localoptions.h).
+DROPBEAR_ARGS=""

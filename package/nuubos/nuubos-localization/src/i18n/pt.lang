@@ -599,7 +599,7 @@
 598=Prima novamente para repor
 599=Serviços remotos
 600=SSH, SCP e SFTP
-601=Acesso com uma chave SSH autorizada
+601=Acesso como root com a palavra-passe do dispositivo
 602=Partilha de ficheiros (SMB)
 603=Administração web
 604=Só em redes de confiança. Nunca exposto à Internet.
@@ -703,3 +703,10 @@
 702=Jogos
 703=JOGOS
 704=BIBLIOTECA
+705=Ligar com WPS
+706=Cancelar WPS
+707=Prima o botão WPS do router…
+708=O WPS expirou. Prima o botão do router e tente novamente.
+709=Vários routers estão em modo WPS. Tente novamente dentro de alguns minutos.
+710=Falha no WPS: {0}
+711=Falha na ligação WPS
