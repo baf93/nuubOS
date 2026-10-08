@@ -5,6 +5,7 @@
 #                                 nuubos-backup-<name>-<UTC>.tar in DESTDIR
 #   restore FILE TARGET_USER      validate, then replace TARGET_USER's data
 #   list DIR...                   backup=<path>\t<user name>\t<created>\t<bytes> ... end=1
+#   delete FILE                   remove one backup listed by `list`
 #
 # A backup holds one profile: settings (STATE, never the secrets folder),
 # saves, save states and library statistics/favorites/collections; with the
@@ -172,9 +173,26 @@ list()
     echo "end=1"
 }
 
+# Only a nuubOS backup in a backup folder: never an arbitrary file.
+delete()
+{
+    file="$1"
+    case "$file" in
+        */backups/nuubos-backup-*.tar|*/nuubos-backups/nuubos-backup-*.tar) ;;
+        *) fail file ;;
+    esac
+    case "$file" in */../*|*/./*) fail file ;; esac
+    [ -f "$file" ] && [ ! -L "$file" ] || fail file
+    [ "$(tar -xOf "$file" MANIFEST 2>/dev/null | sed -n 's/^format=//p')" = "$FORMAT" ] || fail format
+    rm -f "$file" || fail storage
+    sync
+    echo "OK deleted"
+}
+
 case "${1:-}" in
     backup) shift; [ $# -ge 2 ] || fail usage; backup "$@" ;;
     restore) [ $# -eq 3 ] || fail usage; restore "$2" "$3" ;;
     list) shift; list "$@" ;;
-    *) echo "Usage: nuubos-backupctl backup USER DESTDIR [screenshots] [appdata] | restore FILE USER | list DIR..." >&2; exit 2 ;;
+    delete) [ $# -eq 2 ] || fail usage; delete "$2" ;;
+    *) echo "Usage: nuubos-backupctl backup USER DESTDIR [screenshots] [appdata] | restore FILE USER | list DIR... | delete FILE" >&2; exit 2 ;;
 esac

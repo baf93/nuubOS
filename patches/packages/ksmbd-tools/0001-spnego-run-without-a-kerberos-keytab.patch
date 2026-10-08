@@ -1,0 +1,41 @@
+From: nuubOS <noreply@nuubos.invalid>
+Subject: [PATCH] spnego: keep running without a Kerberos keytab
+
+With Kerberos support built in (libkrb5 is in the image for another
+package) ksmbd.mountd aborts its worker when no keytab exists, and the
+manager restarts it every second forever (CPU and battery, a kernel
+"Reconnect to a new user space daemon" message each time). Disable the
+Kerberos mechanisms instead; NTLMSSP password logins are unaffected.
+
+Upstream-Status: Pending
+---
+--- a/tools/management/spnego.c
++++ b/tools/management/spnego.c
+@@ -58,10 +58,16 @@
+ 		mech_ctx->params.krb5.keytab_name =
+ 			g_strdup(global_conf.krb5_keytab_file);
+ 
++	/* Without a keytab Kerberos cannot work: leave the mechanism out
++	 * (NTLMSSP still authenticates) instead of aborting the worker, which
++	 * the manager would restart every second forever. */
+ 	for (i = 0; i < SPNEGO_MAX_MECHS; i++)
+ 		if (mech_ctxs[i].ops->setup &&
+-		    mech_ctxs[i].ops->setup(&mech_ctxs[i]))
+-			abort();
++		    mech_ctxs[i].ops->setup(&mech_ctxs[i])) {
++			pr_info("Kerberos unavailable, SPNEGO mechanism %d disabled\n", i);
++			mech_ctxs[i].ops->cleanup(&mech_ctxs[i]);
++			mech_ctxs[i].ops = NULL;
++		}
+ }
+ 
+ void spnego_destroy(void)
+@@ -320,7 +326,7 @@
+ 	}
+ 
+ 	mech_ctx = get_mech(mech_type);
+-	if (!mech_ctx) {
++	if (!mech_ctx || !mech_ctx->ops) {
+ 		retval = -ENOTSUP;
+ 		pr_info("No support for Kerberos 5\n");
+ 		goto out;

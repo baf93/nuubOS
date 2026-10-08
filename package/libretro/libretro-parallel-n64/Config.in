@@ -1,0 +1,6 @@
+config BR2_PACKAGE_LIBRETRO_PARALLEL_N64
+	bool "libretro-parallel-n64"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro core: ParaLLEl N64 (Nintendo 64), aarch64 dynarec with the
+	  GLES3 gln64 / Glide64 / Rice renderers (no Vulkan).

@@ -96,6 +96,22 @@ ctl safe-mode clear >/dev/null
 ck "safe-mode clear" '[ ! -f "$R/state/recovery/safe-mode" ] && [ ! -f "$R/run/nuubos/ui-failed" ]'
 NUUBOS_COMPOSITOR=no-such-compositor NUUBOS_TEST_LOG="$T/runs2" NUUBOS_ROOT="$R" NUUBOS_UI_BIN="$T/crash" sh "$SUP" 2>/dev/null
 ck "compositor gone: error exit is not a crash" '[ $? = 0 ] && [ ! -f "$R/state/recovery/safe-mode" ] && [ "$(wc -l < "$T/runs2")" = 1 ]'
+ck "history records safe-mode entry" 'grep -q "safe-mode entered reason=crash-loop exits=7,7,7" "$R/state/recovery/history.log"'
+ck "crash counter is per boot" '[ ! -e "$R/state/recovery/ui-crashes" ]'
+echo poweroff > "$R/run/nuubos/shutdown-mode"
+NUUBOS_COMPOSITOR=sh NUUBOS_TEST_LOG="$T/runs3" NUUBOS_ROOT="$R" NUUBOS_UI_BIN="$T/crash" sh "$SUP" 2>/dev/null
+ck "lifecycle stop: error exit is not a crash" '[ $? = 0 ] && [ ! -f "$R/state/recovery/safe-mode" ] && [ "$(wc -l < "$T/runs3")" = 1 ]'
+rm -f "$R/run/nuubos/shutdown-mode"
+# A compositor that is only a zombie (killed, not yet reaped) is gone. BusyBox
+# pidof lists zombies; the shim reproduces that on any host.
+sh -c 'sleep 0 & echo $! > "$1"; exec sleep 2' _ "$T/zpid" &
+ZP=$!
+sleep 0.5
+mkdir -p "$T/bin"
+printf '#!/bin/sh\ncat "%s"\n' "$T/zpid" > "$T/bin/pidof"; chmod +x "$T/bin/pidof"
+PATH="$T/bin:$PATH" NUUBOS_TEST_LOG="$T/runs4" NUUBOS_ROOT="$R" NUUBOS_UI_BIN="$T/crash" sh "$SUP" 2>/dev/null
+ck "zombie compositor: error exit is not a crash" '[ $? = 0 ] && [ ! -f "$R/state/recovery/safe-mode" ] && [ "$(wc -l < "$T/runs4")" = 1 ]'
+wait "$ZP"
 printf '#!/bin/sh\nexit 0\n' > "$T/ok"; chmod +x "$T/ok"
 NUUBOS_ROOT="$R" NUUBOS_UI_BIN="$T/ok" sh "$SUP"
 ck "clean exit ends supervisor without safe mode" '[ $? = 0 ] && [ ! -f "$R/state/recovery/safe-mode" ]'

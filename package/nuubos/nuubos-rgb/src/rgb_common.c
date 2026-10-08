@@ -14,6 +14,11 @@
  *
  * CubeXX has 16 LEDs arranged as two independent 8-LED rings.
  * Ring ownership/order is hardware-qualified before the topology is frozen.
+ *
+ * led_indexes lists the physical LED at each position around a ring, in
+ * order: nuubos-rgbd maps logical frames (zone by zone, position by
+ * position) through it, so effects never depend on the wiring order.
+ * Check a ring with `nuubos-rgbctl locate N`.
  */
 static const struct nuubos_rgb_topology topologies[] = {
 	{

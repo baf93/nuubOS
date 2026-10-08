@@ -25,7 +25,7 @@ static void usage(void)
 		"  status                         Home snapshot\n"
 		"  watch                          print every snapshot change\n"
 		"  scan                           rescan ROM storage\n"
-		"  games SCOPE                    system:<id> | favorites | collection:<id> | recent | hidden\n"
+		"  games SCOPE                    system:<id> | favorites | collection:<id> | recent\n"
 		"  session-begin GAME             a game session started\n"
 		"  session-end GAME               the running session ended\n"
 		"  played GAME SECONDS            record a finished session\n"
@@ -36,7 +36,6 @@ static void usage(void)
 		"  collection-add ID GAME\n"
 		"  collection-remove ID GAME\n"
 		"  details GAME                   Game Details view\n"
-		"  hide GAME on|off               hide from this user's Library\n"
 		"  stats-reset GAME|all           reset Last/Time Played and sessions\n"
 		"  delete GAME confirm            permanently delete the ROM (all users)\n");
 }
@@ -169,11 +168,6 @@ int main(int argc, char **argv)
 	if (!strcmp(verb, "details") && argc == 3) {
 		snprintf(command, sizeof(command), "DETAILS\t%s", argv[2]);
 		return run(command, true, false);
-	}
-	if (!strcmp(verb, "hide") && argc == 4 &&
-	    (!strcmp(argv[3], "on") || !strcmp(argv[3], "off"))) {
-		snprintf(command, sizeof(command), "HIDE\t%s\t%d", argv[2], !strcmp(argv[3], "on"));
-		return run(command, false, false);
 	}
 	if (!strcmp(verb, "stats-reset") && argc == 3) {
 		snprintf(command, sizeof(command), "STATS_RESET\t%s", argv[2]);

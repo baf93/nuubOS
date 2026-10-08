@@ -1,0 +1,83 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] GL: avoid GPU waits on Mesa Panfrost
+
+On Mesa's Panfrost (Mali) the GL thread spent about a third of its time
+in DRM_IOCTL_PANFROST_WAIT_BO with the GPU less than half busy (God of
+War: Chains of Olympus on a Mali-G31: ~10 fps in a fight, ~18 with this):
+
+- glCopyImageSubData is a CPU copy there (util_resource_copy_region)
+  that maps both textures and waits for the GPU: use blits, which run
+  on the GPU.
+- UpdateBuffer with UPDATE_DISCARD did a partial glBufferSubData into a
+  buffer the previous frame still reads (the presentation vertices,
+  every frame): upload the whole buffer, which Panfrost turns into a
+  fresh buffer object instead of a wait. Harmless elsewhere: discarded
+  contents are undefined anyway.
+- Push buffers: map with GL_MAP_INVALIDATE_BUFFER_BIT on Panfrost
+  instead of glBufferSubData (about +10 %).
+
+Upstream-Status: Pending
+---
+--- a/Common/GPU/OpenGL/GLRenderManager.cpp
++++ b/Common/GPU/OpenGL/GLRenderManager.cpp
+@@ -9,6 +9,8 @@
+ #include "Common/TimeUtil.h"
+ #include "Common/MemoryUtil.h"
+ #include "Common/StringUtils.h"
++
++#include <cstring>
+ #include "Common/Math/math_util.h"
+ 
+ #if 0 // def _DEBUG
+@@ -91,7 +93,13 @@
+ 		//	break;
+ 
+ 		default:
+-			bufferStrategy_ = GLBufferStrategy::SUBDATA;
++			// Mesa's Panfrost (Mali) waits for the GPU on glBufferSubData into a
++			// buffer that the previous frame still reads; an invalidating map
++			// gets a fresh buffer object instead and never waits.
++			if (gl_extensions.gpuVendor == GPU_VENDOR_MESA && strstr(gl_extensions.model, "Mali") != nullptr)
++				bufferStrategy_ = GLBufferStrategy::INVALIDATE_UNMAP;
++			else
++				bufferStrategy_ = GLBufferStrategy::SUBDATA;
+ 		}
+ 	} else {
+ 		bufferStrategy_ = GLBufferStrategy::SUBDATA;
+--- a/Common/GPU/OpenGL/thin3d_gl.cpp
++++ b/Common/GPU/OpenGL/thin3d_gl.cpp
+@@ -585,6 +585,13 @@
+ 	caps_.dualSourceBlend = gl_extensions.ARB_blend_func_extended || gl_extensions.EXT_blend_func_extended;
+ 	caps_.anisoSupported = gl_extensions.EXT_texture_filter_anisotropic;
+ 	caps_.framebufferCopySupported = gl_extensions.OES_copy_image || gl_extensions.NV_copy_image || gl_extensions.EXT_copy_image || gl_extensions.ARB_copy_image;
++	// Mesa's Panfrost (Mali) implements glCopyImageSubData on the CPU
++	// (util_resource_copy_region): every copy maps both textures and waits
++	// for the GPU, which stalls each frame of games with many framebuffer
++	// effects. glBlitFramebuffer runs on the GPU there, so use blits.
++	if (gl_extensions.gpuVendor == GPU_VENDOR_MESA && strstr(gl_extensions.model, "Mali") != nullptr) {
++		caps_.framebufferCopySupported = false;
++	}
+ 	caps_.framebufferBlitSupported = gl_extensions.NV_framebuffer_blit || gl_extensions.ARB_framebuffer_object || gl_extensions.GLES3;
+ 	caps_.framebufferDepthBlitSupported = caps_.framebufferBlitSupported;
+ 	caps_.framebufferStencilBlitSupported = caps_.framebufferBlitSupported;
+@@ -1184,10 +1191,18 @@
+ 		Crash();
+ 	}
+ 
++	if (flags & UPDATE_DISCARD) {
++		// Discarding: upload the whole buffer, the rest is undefined anyway.
++		// A partial glBufferSubData into a buffer the previous frame still
++		// reads makes Mesa's Panfrost wait for the GPU every frame (the
++		// presentation vertices); a whole-buffer write gets a fresh BO.
++		uint8_t *dataCopy = new uint8_t[buf->totalSize_]();
++		memcpy(dataCopy + offset, data, size);
++		renderManager_.BufferSubdata(buf->buffer_, 0, buf->totalSize_, dataCopy);
++		return;
++	}
+ 	uint8_t *dataCopy = new uint8_t[size];
+ 	memcpy(dataCopy, data, size);
+-	// if (flags & UPDATE_DISCARD) we could try to orphan the buffer using glBufferData.
+-	// But we're much better off using separate buffers per FrameData...
+ 	renderManager_.BufferSubdata(buf->buffer_, offset, size, dataCopy);
+ }
+ 

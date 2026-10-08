@@ -9,20 +9,23 @@
 
 hdmi_policy_unmet()
 {
-    /usr/bin/wlr-randr 2>/dev/null | awk '
+    HDMI="$(/usr/bin/wlr-randr 2>/dev/null | awk '/^HDMI-A-/ { print $1; exit }')"
+    WANT=""
+    [ -n "$HDMI" ] && WANT="$(/usr/bin/nuubos-wl-output-apply --hdmi-mode "$HDMI")"
+    /usr/bin/wlr-randr 2>/dev/null | awk -v want="$WANT" '
         /^[A-Za-z0-9-]+ / { name = $1; if (name ~ /^HDMI-A-/) hdmi = name }
         /^  Enabled:/ { enabled[name] = $2 }
         /\(.*current.*\)/ {
             if (name ~ /^HDMI-A-/) {
-                if ($0 !~ /preferred/) wrongmode = 1
+                if ($1 "@" $3 != want) wrongmode = 1
                 split($1, wh, "x"); h = wh[2] + 0
             }
         }
         /^  Scale:/ { if (name ~ /^HDMI-A-/) scale = $2 + 0 }
         END {
             if (hdmi == "") exit 1
-            want = int(h / 720 * 4) / 4; if (want < 1) want = 1
-            if (enabled[hdmi] != "yes" || wrongmode || scale != want) exit 0
+            ws = int(h / 720 * 4) / 4; if (ws < 1) ws = 1
+            if (enabled[hdmi] != "yes" || wrongmode || scale != ws) exit 0
             for (n in enabled) if (n != hdmi && enabled[n] == "yes") exit 0
             exit 1
         }'

@@ -8,13 +8,19 @@
 # stop the restarts for good: /run/nuubos/ui-failed is written and the tty1
 # console stays available for advanced administration. Exit 0 ends the loop.
 # There is no retry/sleep fix: the counters only bound a deterministic failure.
+#
+# Crashes are counted per boot on the monotonic uptime clock: the wall clock
+# can step (NTP, RTC) and must not stretch or shrink the window. The safe-mode
+# flag itself persists in STATE until the user leaves safe mode; entering it is
+# recorded in the recovery history with the exit codes that caused it.
 
 R="${NUUBOS_ROOT:-}"
 BIN="${NUUBOS_UI_BIN:-/usr/bin/nuubui-home}"
 RECOVERY="$R/state/recovery"
-CRASHES="$RECOVERY/ui-crashes"
 SAFE="$RECOVERY/safe-mode"
+CRASHES="$R/run/nuubos/ui-crashes"
 FAILED="$R/run/nuubos/ui-failed"
+SHUTDOWN="$R/run/nuubos/shutdown-mode"
 COMPOSITOR="${NUUBOS_COMPOSITOR:-labwc}"
 CRASH_LIMIT="${NUUBOS_CRASH_LIMIT:-3}"
 CRASH_WINDOW="${NUUBOS_CRASH_WINDOW:-120}"
@@ -23,17 +29,40 @@ mkdir -p "$RECOVERY" "$R/run/nuubos" 2>/dev/null
 child=""
 trap '[ -n "$child" ] && kill "$child" 2>/dev/null; exit 0' TERM INT
 
+uptime_s()
+{
+    cut -d. -f1 /proc/uptime
+}
+
+# A compositor killed during the lifecycle handoff stays visible to pidof
+# while it tears down or waits to be reaped: only a live one counts.
+compositor_alive()
+{
+    for pid in $(pidof "$COMPOSITOR" 2>/dev/null); do
+        state="$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | cut -d' ' -f1)"
+        case "$state" in
+            ''|Z|X|x) ;;
+            *) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 recent_crashes()
 {
-    now="$(date +%s)"
     [ -f "$CRASHES" ] || { echo 0; return; }
-    awk -v now="$now" -v w="$CRASH_WINDOW" '$1 >= now - w {n++} END{print n+0}' "$CRASHES"
+    awk -v now="$(uptime_s)" -v w="$CRASH_WINDOW" '$1 >= now - w {n++} END{print n+0}' "$CRASHES"
 }
 
 record_crash()
 {
-    echo "$(date +%s) $1" >> "$CRASHES"
+    echo "$(uptime_s) $1" >> "$CRASHES"
     tail -n 20 "$CRASHES" > "$CRASHES.tmp" && mv "$CRASHES.tmp" "$CRASHES"
+}
+
+history()
+{
+    printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$*" >> "$RECOVERY/history.log"
 }
 
 while :; do
@@ -55,23 +84,30 @@ while :; do
         exit 0
     fi
 
+    # Restart/Power Off: nuubos-lifecycle-finalize writes shutdown-mode before
+    # it kills the compositor, so whatever nuubUI does from then on is part of
+    # the orderly stop.
+    [ -e "$SHUTDOWN" ] && exit 0
+
     # The compositor going away (orderly session stop) takes its clients down
     # with an error: that is not a nuubUI crash.
-    if ! pidof "$COMPOSITOR" >/dev/null 2>&1; then
-        exit 0
-    fi
+    compositor_alive || exit 0
 
     if [ -f "$SAFE" ]; then in_safe=1; else in_safe=0; fi
     record_crash "exit=$code safe=$in_safe"
     echo "nuubos-ui-supervisor: nuubUI exited with $code" >&2
 
     if [ "$(recent_crashes)" -ge "$CRASH_LIMIT" ]; then
+        exits="$(awk '{sub(/^exit=/, "", $2); printf "%s%s", s, $2; s=","}' "$CRASHES")"
         if [ "$in_safe" = 1 ]; then
             echo "nuubos-ui-supervisor: safe mode also crashes, giving up" >&2
             echo "exit=$code" > "$FAILED"
+            history "ui-failed exits=$exits"
             exit 1
         fi
         printf 'reason=crash-loop\nsince=%s\n' "$(date +%s)" > "$SAFE"
+        history "safe-mode entered reason=crash-loop exits=$exits"
+        sync
         # Safe mode gets its own fresh window.
         : > "$CRASHES"
         echo "nuubos-ui-supervisor: entering safe mode" >&2

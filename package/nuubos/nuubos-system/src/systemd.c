@@ -761,14 +761,21 @@ static void lighting_wake(void)
         fprintf(stderr, "systemd: lighting wake hook failed\n");
 }
 
+static void lighting_shutdown(void)
+{
+    if (run_lifecycle_helper(LIFECYCLE_LIGHTING, "shutdown") != 0)
+        fprintf(stderr, "systemd: lighting shutdown hook failed\n");
+}
+
 static void run_poweroff(struct runtime_state *st)
 {
     char *argv[]={"/sbin/poweroff",NULL};
     run_pre_power_hook("poweroff");
+    lighting_shutdown();
     notify_ui_lifecycle("poweroff");
     usleep(500000); /* Intentional presentation interval for the shutdown curtain. */
     if (run_argv(argv) != 0)
-        lighting_wake(); /* Recover temporary suppression only if shutdown failed. */
+        lighting_wake(); /* Power off failed: lights back on. */
     mark_activity(st);
 }
 
@@ -776,7 +783,7 @@ static void run_restart(struct runtime_state *st)
 {
     char *argv[]={"/sbin/reboot",NULL};
     run_pre_power_hook("restart");
-    lighting_wake();
+    lighting_shutdown();
     notify_ui_lifecycle("reboot");
     usleep(500000); /* Intentional presentation interval for the reboot curtain. */
     (void)run_argv(argv);
@@ -929,6 +936,87 @@ static long long read_temp_millic(const char *type)
         if (read_int_file(p,&v)==0) return v;
     }
     return -1;
+}
+
+/* CPU busy percentage since the previous call (-1 on the first). */
+static int read_cpu_load_pct(void)
+{
+    static unsigned long long prev_busy, prev_total;
+    unsigned long long v[8] = {0}, busy, total;
+    FILE *f = fopen("/proc/stat", "r");
+    int pct = -1;
+
+    if (!f)
+        return -1;
+    if (fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
+               &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]) != 8) {
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+    total = v[0] + v[1] + v[2] + v[3] + v[4] + v[5] + v[6] + v[7];
+    busy = total - v[3] - v[4];
+    if (prev_total && total > prev_total)
+        pct = (int)((busy - prev_busy) * 100 / (total - prev_total));
+    prev_busy = busy;
+    prev_total = total;
+    return pct;
+}
+
+/* Battery power draw in mW (voltage x current), -1 when unknown. */
+static long long read_battery_power_mw(void)
+{
+    static const char *const bases[] = {
+        "/sys/class/power_supply/axp20x-battery",
+        "/sys/class/power_supply/battery",
+    };
+    for (size_t i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
+        char p[128];
+        long long uv, ua, uw;
+
+        snprintf(p, sizeof(p), "%s/power_now", bases[i]);
+        if (read_int_file(p, &uw) == 0)
+            return (uw < 0 ? -uw : uw) / 1000;
+        snprintf(p, sizeof(p), "%s/voltage_now", bases[i]);
+        if (read_int_file(p, &uv) != 0)
+            continue;
+        snprintf(p, sizeof(p), "%s/current_now", bases[i]);
+        if (read_int_file(p, &ua) != 0)
+            continue;
+        if (ua < 0)
+            ua = -ua;
+        return uv / 1000 * (ua / 1000) / 1000;
+    }
+    return -1;
+}
+
+static void read_memory_kib(long long *total_kib, long long *available_kib);
+
+/* PERF: the performance overlay's figures (sampled about once a second
+ * by the Quick Menu while the overlay is shown over a game). */
+static void reply_perf(int fd, const struct runtime_state *st)
+{
+    char buf[512];
+    long long mem_total, mem_available;
+
+    read_memory_kib(&mem_total, &mem_available);
+
+    snprintf(buf, sizeof(buf),
+        "cpu.load_pct=%d\n"
+        "cpu.freq_khz=%lld\n"
+        "gpu.freq_hz=%lld\n"
+        "temp.cpu_millic=%lld\n"
+        "temp.gpu_millic=%lld\n"
+        "battery.percent=%d\n"
+        "battery.state=%s\n"
+        "battery.power_mw=%lld\n"
+        "mem.used_mib=%lld\n"
+        "end=1\n",
+        read_cpu_load_pct(), read_cpu_freq_khz(), read_gpu_freq_hz(),
+        read_temp_millic("cpu-thermal"), read_temp_millic("gpu-thermal"),
+        st->battery_percent, st->battery_state, read_battery_power_mw(),
+        mem_total >= 0 && mem_available >= 0 ? (mem_total - mem_available) / 1024 : -1LL);
+    (void)write_all(fd, buf);
 }
 
 static void read_memory_kib(long long *total_kib, long long *available_kib)
@@ -1156,6 +1244,7 @@ static int reset_system_settings(struct runtime_state *st)
 static void handle_command(struct client *c, struct runtime_state *st, const char *line)
 {
     if(!strcmp(line,"STATUS")){ reply_status(c->fd,st); return; }
+    if(!strcmp(line,"PERF")){ reply_perf(c->fd,st); return; }
     if(!strcmp(line,"SUBSCRIBE")){
         c->subscribed=true; (void)write_all(c->fd,"OK protocol=1\n"); return;
     }
@@ -1346,7 +1435,7 @@ int main(void)
     snprintf(st.storage_job_action,sizeof(st.storage_job_action),"none");
     snprintf(st.storage_job_state,sizeof(st.storage_job_state),"idle");
     st.storage_job_exit_code=0;
-    lighting_wake(); /* Recover stale temporary RGB suppression after interrupted sleep. */
+    lighting_wake(); /* Lights back on if a previous instance died asleep (no-op when awake). */
     display_active(); /* Recover a stale runtime-only screensaver dim after service restart. */
     refresh_battery(&st);
     st.effective_profile=PROFILE_AUTO;

@@ -1,0 +1,20 @@
+--- a/drivers/gpu/drm/sun4i/sun50i_planes.c
++++ b/drivers/gpu/drm/sun4i/sun50i_planes.c
+@@ -173,9 +173,15 @@
+ 		.de_type	= SUN8I_MIXER_DE33,
+ 		/*
+ 		 * TODO: All planes support scaling, but driver needs
+-		 * improvements to properly support it.
++		 * improvements to properly support it on the UI channels
++		 * (VSU8 scaler). The VI channels (physical 0-2) have the
++		 * VI scaler the driver already programs on DE33 (its
++		 * control register is written on every VI update), so
++		 * enable scaling there: the HDMI primary plane is VI
++		 * channel 2 and can present a smaller buffer scaled to
++		 * the mode without GPU composition.
+ 		 */
+-		.scaler_mask    = 0,
++		.scaler_mask    = BIT(0) | BIT(1) | BIT(2),
+ 		.scanline_yuv	= 4096,
+ 	},
+ };

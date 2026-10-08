@@ -1,0 +1,103 @@
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -22,6 +22,7 @@
+ #include <linux/regmap.h>
+ #include <linux/dma-mapping.h>
+ #include <linux/spinlock.h>
++#include <linux/workqueue.h>
+ 
+ #include <media/cec-notifier.h>
+ 
+@@ -196,8 +197,23 @@
+ 	hdmi_codec_plugged_cb plugged_cb;
+ 	struct device *codec_dev;
+ 	enum drm_connector_status last_connector_result;
++
++	/* EDID unreadable while HPD is high (sink in standby): poll DDC */
++	struct delayed_work edid_retry_work;
++	unsigned int edid_retry_events;
+ };
+ 
++/*
++ * Some sinks (TVs in standby) keep HPD high but do not answer on DDC, so
++ * the EDID read at plug/boot fails and the connector is left with the
++ * no-EDID fallback modes. Nothing re-probes when the sink wakes up (HPD
++ * does not toggle), so poll DDC cheaply and send a hotplug event once it
++ * answers; userspace then re-probes and reads the EDID. A sink that answers
++ * DDC but whose EDID still fails gets a bounded number of events.
++ */
++#define DW_HDMI_EDID_RETRY_MS		2000
++#define DW_HDMI_EDID_RETRY_EVENTS	3
++
+ const struct dw_hdmi_plat_data *dw_hdmi_to_plat_data(struct dw_hdmi *hdmi)
+ {
+ 	return hdmi->plat_data;
+@@ -2479,8 +2495,14 @@
+ 	drm_edid = drm_edid_read_ddc(connector, hdmi->ddc);
+ 	if (!drm_edid) {
+ 		dev_dbg(hdmi->dev, "failed to get edid\n");
++		if (READ_ONCE(hdmi->edid_retry_events) < DW_HDMI_EDID_RETRY_EVENTS &&
++		    hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data) ==
++		    connector_status_connected)
++			mod_delayed_work(system_wq, &hdmi->edid_retry_work,
++					 msecs_to_jiffies(DW_HDMI_EDID_RETRY_MS));
+ 		return NULL;
+ 	}
++	WRITE_ONCE(hdmi->edid_retry_events, 0);
+ 
+ 	/*
+ 	 * FIXME: This should use connector->display_info.is_hdmi and
+@@ -2498,6 +2520,27 @@
+ 	return drm_edid;
+ }
+ 
++static void dw_hdmi_edid_retry_work(struct work_struct *work)
++{
++	struct dw_hdmi *hdmi = container_of(to_delayed_work(work), struct dw_hdmi,
++					    edid_retry_work);
++
++	if (hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data) !=
++	    connector_status_connected)
++		return;
++
++	if (!drm_probe_ddc(hdmi->ddc)) {
++		schedule_delayed_work(&hdmi->edid_retry_work,
++				      msecs_to_jiffies(DW_HDMI_EDID_RETRY_MS));
++		return;
++	}
++
++	dev_info(hdmi->dev, "sink answers on DDC now, re-probing\n");
++	WRITE_ONCE(hdmi->edid_retry_events, hdmi->edid_retry_events + 1);
++	if (hdmi->bridge.dev)
++		drm_kms_helper_hotplug_event(hdmi->bridge.dev);
++}
++
+ /* -----------------------------------------------------------------------------
+  * DRM Connector Operations
+  */
+@@ -3153,6 +3196,9 @@
+ 			mutex_unlock(&hdmi->cec_notifier_mutex);
+ 		}
+ 
++		/* A new plug/unplug gets a fresh EDID retry budget. */
++		WRITE_ONCE(hdmi->edid_retry_events, 0);
++
+ 		if (phy_stat & HDMI_PHY_HPD)
+ 			status = connector_status_connected;
+ 
+@@ -3361,6 +3407,7 @@
+ 	mutex_init(&hdmi->audio_mutex);
+ 	mutex_init(&hdmi->cec_notifier_mutex);
+ 	spin_lock_init(&hdmi->audio_lock);
++	INIT_DELAYED_WORK(&hdmi->edid_retry_work, dw_hdmi_edid_retry_work);
+ 
+ 	ddc_node = of_parse_phandle(np, "ddc-i2c-bus", 0);
+ 	if (ddc_node) {
+@@ -3597,6 +3644,7 @@
+ void dw_hdmi_remove(struct dw_hdmi *hdmi)
+ {
+ 	drm_bridge_remove(&hdmi->bridge);
++	cancel_delayed_work_sync(&hdmi->edid_retry_work);
+ 
+ 	if (hdmi->audio && !IS_ERR(hdmi->audio))
+ 		platform_device_unregister(hdmi->audio);

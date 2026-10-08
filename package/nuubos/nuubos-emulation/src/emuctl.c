@@ -23,7 +23,7 @@ static void usage(void)
 	fprintf(stderr,
 		"Usage: nuubos-emuctl COMMAND\n"
 		"  status | watch\n"
-		"  launch GAME_ID\n"
+		"  launch GAME_ID [resume|new|slot:N]   (slot:-1 = automatic state)\n"
 		"  pause | resume | save | load | reset | fast-forward\n"
 		"  slot N|+1|-1\n"
 		"  advanced                       open RetroArch's own menu\n"
@@ -32,6 +32,9 @@ static void usage(void)
 		"  game-settings GAME SYSTEM       per-game overrides of the active user\n"
 		"  game-set GAME SYSTEM core|aspect|filter VALUE   (\"\" = inherit)\n"
 		"  game-reset GAME\n"
+		"  states [GAME_ID]               save states (running game or GAME_ID)\n"
+		"  settings                       emulation settings of the active user\n"
+		"  set KEY VALUE\n"
 		"  pre-power sleep|restart|poweroff\n");
 }
 
@@ -53,8 +56,18 @@ int main(int argc, char **argv)
 	} else if (!strcmp(verb, "watch") && argc == 2) {
 		snprintf(command, sizeof(command), "SUBSCRIBE\n");
 		watch = 1;
-	} else if (!strcmp(verb, "launch") && argc == 3) {
-		snprintf(command, sizeof(command), "LAUNCH\t%s\n", argv[2]);
+	} else if (!strcmp(verb, "launch") && (argc == 3 || argc == 4)) {
+		snprintf(command, sizeof(command), "LAUNCH\t%s%s%s\n", argv[2],
+			 argc == 4 ? "\t" : "", argc == 4 ? argv[3] : "");
+	} else if (!strcmp(verb, "states") && (argc == 2 || argc == 3)) {
+		snprintf(command, sizeof(command), "STATES%s%s\n",
+			 argc == 3 ? "\t" : "", argc == 3 ? argv[2] : "");
+		multi = 1;
+	} else if (!strcmp(verb, "settings") && argc == 2) {
+		snprintf(command, sizeof(command), "SETTINGS\n");
+		multi = 1;
+	} else if (!strcmp(verb, "set") && argc == 4) {
+		snprintf(command, sizeof(command), "SET\t%s\t%s\n", argv[2], argv[3]);
 	} else if (!strcmp(verb, "slot") && argc == 3) {
 		snprintf(command, sizeof(command), "SLOT\t%s\n", argv[2]);
 	} else if (!strcmp(verb, "game-settings") && argc == 4) {
@@ -124,6 +137,8 @@ int main(int argc, char **argv)
 			ok = strncmp(buf, "OK", 2) == 0;
 			break;
 		}
+		if (!strncmp(buf, "ERR", 3))
+			break;
 		if (strstr(buf, "end=1\n")) {
 			ok = 1;
 			break;

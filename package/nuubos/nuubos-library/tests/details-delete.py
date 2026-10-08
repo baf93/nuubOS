@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Host test: libraryd DETAILS / HIDE / STATS_RESET / DELETE.
+# Host test: libraryd DETAILS / STATS_RESET / DELETE.
 # Run: python3 package/nuubos/nuubos-library/tests/details-delete.py
 import os, socket, subprocess, sys, tempfile, time
 
@@ -79,12 +79,6 @@ try:
     check('details rejects bad keys', 'bad key' not in d)
     check('details path', 'path=snes/Mario (USA).sfc' in d)
 
-    check('hide ok', cmd('HIDE\t%s\t1' % zelda).startswith('OK'))
-    check('hidden leaves system scope', zelda not in cmd('GAMES\tsystem:snes'))
-    check('hidden scope lists it', zelda in cmd('GAMES\thidden'))
-    check('details hidden flag', 'hidden=1' in cmd('DETAILS\t' + zelda))
-    cmd('HIDE\t%s\t0' % zelda)
-    check('unhide', zelda in cmd('GAMES\tsystem:snes'))
 
     check('stats reset', cmd('STATS_RESET\t' + mario).startswith('OK'))
     check('stats gone', 'sessions=0' in cmd('DETAILS\t' + mario))

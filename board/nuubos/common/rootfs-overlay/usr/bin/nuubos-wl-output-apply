@@ -1,5 +1,52 @@
 #!/bin/sh
 
+# HDMI modes are capped at 1080 lines: a 4K TV gets 1080p at the preferred
+# refresh rate and upscales it itself (4x fewer pixels to render; at 2160p
+# the GPU also hit job timeouts). Games keep this mode: RetroArch renders a
+# smaller buffer that the display engine scales (nuubos-emud, emulation.md).
+HDMI_MAX_LINES=1080
+
+# HDMI mode for $1 as WxH@Hz: the sink's preferred mode when it fits the cap,
+# else the best mode within it: square pixels (16:9 or 4:3, not the
+# anamorphic 720x480/720x576 CEA modes) first, then the tallest, the widest
+# and the refresh rate nearest the preferred one.
+hdmi_mode()
+{
+    /usr/bin/wlr-randr 2>/dev/null | awk -v out="$1" -v cap="$HDMI_MAX_LINES" '
+        function ad(x) { return x < 0 ? -x : x }
+        function square(i) { return ad(mw[i] * 9 - mh[i] * 16) <= mh[i] * 9 / 100 || mw[i] * 3 == mh[i] * 4 }
+        /^[A-Za-z0-9-]+ / { name = $1; next }
+        name != out || $2 != "px," { next }
+        {
+            split($1, wh, "x"); w = wh[1] + 0; h = wh[2] + 0; r = $3 + 0
+            n++; mw[n] = w; mh[n] = h; mr[n] = $3
+            if ($0 ~ /preferred/) { pw = w; ph = h; pr = r }
+        }
+        END {
+            if (!n) exit 1
+            if (!ph) { pw = mw[1]; ph = mh[1]; pr = mr[1] + 0 }
+            best = 0
+            if (ph <= cap) {
+                for (i = 1; i <= n; i++) if (mw[i] == pw && mh[i] == ph && (!best || ad(mr[i] - pr) < ad(mr[best] - pr))) best = i
+            } else {
+                for (i = 1; i <= n; i++) {
+                    if (mh[i] > cap) continue
+                    if (best && square(i) != square(best)) { if (square(i)) best = i; continue }
+                    if (!best || mh[i] > mh[best] ||
+                        (mh[i] == mh[best] && mw[i] > mw[best]) ||
+                        (mh[i] == mh[best] && mw[i] == mw[best] && ad(mr[i] - pr) < ad(mr[best] - pr))) best = i
+                }
+                if (!best) { for (i = 1; i <= n; i++) if (mw[i] == pw && mh[i] == ph) { best = i; break } }
+            }
+            printf "%dx%d@%s\n", mw[best], mh[best], mr[best]
+        }'
+}
+
+if [ "$1" = "--hdmi-mode" ]; then
+    hdmi_mode "$2"
+    exit $?
+fi
+
 # Output scale for the current mode of $1 (see policy below).
 hdmi_scale()
 {
@@ -19,7 +66,12 @@ OUTPUTS="$(/usr/bin/wlr-randr 2>/dev/null | awk '/^[A-Za-z0-9-]+ / {print $1}')"
 
 HDMI="$(printf '%s\n' "$OUTPUTS" | grep '^HDMI-A-' | head -n 1)"
 if [ -n "$HDMI" ]; then
-    /usr/bin/wlr-randr --output "$HDMI" --on --preferred >/dev/null 2>&1 || true
+    MODE="$(hdmi_mode "$HDMI")"
+    if [ -n "$MODE" ]; then
+        /usr/bin/wlr-randr --output "$HDMI" --on --mode "$MODE" >/dev/null 2>&1 || true
+    else
+        /usr/bin/wlr-randr --output "$HDMI" --on --preferred >/dev/null 2>&1 || true
+    fi
     # TV/monitor density: scale so the UI sees ~720 logical lines and lays out
     # its native 16:9 variant crisply instead of drawing a tiny 1:1 UI.
     SCALE="$(hdmi_scale "$HDMI")"

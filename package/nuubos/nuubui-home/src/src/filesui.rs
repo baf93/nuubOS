@@ -13,7 +13,7 @@
  */
 
 use crate::gameui::{
-    apply_rows, arm_or, armed, armed_detail, focused_key, move_selection, nav, notice, row, run_tool,
+    apply_rows, apply_rows_split, arm_or, armed, armed_detail, focused_key, move_selection, nav, notice, row, run_tool,
     show, tool_then, toggle,
 };
 use crate::{handle_settings_action, navigate_settings_view, open_settings_choice, open_system_keyboard,
@@ -171,8 +171,7 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
             }
             for (path, user, created, size) in &st.backups {
                 let key = format!("restore:{path}");
-                let title = format!("{} • {}", user, created.replace('T', " ").trim_end_matches('Z'));
-                rows.push((key.clone(), row(title, human(*size),
+                rows.push((key.clone(), row(backup_title(user, created), human(*size),
                     armed_detail(&armed, &key, tr(ui, 191, "Press again to confirm"),
                         tr(ui, 636, "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected."))),
                     !st.busy));
@@ -182,6 +181,14 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
     }
     rows
 }
+
+fn backup_title(user: &str, created: &str) -> String {
+    format!("{} • {}", user, created.replace('T', " ").trim_end_matches('Z'))
+}
+
+/* Page 62: Back Up Now and its options, then the saved backups as their
+ * own section (rows from BACKUP_LIST_START). */
+const BACKUP_LIST_START: i32 = 3;
 
 pub(crate) fn render(ui: &HomeWindow) {
     let view = ui.get_settings_view();
@@ -203,7 +210,17 @@ pub(crate) fn render(ui: &HomeWindow) {
             ui.set_gen_index(i as i32);
         }
     }
-    apply_rows(ui, rows, section);
+    if view == 62 {
+        apply_rows_split(ui, rows, section, BACKUP_LIST_START, tr(ui, 736, "Saved Backups"));
+        /* On a saved backup: Confirm restores, North deletes. */
+        let on_backup = focused_key(ui).starts_with("restore:") && !STATE.with(|st| st.borrow().busy);
+        if on_backup {
+            ui.set_gen_select_label(tr(ui, 635, "Restore").into());
+        }
+        ui.set_settings_north_hint(if on_backup { tr(ui, 618, "Delete").into() } else { "".into() });
+    } else {
+        apply_rows(ui, rows, section);
+    }
     if ACTIVE.load(Ordering::SeqCst) {
         STATE.with(|st| {
             let st = st.borrow();
@@ -583,6 +600,14 @@ pub fn handle_page(ui: &HomeWindow, view: i32, action: &str) {
     match action {
         "menu_up" | "menu_down" => move_selection(ui, action),
         "menu_back" => navigate_settings_view(ui, if view == 61 { 20 } else { 24 }),
+        "face_north" if view == 62 && !STATE.with(|st| st.borrow().busy) => {
+            let key = focused_key(ui);
+            let Some(path) = key.strip_prefix("restore:") else { return };
+            let title = STATE.with(|st| st.borrow().backups.iter().find(|b| b.0 == path)
+                .map(|b| backup_title(&b.1, &b.2)).unwrap_or_default());
+            let options = vec![("delete".to_owned(), tr(ui, 618, "Delete")), ("cancel".to_owned(), tr(ui, 619, "Cancel"))];
+            open_settings_choice(ui, "backup-delete", &tr_arg(ui, 620, "Delete \"{0}\"?", &title), options, "cancel");
+        }
         "menu_confirm" => {
             let key = focused_key(ui);
             match (view, key.as_str()) {
@@ -671,6 +696,15 @@ pub fn apply_choice(ui: &HomeWindow, context: &str, value: String) {
             });
         }
         "backup-destination" => start_backup(ui, value),
+        "backup-delete" if value == "delete" => {
+            let key = focused_key(ui);
+            let Some(path) = key.strip_prefix("restore:").map(str::to_owned) else { return };
+            tool_then(ui, BACKUPCTL, vec!["delete".into(), path], None, |ui, out| {
+                notice(ui, if out.starts_with("OK") { tr(ui, 737, "Backup deleted") }
+                    else { tr(ui, 738, "The backup could not be deleted") });
+                refresh_backups(ui);
+            });
+        }
         _ => {}
     }
 }

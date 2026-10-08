@@ -1,27 +1,6 @@
+import { Theme, Shape } from "theme.slint";
 import { SystemVirtualKeyboard } from "components/virtual_keyboard.slint";
-
-
-/* Presentation tokens of the active theme (EPIC-008). Defaults are the
- * built-in nuubOS theme; nuubUI sets them from the user's theme package
- * (themes.rs) and falls back to these values on any theme error. Colors
- * not covered by a token are fixed by the product design. */
-export global Theme {
-    in-out property <color> accent: #3a86ff;
-    in-out property <color> accent-light: #73a8ff;
-    in-out property <color> accent-muted: #5b86d6;
-    in-out property <color> accent-text: #cfe2ff;
-    in-out property <color> focus-fill: #18283c;
-    in-out property <color> text: #f5f6f8;
-    in-out property <color> text-secondary: #a8adb5;
-    in-out property <color> text-dim: #8e949d;
-    in-out property <color> text-faint: #7f858e;
-    in-out property <color> text-disabled: #555b64;
-    in-out property <color> background: #0d0e10;
-    in-out property <color> surface: #24272d;
-    in-out property <color> border: #30343b;
-    in-out property <color> border-soft: #2c3036;
-    in-out property <color> warning: #f2b84b;
-}
+export { Theme } from "theme.slint";
 
 
 component MarqueeText inherits Rectangle {
@@ -57,6 +36,9 @@ component MarqueeText inherits Rectangle {
         vertical-alignment: center;
         x: root.active && self.preferred-width > parent.width
             ? parent.width - self.preferred-width
+            /* Overflowing text at rest shows its beginning, whatever the
+             * alignment of text that fits. */
+            : self.preferred-width > parent.width ? 0px
             : root.align-right ? parent.width - self.preferred-width
             : root.align-center ? (parent.width - self.preferred-width) / 2
             : 0px;
@@ -132,7 +114,7 @@ export struct ControllerMappingEntry {
 }
 
 /* One row of a data-driven page (Game Details, Game Settings, BIOS Files,
- * RetroAchievements, Game Metadata, Hidden Games): Rust builds the rows from
+ * RetroAchievements, Gaming, SERVICES...): Rust builds the rows from
  * the owning services; the page only lays them out. */
 export struct GenRow {
     title: string,
@@ -142,6 +124,8 @@ export struct GenRow {
     toggle: bool,
     toggle-on: bool,
     enabled: bool,
+    /* Waiting for the confirming press (error style, prompt in detail). */
+    armed: bool,
 }
 
 export struct SettingsChoiceEntry {
@@ -230,6 +214,17 @@ component BatteryGlyph inherits Rectangle {
         visible: root.percent < 0;
     }
 
+    /* Charging bolt: outline + fill, both from the theme. */
+    Image {
+        x: (parent.width - (root.compact ? 7px : 15px)) / 2;
+        y: (parent.height - (root.compact ? 8px : 17px)) / 2;
+        width: root.compact ? 7px : 15px;
+        height: root.compact ? 8px : 17px;
+        source: @image-url("assets/icons/bolt-outline.svg");
+        image-fit: contain;
+        colorize: Theme.background;
+        visible: root.charging && root.percent >= 0;
+    }
     Image {
         x: (parent.width - (root.compact ? 7px : 15px)) / 2;
         y: (parent.height - (root.compact ? 8px : 17px)) / 2;
@@ -237,6 +232,7 @@ component BatteryGlyph inherits Rectangle {
         height: root.compact ? 8px : 17px;
         source: @image-url("assets/icons/bolt.svg");
         image-fit: contain;
+        colorize: Theme.accent;
         visible: root.charging && root.percent >= 0;
     }
 }
@@ -337,10 +333,8 @@ component WifiStatus inherits Rectangle {
 component MenuActionHint inherits Rectangle {
     width: 26px;
     height: 26px;
-    border-radius: 5px;
-    background: #d8dbe0;
-    border-width: 1px;
-    border-color: Theme.text;
+    border-radius: Shape.small;
+    background: Theme.surface-container-highest;
 
     Text {
         x: 0;
@@ -350,7 +344,7 @@ component MenuActionHint inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         text: "H";
-        color: Theme.background;
+        color: Theme.text;
         font-size: 16px;
         font-weight: 800;
     }
@@ -372,20 +366,19 @@ component SettingsCategory inherits Rectangle {
     in property <string> label: "";
     in property <bool> selected: false;
 
-    border-radius: 6px;
-    background: root.selected ? Theme.focus-fill : #00000000;
-    border-width: 1px;
-    border-color: root.selected ? Theme.accent : #00000000;
+    /* M3 navigation drawer item: pill-shaped active indicator. */
+    border-radius: self.height / 2;
+    background: root.selected ? Theme.secondary-container : #00000000;
 
     MarqueeText {
-        x: 12px;
+        x: 16px;
         y: 0;
-        width: parent.width - 20px;
+        width: parent.width - 28px;
         height: parent.height;
         label: root.label;
-        text-color: root.selected ? Theme.text : Theme.text-secondary;
-        text-size: 18px;
-        text-weight: root.selected ? 700 : 600;
+        text-color: root.selected ? Theme.on-secondary-container : Theme.text-secondary;
+        text-size: 17px;
+        text-weight: root.selected ? 700 : 500;
         active: root.selected;
     }
 }
@@ -405,31 +398,31 @@ component SettingsSectionHeader inherits Rectangle {
         height: parent.height;
         vertical-alignment: center;
         text: root.label;
-        color: Theme.accent;
+        color: Theme.primary;
         font-size: 13px;
-        font-weight: 700;
+        font-weight: 600;
     }
 
     Rectangle {
         x: root.label == "" ? 0px : section-label.preferred-width + 8px;
         y: (parent.height - self.height) / 2;
-        width: scope-text.preferred-width + 12px;
-        height: 17px;
-        border-radius: 9px;
-        background: #17243a;
+        width: scope-text.preferred-width + 14px;
+        height: 18px;
+        border-radius: Shape.extra-small;
+        background: #00000000;
         border-width: 1px;
-        border-color: Theme.accent;
+        border-color: Theme.outline;
         visible: root.scope-label != "";
 
         scope-text := Text {
-            x: 6px;
+            x: 7px;
             y: 0;
             height: parent.height;
             vertical-alignment: center;
             text: root.scope-label;
-            color: #9ec5ff;
+            color: Theme.text-secondary;
             font-size: 10px;
-            font-weight: 800;
+            font-weight: 600;
         }
     }
 }
@@ -438,21 +431,24 @@ component SettingsToggle inherits Rectangle {
     in property <bool> checked: false;
     in property <bool> selected: false;
 
-    width: 42px;
-    height: 22px;
-    border-radius: 11px;
-    background: root.checked ? #234b80 : Theme.surface;
-    border-width: 1px;
-    border-color: root.selected ? Theme.accent-light : root.checked ? Theme.accent : #40454d;
+    /* M3 switch: filled primary track with a large on-primary thumb when
+     * on; outlined track with a small outline thumb when off. */
+    width: 44px;
+    height: 24px;
+    border-radius: self.height / 2;
+    background: root.checked ? Theme.primary : Theme.surface-container-highest;
+    border-width: root.checked ? 0px : 2px;
+    border-color: Theme.outline;
 
     Rectangle {
-        x: root.checked ? parent.width - 18px : 4px;
-        y: 4px;
-        width: 14px;
-        height: 14px;
-        border-radius: 7px;
-        background: root.checked ? #dbe9ff : #9aa0a8;
-        animate x { duration: 120ms; easing: ease-in-out; }
+        property <length> size: root.checked ? 18px : 12px;
+        x: root.checked ? parent.width - self.size - 3px : 6px;
+        y: (parent.height - self.size) / 2;
+        width: self.size;
+        height: self.size;
+        border-radius: self.size / 2;
+        background: root.checked ? Theme.on-primary : Theme.outline;
+        animate x, width { duration: 120ms; easing: ease-in-out; }
     }
 }
 
@@ -472,30 +468,41 @@ component SettingsSelectableRow inherits Rectangle {
     /* Circular image accessory (profile pictures). */
     in property <image> preview;
     in property <bool> show-preview: false;
+    /* Colour dot accessory (RGB Lighting colour). */
+    in property <color> swatch;
+    in property <bool> show-swatch: false;
     /* Minimum share reserved for the title when the value itself is long.
      * Short/empty values consume only their preferred width, so the title
      * automatically gets the otherwise-unused space. */
     in property <float> title-fraction: 0.40;
+    /* Waiting for the confirming press of a destructive action: the whole
+     * row turns to the error roles and its detail line carries the prompt
+     * (value and switch step aside), never a note beside the title. */
+    in property <bool> armed: false;
+
+    property <string> shown-value: root.armed ? "" : root.value;
 
     property <bool> has-detail: root.detail != "";
-    property <length> accessory-width: root.toggle ? 42px
+    property <length> accessory-width: root.armed ? 0px : root.toggle ? 42px
         : root.show-preview ? 28px
+        : root.show-swatch ? 18px
         : root.navigates ? 10px
         : 0px;
     property <length> value-right: root.width - 12px - root.accessory-width
         - (root.accessory-width > 0px ? 10px : 0px);
 
-    border-radius: 6px;
-    background: root.selected ? Theme.focus-fill : #15171b;
-    border-width: 1px;
-    border-color: root.selected ? Theme.accent : root.emphasized ? #315f9f : Theme.surface;
+    border-radius: Shape.medium;
+    background: root.armed ? Theme.error-container
+        : root.selected ? Theme.secondary-container : Theme.surface-container-low;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.armed ? Theme.error : root.selected ? Theme.primary : root.emphasized ? Theme.primary-container : Theme.surface-container-low;
 
     SettingsToggle {
         x: parent.width - 12px - self.width;
         y: (parent.height - self.height) / 2;
         checked: root.toggle-on;
         selected: root.selected;
-        visible: root.toggle;
+        visible: root.toggle && !root.armed;
     }
 
     Text {
@@ -506,10 +513,22 @@ component SettingsSelectableRow inherits Rectangle {
         horizontal-alignment: right;
         vertical-alignment: center;
         text: "›";
-        color: root.selected ? Theme.accent-text : #6f7680;
+        color: root.selected ? Theme.on-secondary-container : Theme.outline;
         font-size: 22px;
         font-weight: 700;
-        visible: root.navigates && !root.toggle && !root.show-preview;
+        visible: root.navigates && !root.toggle && !root.show-preview && !root.show-swatch && !root.armed;
+    }
+
+    Rectangle {
+        x: parent.width - 12px - self.width;
+        y: (parent.height - self.height) / 2;
+        width: 18px;
+        height: 18px;
+        border-radius: self.width / 2;
+        background: root.swatch;
+        border-width: 2px;
+        border-color: root.selected ? Theme.on-secondary-container : Theme.outline-variant;
+        visible: root.show-swatch && !root.toggle && !root.armed;
     }
 
     Rectangle {
@@ -524,7 +543,7 @@ component SettingsSelectableRow inherits Rectangle {
         border-color: root.selected ? Theme.accent : Theme.border-soft;
         background: #11151a;
         clip: true;
-        visible: root.show-preview && !root.toggle;
+        visible: root.show-preview && !root.toggle && !root.armed;
 
         Image {
             x: parent.border-width;
@@ -537,43 +556,44 @@ component SettingsSelectableRow inherits Rectangle {
     }
 
     value-text := MarqueeText {
-        width: root.value == ""
+        width: root.shown-value == ""
             ? 0px
             : min(self.content-width + 4px,
                   root.value-right * (0.97 - root.title-fraction));
         x: root.value-right - self.width;
         y: 0;
         height: parent.height;
-        label: root.value;
-        text-color: root.selected ? Theme.accent-text : Theme.text-dim;
+        label: root.shown-value;
+        text-color: root.selected ? Theme.on-secondary-container : Theme.text-dim;
         text-size: 14px;
-        text-weight: 600;
+        text-weight: 500;
         align-right: true;
         active: root.selected;
-        visible: root.value != "";
+        visible: root.shown-value != "";
     }
 
     title-text := MarqueeText {
-        x: 12px;
+        x: 14px;
         y: root.has-detail ? parent.height * 0.08 : 0px;
-        width: root.value == ""
-            ? max(0px, root.value-right - 12px)
+        width: root.shown-value == ""
+            ? max(0px, root.value-right - 14px)
             : max(0px, value-text.x - 20px);
         height: root.has-detail ? parent.height * 0.50 : parent.height;
         label: root.title;
-        text-color: root.selected ? Theme.text : #c8ccd2;
-        text-size: 18px;
-        text-weight: root.selected || root.emphasized ? 700 : 600;
+        text-color: root.armed ? Theme.on-error-container : root.selected ? Theme.text : #d0d3d8;
+        text-size: 17px;
+        text-weight: root.selected || root.emphasized ? 600 : 500;
         active: root.selected;
     }
 
     MarqueeText {
-        x: 12px;
+        x: 14px;
         y: parent.height * 0.56;
         width: title-text.width;
         height: parent.height * 0.36;
         label: root.detail;
-        text-color: Theme.text-faint;
+        text-color: root.armed ? Theme.on-error-container : Theme.text-faint;
+        text-weight: root.armed ? 600 : 400;
         text-size: 12px;
         active: root.selected;
         visible: root.has-detail;
@@ -585,28 +605,48 @@ component SettingsActionButton inherits Rectangle {
     in property <bool> selected: false;
     in property <bool> danger: false;
     in property <bool> enabled: true;
+    /* Waiting for the confirming press: error roles, the action name with
+     * the prompt on a second line inside the button. */
+    in property <bool> armed: false;
+    in property <string> prompt: "";
+    property <bool> two-lines: root.armed && root.prompt != "";
 
-    border-radius: 6px;
-    background: root.danger
-        ? (root.selected ? #542329 : #28171a)
-        : (root.selected ? #24589a : #17345b);
-    border-width: 1px;
-    border-color: root.danger
-        ? (root.selected ? #d95a67 : #74343c)
-        : (root.selected ? Theme.accent-light : #315f9f);
-    opacity: root.enabled ? 1.0 : 0.42;
+    /* M3 common button, full shape: tonal at rest, filled when focused;
+     * destructive actions use the error roles. */
+    border-radius: self.height / 2;
+    background: root.armed ? Theme.error-container
+        : root.danger
+        ? (root.selected ? Theme.error : Theme.error-container)
+        : (root.selected ? Theme.primary : Theme.primary-container);
+    border-width: root.armed ? 2px : 0px;
+    border-color: Theme.error;
+    opacity: root.enabled ? 1.0 : 0.38;
 
     MarqueeText {
-        x: 12px;
-        y: 0;
-        width: parent.width - 24px;
-        height: parent.height;
+        x: 16px;
+        y: root.two-lines ? parent.height * 0.08 : 0px;
+        width: parent.width - 32px;
+        height: root.two-lines ? parent.height * 0.50 : parent.height;
         label: root.label;
-        text-color: root.danger ? #ffc0c6 : #e8f1ff;
-        text-size: 17px;
-        text-weight: 700;
+        text-color: root.armed ? Theme.on-error-container
+            : root.danger
+            ? (root.selected ? #690005 : Theme.on-error-container)
+            : (root.selected ? Theme.on-primary : Theme.on-primary-container);
+        text-size: root.two-lines ? 15px : 16px;
+        text-weight: 600;
         align-center: true;
         active: root.selected;
+    }
+    if root.two-lines: MarqueeText {
+        x: 16px;
+        y: parent.height * 0.54;
+        width: parent.width - 32px;
+        height: parent.height * 0.36;
+        label: root.prompt;
+        text-color: Theme.on-error-container;
+        text-size: 11px;
+        text-weight: 500;
+        align-center: true;
     }
 }
 
@@ -622,10 +662,8 @@ component SettingsHint inherits Text {
 component StartActionHint inherits Rectangle {
     width: 50px;
     height: 26px;
-    border-radius: 5px;
-    background: #d8dbe0;
-    border-width: 1px;
-    border-color: Theme.text;
+    border-radius: Shape.small;
+    background: Theme.surface-container-highest;
 
     Text {
         x: 2px;
@@ -635,7 +673,7 @@ component StartActionHint inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         text: "START";
-        color: Theme.background;
+        color: Theme.text;
         font-size: 11px;
         font-weight: 800;
     }
@@ -644,10 +682,8 @@ component StartActionHint inherits Rectangle {
 component NavigationHint inherits Rectangle {
     width: 28px;
     height: 26px;
-    border-radius: 5px;
-    background: #d8dbe0;
-    border-width: 1px;
-    border-color: Theme.text;
+    border-radius: Shape.small;
+    background: Theme.surface-container-highest;
 
     Text {
         x: 2px;
@@ -657,7 +693,7 @@ component NavigationHint inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         text: "↕";
-        color: Theme.background;
+        color: Theme.text;
         font-size: 18px;
         font-weight: 800;
     }
@@ -733,9 +769,126 @@ component ActionHint inherits HorizontalLayout {
     Text {
         text: root.label;
         color: Theme.text-secondary;
-        font-size: 17px;
-        font-weight: 600;
+        font-size: 16px;
+        font-weight: 500;
         vertical-alignment: center;
+    }
+}
+
+/* Input Tester controller drawing.
+ *
+ * A generic, brand-free pad drawn on a 360x200 design grid scaled by `u`
+ * (the largest unit that fits the given box), so every layout class gets
+ * the same proportions without a master-canvas bitmap. Pressed controls
+ * take the primary colour; triggers fill with their analog travel and
+ * sticks move their knob with the logical value (-100..100). */
+component TesterShoulder inherits Rectangle {
+    in property <string> label;
+    /* 0..100: analog travel (digital sources report 0 or 100). */
+    in property <int> level: 0;
+    in property <length> u: 1px;
+    property <bool> active: root.level > 0;
+
+    border-radius: 7 * root.u;
+    background: Theme.surface-container-highest;
+    border-width: 1px;
+    border-color: root.active ? Theme.primary : Theme.outline-variant;
+
+    /* Analog travel; rounded itself because the software renderer clips
+     * to rectangles only. */
+    Rectangle {
+        x: 0; y: 0;
+        width: parent.width * clamp(root.level, 0, 100) / 100;
+        height: parent.height;
+        border-radius: min(parent.border-radius, self.width / 2);
+        background: Theme.primary;
+    }
+    Text {
+        text: root.label;
+        color: root.level >= 50 ? Theme.on-primary : Theme.text;
+        font-size: max(10px, 11 * root.u);
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component TesterFaceButton inherits Rectangle {
+    in property <bool> pressed: false;
+    border-radius: self.width / 2;
+    background: root.pressed ? Theme.primary : Theme.surface-container-highest;
+    border-width: 1px;
+    border-color: root.pressed ? Theme.primary : Theme.outline;
+}
+
+component TesterDpadArm inherits Rectangle {
+    in property <bool> pressed: false;
+    /* Triangle pointing away from the centre, in a 10x10 viewbox. */
+    in property <string> arrow;
+    background: root.pressed ? Theme.primary : Theme.surface-container-highest;
+    Path {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(parent.width, parent.height) * 0.5;
+        height: self.width;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: root.arrow;
+        fill: root.pressed ? Theme.on-primary : Theme.text-dim;
+    }
+}
+
+component TesterStick inherits Rectangle {
+    in property <int> axis-x: 0;
+    in property <int> axis-y: 0;
+    in property <bool> pressed: false;
+    property <bool> moved: abs(root.axis-x) > 8 || abs(root.axis-y) > 8;
+    property <length> knob: root.width * 0.48;
+    property <length> travel: (root.width - root.knob) / 2 - 2px;
+
+    border-radius: self.width / 2;
+    background: Theme.surface-container-low;
+    border-width: root.moved || root.pressed ? 2px : 1px;
+    border-color: root.moved || root.pressed ? Theme.primary : Theme.outline;
+
+    /* Crosshair: rest position reference. */
+    Rectangle { x: parent.width * 0.2; y: parent.height / 2; width: parent.width * 0.6; height: 1px; background: Theme.outline-variant; }
+    Rectangle { x: parent.width / 2; y: parent.height * 0.2; width: 1px; height: parent.height * 0.6; background: Theme.outline-variant; }
+
+    Rectangle {
+        width: root.knob;
+        height: root.knob;
+        border-radius: root.knob / 2;
+        x: (parent.width - root.knob) / 2 + root.travel * clamp(root.axis-x, -100, 100) / 100;
+        y: (parent.height - root.knob) / 2 + root.travel * clamp(root.axis-y, -100, 100) / 100;
+        background: root.pressed ? Theme.primary : root.moved ? Theme.primary-container : Theme.surface-container-highest;
+        border-width: 1px;
+        border-color: root.moved || root.pressed ? Theme.primary : Theme.outline;
+    }
+}
+
+component TesterPill inherits Rectangle {
+    in property <string> label;
+    in property <bool> pressed: false;
+    in property <length> u: 1px;
+
+    background: #00000000;
+    Rectangle {
+        x: (parent.width - self.width) / 2; y: 0;
+        width: 30 * root.u; height: 12 * root.u;
+        border-radius: self.height / 2;
+        background: root.pressed ? Theme.primary : Theme.surface-container-highest;
+        border-width: 1px;
+        border-color: root.pressed ? Theme.primary : Theme.outline;
+    }
+    Text {
+        y: 15 * root.u;
+        width: parent.width;
+        text: root.label;
+        color: root.pressed ? Theme.primary : Theme.text-dim;
+        font-size: max(8px, 8 * root.u);
+        font-weight: 700;
+        horizontal-alignment: center;
     }
 }
 
@@ -764,77 +917,84 @@ component ControllerTesterVisual inherits Rectangle {
     in property <int> left-trigger: 0;
     in property <int> right-trigger: 0;
 
-    height: 194px;
-    background: #111318;
-    border-width: 1px;
-    border-color: #30343c;
-    border-radius: 12px;
+    /* Design grid unit and the centred grid origin. */
+    property <length> u: min(root.width / 360, root.height / 200, 2.2px);
+    property <length> ox: (root.width - 360 * root.u) / 2;
+    property <length> oy: 0;
+    /* Height the drawing needs at this width (pages place content below). */
+    out property <length> drawn-height: 200 * root.u;
 
+    background: #00000000;
+
+    /* Shoulders sit behind the top edge of the body. */
+    TesterShoulder { x: root.ox + 34 * root.u; y: root.oy + 2 * root.u; width: 58 * root.u; height: 24 * root.u; u: root.u;
+        label: "L2"; level: max(root.l2 ? 100 : 0, root.left-trigger); }
+    TesterShoulder { x: root.ox + 98 * root.u; y: root.oy + 8 * root.u; width: 58 * root.u; height: 24 * root.u; u: root.u;
+        label: "L1"; level: root.l1 ? 100 : 0; }
+    TesterShoulder { x: root.ox + 204 * root.u; y: root.oy + 8 * root.u; width: 58 * root.u; height: 24 * root.u; u: root.u;
+        label: "R1"; level: root.r1 ? 100 : 0; }
+    TesterShoulder { x: root.ox + 268 * root.u; y: root.oy + 2 * root.u; width: 58 * root.u; height: 24 * root.u; u: root.u;
+        label: "R2"; level: max(root.r2 ? 100 : 0, root.right-trigger); }
+
+    /* Body. */
     Rectangle {
-        x: 38px; y: 20px; width: parent.width - 76px; height: 144px;
-        background: #1b1e24;
+        x: root.ox + 14 * root.u; y: root.oy + 34 * root.u;
+        width: 332 * root.u; height: 164 * root.u;
+        border-radius: 46 * root.u;
+        background: Theme.surface-container;
         border-width: 1px;
-        border-color: #3a3f48;
-        border-radius: 30px;
+        border-color: Theme.outline-variant;
     }
 
-    Rectangle { x: 54px; y: 8px; width: 64px; height: 18px; border-radius: 6px;
-        background: (root.l2 || root.left-trigger != 0) ? Theme.accent : Theme.surface;
-        Text { text: "L2"; color: Theme.text; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
-    }
-    Rectangle { x: 126px; y: 8px; width: 64px; height: 18px; border-radius: 6px;
-        background: root.l1 ? Theme.accent : Theme.surface;
-        Text { text: "L1"; color: Theme.text; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
-    }
-    Rectangle { x: parent.width - 190px; y: 8px; width: 64px; height: 18px; border-radius: 6px;
-        background: root.r1 ? Theme.accent : Theme.surface;
-        Text { text: "R1"; color: Theme.text; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
-    }
-    Rectangle { x: parent.width - 118px; y: 8px; width: 64px; height: 18px; border-radius: 6px;
-        background: (root.r2 || root.right-trigger != 0) ? Theme.accent : Theme.surface;
-        Text { text: "R2"; color: Theme.text; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
-    }
-
-    /* D-pad */
-    Rectangle { x: 72px; y: 66px; width: 24px; height: 24px; border-radius: 4px; background: root.dpad-up ? Theme.accent : Theme.border; }
-    Rectangle { x: 72px; y: 112px; width: 24px; height: 24px; border-radius: 4px; background: root.dpad-down ? Theme.accent : Theme.border; }
-    Rectangle { x: 49px; y: 89px; width: 24px; height: 24px; border-radius: 4px; background: root.dpad-left ? Theme.accent : Theme.border; }
-    Rectangle { x: 95px; y: 89px; width: 24px; height: 24px; border-radius: 4px; background: root.dpad-right ? Theme.accent : Theme.border; }
-
-    /* Face cluster, controller-agnostic positions */
-    Rectangle { x: parent.width - 96px; y: 64px; width: 22px; height: 22px; border-radius: 11px; background: root.face-north ? Theme.accent : Theme.border; }
-    Rectangle { x: parent.width - 72px; y: 88px; width: 22px; height: 22px; border-radius: 11px; background: root.face-east ? Theme.accent : Theme.border; }
-    Rectangle { x: parent.width - 96px; y: 112px; width: 22px; height: 22px; border-radius: 11px; background: root.face-south ? Theme.accent : Theme.border; }
-    Rectangle { x: parent.width - 120px; y: 88px; width: 22px; height: 22px; border-radius: 11px; background: root.face-west ? Theme.accent : Theme.border; }
-
-    /* Sticks */
+    /* D-pad: a cross whose arms light individually. */
     Rectangle {
-        x: 132px; y: 108px; width: 46px; height: 46px; border-radius: 23px;
-        background: root.l3 ? Theme.accent : #262a31; border-width: 1px; border-color: #505762;
-        Rectangle {
-            width: 10px; height: 10px; border-radius: 5px; background: #9dc1ff;
-            x: 18px + root.left-x * 14px / 100;
-            y: 18px + root.left-y * 14px / 100;
-        }
+        x: root.ox + 50 * root.u; y: root.oy + 54 * root.u;
+        width: 72 * root.u; height: 72 * root.u;
+        border-radius: 36 * root.u;
+        background: Theme.surface-container-low;
     }
+    TesterDpadArm { x: root.ox + 74 * root.u; y: root.oy + 58 * root.u; width: 24 * root.u; height: 25 * root.u;
+        border-radius: 4 * root.u; pressed: root.dpad-up; arrow: "M5 1.5 L8.5 7 L1.5 7 Z"; }
+    TesterDpadArm { x: root.ox + 74 * root.u; y: root.oy + 97 * root.u; width: 24 * root.u; height: 25 * root.u;
+        border-radius: 4 * root.u; pressed: root.dpad-down; arrow: "M5 8.5 L8.5 3 L1.5 3 Z"; }
+    TesterDpadArm { x: root.ox + 54 * root.u; y: root.oy + 78 * root.u; width: 25 * root.u; height: 24 * root.u;
+        border-radius: 4 * root.u; pressed: root.dpad-left; arrow: "M1.5 5 L7 1.5 L7 8.5 Z"; }
+    TesterDpadArm { x: root.ox + 93 * root.u; y: root.oy + 78 * root.u; width: 25 * root.u; height: 24 * root.u;
+        border-radius: 4 * root.u; pressed: root.dpad-right; arrow: "M8.5 5 L3 1.5 L3 8.5 Z"; }
+    Rectangle { x: root.ox + 78 * root.u; y: root.oy + 82 * root.u; width: 16 * root.u; height: 16 * root.u;
+        background: Theme.surface-container-highest; }
+
+    /* Face cluster by position, never by brand letter. */
     Rectangle {
-        x: parent.width - 178px; y: 108px; width: 46px; height: 46px; border-radius: 23px;
-        background: root.r3 ? Theme.accent : #262a31; border-width: 1px; border-color: #505762;
-        Rectangle {
-            width: 10px; height: 10px; border-radius: 5px; background: #9dc1ff;
-            x: 18px + root.right-x * 14px / 100;
-            y: 18px + root.right-y * 14px / 100;
-        }
+        x: root.ox + 238 * root.u; y: root.oy + 54 * root.u;
+        width: 72 * root.u; height: 72 * root.u;
+        border-radius: 36 * root.u;
+        background: Theme.surface-container-low;
     }
+    TesterFaceButton { x: root.ox + 262 * root.u; y: root.oy + 56 * root.u; width: 24 * root.u; height: 24 * root.u; pressed: root.face-north; }
+    TesterFaceButton { x: root.ox + 284 * root.u; y: root.oy + 78 * root.u; width: 24 * root.u; height: 24 * root.u; pressed: root.face-east; }
+    TesterFaceButton { x: root.ox + 262 * root.u; y: root.oy + 100 * root.u; width: 24 * root.u; height: 24 * root.u; pressed: root.face-south; }
+    TesterFaceButton { x: root.ox + 240 * root.u; y: root.oy + 78 * root.u; width: 24 * root.u; height: 24 * root.u; pressed: root.face-west; }
 
-    Rectangle { x: parent.width / 2 - 50px; y: 70px; width: 28px; height: 14px; border-radius: 7px; background: root.select ? Theme.accent : Theme.border;
-        Text { text: "SEL"; color: Theme.text; font-size: 8px; horizontal-alignment: center; vertical-alignment: center; } }
-    Rectangle { x: parent.width / 2 - 14px; y: 70px; width: 28px; height: 14px; border-radius: 7px; background: root.hotkey ? Theme.accent : Theme.border;
-        Text { text: "H"; color: Theme.text; font-size: 8px; horizontal-alignment: center; vertical-alignment: center; } }
-    Rectangle { x: parent.width / 2 + 22px; y: 70px; width: 28px; height: 14px; border-radius: 7px; background: root.start ? Theme.accent : Theme.border;
-        Text { text: "STA"; color: Theme.text; font-size: 8px; horizontal-alignment: center; vertical-alignment: center; } }
+    /* System buttons (legends are physical button names, not UI text). */
+    TesterPill { x: root.ox + 128 * root.u; y: root.oy + 56 * root.u; width: 36 * root.u; height: 28 * root.u; u: root.u;
+        label: "SELECT"; pressed: root.select; }
+    TesterPill { x: root.ox + 162 * root.u; y: root.oy + 56 * root.u; width: 36 * root.u; height: 28 * root.u; u: root.u;
+        label: "H"; pressed: root.hotkey; }
+    TesterPill { x: root.ox + 196 * root.u; y: root.oy + 56 * root.u; width: 36 * root.u; height: 28 * root.u; u: root.u;
+        label: "START"; pressed: root.start; }
 
+    /* Sticks; pressing them is L3/R3. */
+    TesterStick { x: root.ox + 118 * root.u; y: root.oy + 116 * root.u; width: 54 * root.u; height: 54 * root.u;
+        axis-x: root.left-x; axis-y: root.left-y; pressed: root.l3; }
+    TesterStick { x: root.ox + 188 * root.u; y: root.oy + 116 * root.u; width: 54 * root.u; height: 54 * root.u;
+        axis-x: root.right-x; axis-y: root.right-y; pressed: root.r3; }
+    Text { x: root.ox + 118 * root.u; y: root.oy + 172 * root.u; width: 54 * root.u; text: "L3";
+        color: root.l3 ? Theme.primary : Theme.text-dim; font-size: max(8px, 8 * root.u); font-weight: 700; horizontal-alignment: center; }
+    Text { x: root.ox + 188 * root.u; y: root.oy + 172 * root.u; width: 54 * root.u; text: "R3";
+        color: root.r3 ? Theme.primary : Theme.text-dim; font-size: max(8px, 8 * root.u); font-weight: 700; horizontal-alignment: center; }
 }
+
 
 /* Home / Game Library cards (EPIC-001 Home, EPIC-011 browsing).
  *
@@ -903,13 +1063,14 @@ component HomeCardView inherits Rectangle {
     in property <bool> dimmed: false;
     in property <string> unavailable-label: "";
 
-    property <length> radius: max(6px, root.height * 0.045);
+    /* M3 medium shape; the Rust cover loader rounds covers the same way. */
+    property <length> radius: max(Shape.medium, root.height * 0.06);
     property <bool> tile: root.card.kind != 0;
     property <length> icon-size: min(root.height * 0.42, root.width * 0.50);
     property <length> inset: max(6px, min(root.width, root.height) * 0.07);
     /* Tile icon/label colour: unselected rows recede without an extra
      * blended layer. */
-    property <color> ink: root.dimmed ? #6f757e : root.focused ? Theme.text : #c9cdd3;
+    property <color> ink: root.dimmed ? #6f757e : root.focused ? Theme.on-secondary-container : #c9cdd3;
 
     background: #00000000;
 
@@ -919,7 +1080,7 @@ component HomeCardView inherits Rectangle {
         border-radius: root.radius + 9px;
         background: #00000000;
         border-width: 4px;
-        border-color: #3a86ff30;
+        border-color: Theme.accent.transparentize(0.8);
         visible: root.focused;
     }
     Rectangle {
@@ -927,7 +1088,7 @@ component HomeCardView inherits Rectangle {
         border-radius: root.radius + 6px;
         background: #00000000;
         border-width: 3px;
-        border-color: Theme.accent;
+        border-color: Theme.primary;
         visible: root.focused;
     }
 
@@ -935,10 +1096,10 @@ component HomeCardView inherits Rectangle {
     Rectangle {
         width: parent.width; height: parent.height;
         border-radius: root.radius;
-        background: root.focused ? #20242b : #181a1f;
+        background: root.focused ? Theme.secondary-container : Theme.surface-container;
         visible: root.tile || !root.card.has-cover;
         border-width: 1px;
-        border-color: root.focused ? #2f343c : #23262c;
+        border-color: root.focused ? Theme.secondary-container : Theme.surface-container;
 
         /* Game placeholder: title in the lower-left corner. */
         if !root.tile: Text {
@@ -987,7 +1148,7 @@ component HomeCardView inherits Rectangle {
             vertical-alignment: center;
             color: root.ink;
             font-size: max(13px, parent.height * 0.12);
-            font-weight: 600;
+            font-weight: 500;
         }
     }
 
@@ -1035,30 +1196,119 @@ component HomeCardView inherits Rectangle {
 
 }
 
+/* Compact shelf tile (systems, collections, Favorites, applications):
+ * icon, name and count on one tonal chip, so the shelves stay small and
+ * the game covers keep the screen. Same focus ring as the cards. */
+component HomeChipView inherits Rectangle {
+    in property <HomeCard> card;
+    in property <bool> focused: false;
+    in property <bool> dimmed: false;
+    in property <float> s: 1.0;
+
+    property <length> radius: Shape.medium;
+    property <length> icon-size: root.height * 0.52;
+    property <length> icon-x: (root.height - root.icon-size) / 2 + 2px * root.s;
+    property <color> ink: root.dimmed ? #6f757e : root.focused ? Theme.on-secondary-container : #c9cdd3;
+
+    background: #00000000;
+
+    Rectangle {
+        x: -9px; y: -9px; width: parent.width + 18px; height: parent.height + 18px;
+        border-radius: root.radius + 9px;
+        background: #00000000;
+        border-width: 4px;
+        border-color: Theme.accent.transparentize(0.8);
+        visible: root.focused;
+    }
+    Rectangle {
+        x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px;
+        border-radius: root.radius + 6px;
+        background: #00000000;
+        border-width: 3px;
+        border-color: Theme.primary;
+        visible: root.focused;
+    }
+
+    Rectangle {
+        width: parent.width; height: parent.height;
+        border-radius: root.radius;
+        background: root.focused ? Theme.secondary-container : Theme.surface-container;
+
+        if root.card.kind == 1: HomeStar {
+            x: root.icon-x; y: (parent.height - root.icon-size) / 2;
+            width: root.icon-size; height: root.icon-size;
+        }
+        if root.card.kind == 2: HomeCollectionGlyph {
+            x: root.icon-x + root.icon-size * 0.07; y: (parent.height - root.icon-size * 0.8) / 2;
+            width: root.icon-size * 0.86; height: root.icon-size * 0.80;
+            ink: root.ink;
+        }
+        if root.card.kind >= 3 && root.card.has-cover: Image {
+            x: root.icon-x; y: (parent.height - root.icon-size) / 2;
+            width: root.icon-size; height: root.icon-size;
+            source: root.card.cover;
+            image-fit: contain;
+            colorize: root.card.kind == 3 ? root.ink : #00000000;
+        }
+        if root.card.kind >= 3 && !root.card.has-cover: Image {
+            x: root.icon-x + root.icon-size * 0.1; y: (parent.height - root.icon-size * 0.8) / 2;
+            width: root.icon-size * 0.8; height: root.icon-size * 0.8;
+            source: @image-url("assets/icons/gamepad.svg");
+            colorize: root.ink;
+            image-fit: contain;
+        }
+
+        VerticalLayout {
+            x: root.icon-x + root.icon-size + 10px * root.s;
+            width: parent.width - self.x - 10px * root.s;
+            height: parent.height;
+            alignment: center;
+            spacing: 0px;
+            MarqueeText {
+                height: 20px * root.s;
+                label: root.card.title;
+                text-color: root.dimmed ? #8a9099 : root.focused ? Theme.on-secondary-container : Theme.text;
+                text-size: 15px * root.s;
+                text-weight: 600;
+                active: root.focused;
+            }
+            if root.card.detail != "": Text {
+                height: 16px * root.s;
+                text: root.card.detail;
+                overflow: elide;
+                vertical-alignment: center;
+                color: root.dimmed ? #6f757e : Theme.text-secondary;
+                font-size: 12px * root.s;
+            }
+        }
+    }
+}
+
 /* Section title; the selected section carries the nuubOS blue bar. */
 component HomeSectionTitle inherits Rectangle {
     in property <string> label;
     in property <bool> active: false;
     in property <length> label-size: 17px;
     in property <string> status: "";
-    property <length> status-w: min(root.width * 0.45, root.label-size * 14);
+    in property <color> status-color: Theme.text-faint;
+    property <length> status-w: min(root.width * 0.55, root.label-size * 22);
 
     background: #00000000;
     Rectangle {
-        x: 0; y: (parent.height - self.height) / 2; width: 3px; height: root.label-size * 1.05;
-        border-radius: 1.5px;
-        background: Theme.accent;
+        x: 0; y: (parent.height - self.height) / 2; width: 4px; height: root.label-size * 1.05;
+        border-radius: 2px;
+        background: Theme.primary;
         visible: root.active;
     }
     Text {
-        x: root.active ? 11px : 0px;
+        x: root.active ? 12px : 0px;
         y: 0; width: parent.width - self.x - (root.status != "" ? root.status-w + 8px : 0px); height: parent.height;
         text: root.label;
         vertical-alignment: center;
         overflow: elide;
         color: root.active ? Theme.text : #6f757e;
         font-size: root.label-size;
-        font-weight: root.active ? 700 : 600;
+        font-weight: root.active ? 600 : 500;
     }
     if root.status != "": Text {
         x: parent.width - root.status-w; y: 0; width: root.status-w; height: parent.height;
@@ -1066,8 +1316,8 @@ component HomeSectionTitle inherits Rectangle {
         horizontal-alignment: right;
         vertical-alignment: center;
         overflow: elide;
-        color: Theme.text-faint;
-        font-size: root.label-size * 0.78;
+        color: root.status-color;
+        font-size: root.label-size * 0.86;
     }
 }
 
@@ -1077,59 +1327,184 @@ component HomeFocusInfo inherits Rectangle {
     in property <string> detail;
     in property <string> notice: "";
     in property <float> s: 1.0;
+    in property <bool> dimmed: false;
 
     background: #00000000;
     MarqueeText {
-        x: 0; y: 0; width: parent.width; height: 29px * root.s;
+        x: 0; y: 0; width: parent.width; height: 26px * root.s;
         label: root.title;
-        text-color: Theme.text;
-        text-size: 23px * root.s;
-        text-weight: 700;
+        active: !root.dimmed;
+        text-color: root.dimmed ? Theme.text-secondary : Theme.text;
+        text-size: 22px * root.s;
+        text-weight: 600;
     }
     MarqueeText {
-        x: 0; y: 30px * root.s; width: parent.width; height: 22px * root.s;
+        x: 0; y: 26px * root.s; width: parent.width; height: 20px * root.s;
         label: root.notice != "" ? root.notice : root.detail;
-        text-color: root.notice != "" ? #ffc94a : #8b919a;
-        text-size: 16px * root.s;
-        text-weight: 500;
+        active: !root.dimmed;
+        text-color: root.notice != "" ? #ffc94a : root.dimmed ? Theme.text-faint : Theme.text-secondary;
+        text-size: 15px * root.s;
+        text-weight: 400;
     }
 }
 
-/* One Home carousel: section title, horizontally scrolling cards and, on
- * the selected row, the focused card's title + metadata under the covers.
- * The focused card is kept at the left edge (console catalogue style)
- * until the end of the row is reached. */
+/* Empty Home section (M3 empty state on an outlined card): an icon, a
+ * playful headline and one supporting line, so a fresh console invites to
+ * play instead of hiding the section. It takes focus like a card. */
+component HomeEmptyCard inherits Rectangle {
+    in property <string> headline;
+    in property <string> body;
+    /* 0 controller (games), 1 shelf (systems), 2 apps. */
+    in property <int> icon: 0;
+    in property <bool> focused: false;
+    in property <bool> dimmed: false;
+    in property <float> s: 1.0;
+
+    property <length> radius: max(Shape.medium, root.height * 0.06);
+    property <bool> roomy: root.height >= 120px * root.s;
+    /* As high as a shelf chip: headline and body on one line each. */
+    property <bool> compact: root.height < 64px * root.s;
+    property <length> icon-size: root.roomy ? min(root.height * 0.34, 64px * root.s)
+        : root.compact ? root.height * 0.40 : min(root.height * 0.46, 36px * root.s);
+    property <color> ink: root.dimmed ? #6f757e : Theme.text;
+
+    background: #00000000;
+
+    Rectangle {
+        x: -9px; y: -9px; width: parent.width + 18px; height: parent.height + 18px;
+        border-radius: root.radius + 9px;
+        background: #00000000;
+        border-width: 4px;
+        border-color: Theme.accent.transparentize(0.8);
+        visible: root.focused;
+    }
+    Rectangle {
+        x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px;
+        border-radius: root.radius + 6px;
+        background: #00000000;
+        border-width: 3px;
+        border-color: Theme.primary;
+        visible: root.focused;
+    }
+
+    Rectangle {
+        width: parent.width; height: parent.height;
+        border-radius: root.radius;
+        background: root.focused ? Theme.secondary-container : Theme.surface-container-low;
+        border-width: 1px;
+        border-color: root.focused ? Theme.secondary-container : Theme.outline-variant;
+
+        /* Icon in a tonal circle, text beside it. */
+        icon-bubble := Rectangle {
+            property <length> d: root.compact ? root.height * 0.72 : root.icon-size * 1.5;
+            x: root.roomy ? 24px * root.s : root.compact ? (parent.height - self.d) / 2 : 14px * root.s;
+            y: (parent.height - self.d) / 2;
+            width: self.d; height: self.d;
+            border-radius: self.d / 2;
+            background: root.dimmed ? Theme.surface-container : Theme.primary-container;
+
+            property <color> glyph: root.dimmed ? #6f757e : Theme.on-primary-container;
+            if root.icon == 0: Image {
+                x: (parent.width - root.icon-size) / 2; y: (parent.height - root.icon-size) / 2;
+                width: root.icon-size; height: root.icon-size;
+                source: @image-url("assets/icons/gamepad.svg");
+                colorize: icon-bubble.glyph;
+                image-fit: contain;
+            }
+            /* Folder and app grid: own geometry (no third-party icon). */
+            if root.icon == 1: Path {
+                x: (parent.width - root.icon-size) / 2; y: (parent.height - root.icon-size) / 2;
+                width: root.icon-size; height: root.icon-size;
+                viewbox-width: 24; viewbox-height: 24;
+                commands: "M2 5.5 C2 4.7 2.7 4 3.5 4 L9 4 L11 6 L20.5 6 C21.3 6 22 6.7 22 7.5 L22 18.5 C22 19.3 21.3 20 20.5 20 L3.5 20 C2.7 20 2 19.3 2 18.5 Z";
+                fill: icon-bubble.glyph;
+            }
+            if root.icon == 2: Path {
+                x: (parent.width - root.icon-size) / 2; y: (parent.height - root.icon-size) / 2;
+                width: root.icon-size; height: root.icon-size;
+                viewbox-width: 24; viewbox-height: 24;
+                commands: "M3 3 L10.5 3 L10.5 10.5 L3 10.5 Z M13.5 3 L21 3 L21 10.5 L13.5 10.5 Z M3 13.5 L10.5 13.5 L10.5 21 L3 21 Z M13.5 13.5 L21 13.5 L21 21 L13.5 21 Z";
+                fill: icon-bubble.glyph;
+            }
+        }
+
+        VerticalLayout {
+            x: icon-bubble.x + icon-bubble.width + (root.roomy ? 20px : 14px) * root.s;
+            y: 0;
+            width: parent.width - self.x - 20px * root.s;
+            height: parent.height;
+            alignment: center;
+            spacing: (root.compact ? 1px : 6px) * root.s;
+
+            Text {
+                text: root.headline;
+                color: root.ink;
+                font-size: (root.roomy ? 22px : root.compact ? 15px : 18px) * root.s;
+                font-weight: 600;
+                wrap: root.compact ? no-wrap : word-wrap;
+                overflow: elide;
+            }
+            Text {
+                text: root.body;
+                color: root.dimmed ? #6f757e : Theme.text-secondary;
+                font-size: (root.roomy ? 15px : root.compact ? 12px : 13px) * root.s;
+                wrap: root.compact ? no-wrap : word-wrap;
+                overflow: elide;
+                max-height: (root.roomy ? 3 : 2) * 20px * root.s;
+            }
+        }
+    }
+}
+
+/* One Home section: title and a horizontal strip. Recently Played shows
+ * covers (card-h tall, width from the cover aspect) with the focused
+ * game's title + metadata in a fixed band under them (info-h, also while
+ * another section is selected, dimmed, so nothing moves); the shelves
+ * show compact chips (chip-w > 0). The focused item is kept at the left
+ * edge (console catalogue style) until the end of the strip. Notices of
+ * the selected section go to the right of its title. */
 component HomeRow inherits Rectangle {
     in property <string> label;
     in property <[HomeCard]> cards;
     in property <int> index: 0;
     in property <bool> active: false;
     in property <length> card-h;
+    in property <length> chip-w: 0px;
     in property <length> label-h;
-    in property <length> info-h;
+    in property <length> info-h: 0px;
     in property <length> pad;
     in property <length> gap;
     in property <float> s: 1.0;
     in property <string> notice: "";
     in property <string> status: "";
     in property <string> unavailable-label;
+    /* Shown instead of the cards when the row is empty. */
+    in property <string> empty-headline;
+    in property <string> empty-body;
+    in property <int> empty-icon: 0;
 
-    property <length> focus-x: root.cards[root.index].x-units * root.card-h + root.index * root.gap;
+    property <bool> empty: root.cards.length == 0;
+    property <bool> chips: root.chip-w > 0px;
+    property <length> focus-x: root.chips ? root.index * (root.chip-w + root.gap)
+        : root.cards[root.index].x-units * root.card-h + root.index * root.gap;
     property <HomeCard> last: root.cards[root.cards.length - 1];
     property <HomeCard> focused: root.cards[root.index];
-    property <length> total-w: (root.last.x-units + root.last.aspect) * root.card-h
-        + (root.cards.length - 1) * root.gap;
+    property <length> total-w: root.chips ? root.cards.length * (root.chip-w + root.gap) - root.gap
+        : (root.last.x-units + root.last.aspect) * root.card-h + (root.cards.length - 1) * root.gap;
     property <length> h-scroll: max(0px, min(root.focus-x, root.total-w - (root.width - 2 * root.pad)));
+    /* Info shows in the title bar when this row has no info band. */
+    property <bool> title-notice: root.active && root.notice != "" && (root.chips || root.empty);
 
-    height: root.label-h + root.card-h + (root.active ? root.info-h : 0px);
+    height: root.label-h + root.card-h + root.info-h;
     background: #00000000;
 
     HomeSectionTitle {
-        x: root.pad; y: 0; width: parent.width - 2 * root.pad; height: root.label-h - 10px;
+        x: root.pad; y: 0; width: parent.width - 2 * root.pad; height: root.label-h - 6px * root.s;
         label: root.label;
         active: root.active;
-        label-size: 19px * root.s;
-        status: root.active ? root.status : "";
+        label-size: 16px * root.s;
+        status: root.title-notice ? root.notice : root.active ? root.status : "";
+        status-color: root.title-notice ? #ffc94a : Theme.text-faint;
     }
 
     /* Strip with 10 px above/below the cards for the focus glow. */
@@ -1143,29 +1518,58 @@ component HomeRow inherits Rectangle {
             background: #00000000;
             animate x { duration: 180ms; easing: ease-out; }
 
-            for card[i] in root.cards: HomeCardView {
-                x: card.x-units * root.card-h + i * root.gap;
+            for card[i] in root.cards: Rectangle {
+                x: root.chips ? i * (root.chip-w + root.gap) : card.x-units * root.card-h + i * root.gap;
                 y: 0;
-                width: card.aspect * root.card-h;
+                width: root.chips ? root.chip-w : card.aspect * root.card-h;
                 height: root.card-h;
-                card: card;
-                focused: root.active && i == root.index;
-                dimmed: !root.active;
-                unavailable-label: root.unavailable-label;
+                background: #00000000;
+
+                if !root.chips: HomeCardView {
+                    width: parent.width; height: parent.height;
+                    card: card;
+                    focused: root.active && i == root.index;
+                    dimmed: !root.active;
+                    unavailable-label: root.unavailable-label;
+                }
+                if root.chips: HomeChipView {
+                    width: parent.width; height: parent.height;
+                    card: card;
+                    focused: root.active && i == root.index;
+                    dimmed: !root.active;
+                    s: root.s;
+                }
             }
         }
     }
 
-    if root.active: HomeFocusInfo {
-        x: root.pad; y: root.label-h + root.card-h + 8px * root.s;
-        width: parent.width - 2 * root.pad; height: root.info-h - 8px * root.s;
+    /* An empty row has no info band: its card already says it all. */
+    if root.empty: HomeEmptyCard {
+        x: root.pad; y: root.label-h;
+        width: parent.width - 2 * root.pad;
+        height: root.card-h + root.info-h;
+        headline: root.empty-headline;
+        body: root.empty-body;
+        icon: root.empty-icon;
+        focused: root.active;
+        dimmed: !root.active;
+        s: root.s;
+    }
+
+    if root.info-h > 0px && !root.empty: HomeFocusInfo {
+        x: root.pad; y: root.label-h + root.card-h + 6px * root.s;
+        width: parent.width - 2 * root.pad; height: root.info-h - 6px * root.s;
         title: root.focused.title;
         detail: root.focused.detail;
-        notice: root.notice;
+        notice: root.active ? root.notice : "";
+        dimmed: !root.active;
         s: root.s;
     }
 }
 
+/* Power dialog choice (M3 tonal button). Armed = waiting for the
+ * confirming press: error roles, the prompt under the action name inside
+ * the button. */
 export component HomeWindow inherits Window {
     /*
      * Two-stage lifecycle transition.
@@ -1190,7 +1594,7 @@ export component HomeWindow inherits Window {
     callback splash-size-changed();
     changed width => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
     changed height => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
-    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Backup Policy", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Backup Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Backup to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores System, Display & Audio and Controller Mapping settings to their defaults.", "ROMs, BIOS, saves, media and USERDATA are not deleted.", "Press again to reset System settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Static", "Breathe", "Rainbow", "Pulse", "Chase", "Wave", "Sparkle", "Screen Reactive", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Mode", "Brightness", "Color", "System Effects", "Preview System Effects", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "System Effect Preview", "Low Battery", "Controller Connected", "Wi-Fi Search", "Boot", "System Launch", "Temporary red warning pulse", "Connection confirmation effect", "Animated wireless search", "nuubOS blue loading animation", "Context color while launching a system", "Left / Right to browse   •   Back to stop", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Create Support Bundle", "Creating support bundle…", "Support bundle saved", "The support bundle could not be created", "No ROMs, saves, passwords or Wi-Fi keys are included. Saved in the diagnostics folder of USERDATA.", "Repair Configuration", "Configuration checked", "The recovery operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Factory Reset and Erase User Data", "Checks and repairs damaged settings. Nothing is deleted.", "Resets the active user's preferences and app data. Saves and states are kept.", "Erases users, settings, Wi-Fi and Bluetooth pairings. ROMs, BIOS, saves and states are kept.", "Also erases saves, states, screenshots and app data of every user. ROMs and BIOS are kept.", "Press again • the console will restart", "Press again to erase user data", "Safe Mode", "nuubUI stopped repeatedly and started with the default appearance. Repair or reset, then exit safe mode.", "Exit Safe Mode", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Integer Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available in this build", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Support bundle", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in with an authorized SSH key", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Theme", "Theme installed", "This is not a valid nuubOS theme", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY", "Connect with WPS", "Cancel WPS", "Press the WPS button on your router…", "WPS timed out. Press the router button and try again.", "Several routers are in WPS mode. Try again in a few minutes.", "WPS failed: {0}", "WPS connection failed"];
+    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Automatic Backup", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Back Up Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Back Up to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores power, display, audio, backup and controller mapping settings to their defaults.", "Games, BIOS, saves, users and network settings are kept.", "Press again to reset system settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Solid", "Breathing", "Orbit", "Aurora", "Spectrum", "Battery Level", "Console Colors", "Speed", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Effect", "Brightness", "Color", "SYSTEM SIGNALS", "LIGHTING", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "Slow", "Normal", "Fast", "Startup & Sleep", "Connections", "Games", "Tasks", "Welcome, sleep, wake and power off", "Low battery, charging and full charge", "Controllers, headphones, Wi-Fi and USB drives", "Save states, screenshots and errors", "Downloads, backups and failures", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Save Diagnostic Report", "Saving diagnostic report…", "Report saved", "The report could not be saved", "Useful for getting help. It contains no games, saves, passwords or Wi-Fi keys and is saved in the diagnostics folder.", "Repair Settings", "Check complete", "The operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Full Factory Reset", "Finds and fixes damaged settings files. Games and saves are not touched.", "Resets the current user's preferences, controls and app settings. Saves are kept. The console restarts.", "Erases users, settings, Wi-Fi networks and Bluetooth pairings, then starts the initial setup. Games and BIOS are kept.", "Like Factory Reset, and also erases every user's saves, states, screenshots and app data. Games and BIOS are kept.", "Press again to confirm • the console restarts", "Press once more to also erase all saves", "Safe Mode", "The interface closed unexpectedly several times. nuubOS started with the default theme so you can fix the problem.", "Restart Normally", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Integer Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available in this build", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Diagnostic report", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in as root with the device password", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Theme", "Theme installed", "This is not a valid nuubOS theme", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY", "Connect with WPS", "Cancel WPS", "Press the WPS button on your router…", "WPS timed out. Press the router button and try again.", "Several routers are in WPS mode. Try again in a few minutes.", "WPS failed: {0}", "WPS connection failed", "Leaves safe mode and restarts with your theme and settings.", "Connect to Wi-Fi or turn on Remote Services to get help remotely. Back returns here.", "Nothing played yet", "Your adventure log is a blank page. Pick a game and write chapter one!", "Fresh save file", "No games played so far. The controller is warmed up and ready.", "Player 1, ready?", "Your recently played games will appear here. Go make some history!", "Zero high scores… for now", "Start any game and it will be waiting right here for you.", "This shelf is gathering dust", "Insert coin… or better, some games", "The arcade is quiet. Too quiet.", "Nothing to launch yet", "Applications you add will appear here.", "SERVICES", "DISPLAY", "AUDIO", "SOUNDS", "POWER", "STORAGE & SOFTWARE", "TROUBLESHOOTING", "CONTROLLERS", "RUMBLE & LIGHTING", "Saved Backups", "Backup deleted", "The backup could not be deleted", "Network name (SSID)", "Press together to exit", "Lights up only for system signals", "One steady color", "Slowly fades in and out", "A comet of light circles the stick", "Soft shades drift around the ring", "Every color, slowly turning", "Charge left at a glance, pulses while charging", "The color of the system you are playing", "Theme Color", "Cyan", "Mint", "Lime", "Amber", "Orange", "Red", "Pink", "Violet", "White", "Custom", "YOUR SYSTEMS", "OTHER SYSTEMS", "Start Game", "Continue", "Start from the Beginning", "Automatic Save", "Saved {0}", "Console Boot Screens", "Shows the console's start-up logo when its BIOS is available", "Save State Slots", "Rotate Save Slots", "Each save goes to the next slot, then starts again from slot 0", "Game Hotkeys", "Hold Hotkey and press a button", "Performance Overlay", "Bezels", "Frames the game when it does not fill the screen", "CRT Effect", "Scanlines for consoles played on TVs", "Next Slot", "Previous Slot", "Fast Forward", "Show Overlay", "Frame Rate", "Temperature", "Power Draw", "Battery", "Clock", "Empty"];
 
     in-out property <string> topbar-time: "--:--";
     in-out property <string> current-user-name: root.i18n-strings[204];
@@ -1217,6 +1621,9 @@ export component HomeWindow inherits Window {
     in-out property <int> home-shelf-index: 0;
     in-out property <int> home-apps-index: 0;
     in-out property <bool> library-scanning: false;
+    /* Picks the playful message of empty Home sections (Rust, per session
+     * / user switch). */
+    in-out property <int> home-empty-variant: 0;
     in-out property <string> home-notice: "";
     in-out property <bool> library-open: false;
     in-out property <string> library-title: "";
@@ -1233,16 +1640,22 @@ export component HomeWindow inherits Window {
      * canvas): type and spacing grow mildly with the height, card sizes
      * follow the space actually available. */
     property <float> home-s: max(1.0, min(1.4, root.height / 480px));
-    property <length> home-pad: 24px * root.home-s;
-    property <length> home-top-pad: 12px * root.home-s;
+    property <length> home-pad: 22px * root.home-s;
+    property <length> home-top-pad: 8px * root.home-s;
     property <length> home-rows-h: root.height - 102px - root.home-top-pad;
-    property <length> home-label-h: 40px * root.home-s;
-    property <length> home-info-h: 64px * root.home-s;
-    property <length> home-gap: 16px * root.home-s;
-    /* Large, console-like cards: the next row stays partly visible below
-     * the selected one and scrolls in as focus moves. */
-    property <length> home-big-h: max(128px, root.home-rows-h * 0.52);
-    property <length> home-small-h: max(80px, root.home-rows-h * 0.30);
+    property <length> home-label-h: 28px * root.home-s;
+    property <length> home-info-h: 52px * root.home-s;
+    property <length> home-gap: 14px * root.home-s;
+    /* One screen, no vertical scrolling (user request 2026-10-08): the
+     * shelves are compact chip rows and Recently Played takes all the
+     * height left, so the covers stay the largest thing on screen. The
+     * last 10 px keep the focus glow of the bottom row. */
+    property <length> home-chip-h: 44px * root.home-s;
+    property <length> home-chip-w: max(160px * root.home-s, min(240px * root.home-s,
+        (root.width - 2 * root.home-pad) / 3.2));
+    property <length> home-row-gap: 6px * root.home-s;
+    property <length> home-big-h: max(96px, root.home-rows-h - 10px - 3 * root.home-label-h
+        - 2 * root.home-chip-h - 2 * root.home-row-gap - root.home-info-h);
     property <length> library-view-h: root.home-rows-h - root.home-label-h - root.home-info-h;
     /* Grid density: about one column per 320 logical px (2 on handhelds,
      * up to 5 on wide screens), never taller than ~1.6 rows per screen. */
@@ -1258,13 +1671,14 @@ export component HomeWindow inherits Window {
     out property <length> home-cover-h: max(root.home-big-h, root.library-cell-h);
     out property <int> library-visible-rows: max(1, ceil(root.library-view-h
         / (root.library-cell-h + root.home-gap)));
-    property <bool> home-has-items: root.home-recent.length > 0 || root.home-shelf.length > 0
-        || root.home-apps.length > 0;
     property <HomeCard> home-focused: root.library-open ? root.library-games[root.library-index]
         : root.home-row == 0 ? root.home-recent[root.home-recent-index]
         : root.home-row == 1 ? root.home-shelf[root.home-shelf-index]
         : root.home-apps[root.home-apps-index];
-    property <bool> home-focus-valid: root.library-open ? root.library-games.length > 0 : root.home-has-items;
+    property <bool> home-focus-valid: root.library-open ? root.library-games.length > 0
+        : root.home-row == 0 ? root.home-recent.length > 0
+        : root.home-row == 1 ? root.home-shelf.length > 0
+        : root.home-apps.length > 0;
     in-out property <int> settings-selected-index: 0;
     in-out property <int> general-index: 0;
     in-out property <int> general-scroll-offset: 0;
@@ -1410,18 +1824,19 @@ export component HomeWindow inherits Window {
     in-out property <bool> rumble-enabled: true;
     in-out property <int> rumble-index: 0;
 
+    /* RGB Lighting (nuubos-lightingd): LIGHTING rows 0-3 (Effect, Color,
+     * Brightness, Speed), SYSTEM SIGNALS rows 4-8 (one toggle per signal
+     * category). Raw service values; labels are resolved here. */
     in-out property <bool> lighting-supported: false;
-    in-out property <string> lighting-mode: "off";
+    in-out property <string> lighting-effect: "off";
+    in-out property <string> lighting-color: "theme";
+    in-out property <color> lighting-swatch: #3a86ff;
     in-out property <int> lighting-brightness: 50;
-    in-out property <int> lighting-red: 58;
-    in-out property <int> lighting-green: 134;
-    in-out property <int> lighting-blue: 255;
-    in-out property <bool> lighting-system-effects: true;
-    in-out property <string> lighting-active-effect: "";
-    in-out property <string> lighting-color-name: root.i18n-strings[209];
+    in-out property <string> lighting-speed: "normal";
+    /* Bits: 0 power, 1 battery, 2 connections, 3 games, 4 tasks. */
+    in-out property <int> lighting-signals: 31;
     in-out property <int> lighting-index: 0;
-    in-out property <bool> lighting-preview-open: false;
-    in-out property <int> lighting-preview-index: 0;
+    in-out property <int> lighting-scroll: 0;
 
     /* Display & Audio is device-scoped physical policy. */
     in-out property <int> display-audio-index: 0;
@@ -1445,11 +1860,24 @@ export component HomeWindow inherits Window {
     in-out property <bool> power-sounds-enabled: true;
     in-out property <int> home-music-volume: 60;
     in-out property <int> display-audio-scroll-offset: 0;
+    /* Display & Audio sections (user request 2026-10-08): DISPLAY
+     * (Brightness, Color Temperature when the panel supports it), AUDIO
+     * (Audio Output, Volume, Applications, Home Music, Test Sound) and SOUNDS
+     * (System Sounds, Navigation Sounds, Power Sounds). Rust reads the
+     * section starts to map rows and scroll. */
+    out property <int> da-temp: root.display-color-temperature-available ? 1 : 0;
+    out property <int> da-audio-start: 1 + root.da-temp;
+    out property <int> da-sounds-start: 6 + root.da-temp;
 
     /* System is a device-global Product Service surface. The same real page is
      * rendered while the category rail owns focus and after entering it. */
     in-out property <int> system-index: 0;
     in-out property <int> system-scroll-offset: 0;
+    /* System sections: POWER (0-4), STORAGE & SOFTWARE (5 Storage,
+     * 6 Software Update, 7 System Information) and TROUBLESHOOTING
+     * (8 Diagnostics, 9 Recovery, 10 Reset System Settings). */
+    out property <int> system-storage-start: 5;
+    out property <int> system-support-start: 8;
     in-out property <string> system-version: root.i18n-strings[205];
     in-out property <string> system-build: root.i18n-strings[205];
     in-out property <string> system-profile: "auto";
@@ -1504,6 +1932,12 @@ export component HomeWindow inherits Window {
     in-out property <bool> gen-select: false;
     in-out property <string> gen-notice: "";
     in-out property <string> gen-section: "";
+    /* Optional second section: its first row (0 = none) and its label;
+     * rows follow sec-row-y like the sectioned category pages. */
+    in-out property <int> gen-split: 0;
+    in-out property <string> gen-split-label: "";
+    /* Confirm hint label for the focused row ("" = Select). */
+    in-out property <string> gen-select-label: "";
     in-out property <bool> details-active: false;
     /* Title of the shell (Game Details when empty; Files for the Files app). */
     in-out property <string> details-shell-title: "";
@@ -1518,6 +1952,13 @@ export component HomeWindow inherits Window {
     in-out property <bool> diag-busy: false;
     in-out property <bool> safe-mode: false;
     in-out property <string> recovery-notice: "";
+    /* Safe mode screen (EPIC-050): full screen like the OOB hero. safe-index:
+     * 0 Exit Safe Mode, then two columns: 1 Repair | 2 Support Bundle,
+     * 3 Reset User Profile | 4 Settings, 5 Factory Reset | 6 Factory Reset
+     * and Erase. Arming reuses recovery-armed/recovery-stage. Settings hides
+     * it; Back from the categories shows it again. */
+    in-out property <bool> safe-screen-open: false;
+    in-out property <int> safe-index: 0;
 
     /* Initial setup / OOB (EPIC-002). nuubos-usersd owns the setup state; the
      * OOB is the Settings shell with a step rail instead of the categories and
@@ -1579,9 +2020,6 @@ export component HomeWindow inherits Window {
     in-out property <bool> screensaver-active: false;
     in-out property <int> screensaver-x-permille: 110;
     in-out property <int> screensaver-y-permille: 170;
-    in-out property <bool> power-menu-open: false;
-    in-out property <int> power-menu-index: 0;
-    in-out property <bool> power-menu-confirm: false;
 
     /* Settings navigation depth:
      * 0 categories, 1 Connectivity, 2 Wi-Fi connect/scan,
@@ -1598,24 +2036,29 @@ export component HomeWindow inherits Window {
      * 45 Steam Link,
      * 50 Game Details, 51 Game Settings (the Details shell, details-active),
      * 52 BIOS Files, 53 BIOS Files of a system, 54 RetroAchievements,
-     * 55 Game Metadata, 56 Hidden Games, 57 Remote Services,
+     * 55 Game Hotkeys, 56 Performance Overlay, 57 Start Game (Details shell),
      * 58 Files and 60 Network Shares (the Files shell), 61 Removable Media,
-     * 62 Backup & Restore, 63 Software Update, 64 Online Services,
+     * 62 Backup & Restore, 63 Software Update,
      * 65 Media (its own shell), 66 Syncthing (generic rows, gen-rows),
      * 67 Web (Details shell, generic rows), 68 Gaming. */
     in-out property <int> settings-view: 0;
+    /* The page title: the system keyboard (6) keeps the title of the page it
+     * was opened from; its field label names what is entered. */
+    property <int> settings-title-view: root.settings-view == 6 ? root.keyboard-return-view : root.settings-view;
     /* Keep read-only/unavailable rows visually consistent with the rest of Settings.
      * The bottom action bar, not row opacity, communicates whether Confirm/Select
      * has an action for the currently focused row. */
     property <bool> settings-select-hint-visible: root.settings-open && (
         root.settings-choice-open ? true
         : root.settings-view >= 50 && root.settings-view <= 67 ? root.gen-select
+        : root.settings-view == 68 ? root.gaming-select
         : root.settings-view >= 30 ? true
         : root.settings-view == 23 ? true
         : root.settings-view == 24 ? true
         : root.settings-view == 25 ? true
         : root.settings-view == 26 ? true
         : root.settings-view == 21 ? false
+        : root.settings-view == 14 ? false
         : root.settings-view == 27 ? root.diag-index == 0
         : root.settings-view == 28 ? true
         : root.settings-view == 20 ? (
@@ -1626,7 +2069,7 @@ export component HomeWindow inherits Window {
                 && root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2")
             : false)
         : root.settings-view == 18 && root.display-audio-index == 0 ? root.display-brightness-available
-        : root.settings-view == 18 && root.display-audio-index == 2 ? root.audio-volume-supported
+        : root.settings-view == 18 && root.display-audio-index == root.da-audio-start + 1 ? root.audio-volume-supported
         : root.settings-view == 4 && root.wifi-detail-index == 1 ? root.wifi-wps-active || root.wifi-wps-available
         : root.settings-view == 4 && root.wifi-detail-index == 2 ? root.wifi-selected-security != root.i18n-strings[212]
         : root.settings-view == 4 && root.wifi-detail-index >= 4 && root.wifi-detail-index <= 7 ? root.wifi-ip-mode == "manual"
@@ -1635,19 +2078,27 @@ export component HomeWindow inherits Window {
         : root.settings-view == 1 && (root.connectivity-selected-index == 4 || root.connectivity-selected-index == 5) ? root.bluetooth-enabled
         : root.settings-view == 10 && root.controllers-menu-index == 2 ? root.rumble-supported
         : root.settings-view == 10 && root.controllers-menu-index == 3 ? root.lighting-supported
-        : root.settings-view == 17 && root.lighting-index == 2 ? root.lighting-color-capable
+        : root.settings-view == 17 && root.lighting-index == 1 ? root.lighting-color-capable
+        : root.settings-view == 17 && root.lighting-index == 3 ? root.lighting-speed-capable
         : true
     );
     in-out property <int> connectivity-selected-index: 0;
-    /* Connectivity keeps the focused row inside the sectioned viewport.
-     * Category preview remains fixed at offset 0. */
-    property <int> connectivity-scroll-offset:
-        root.settings-view == 1
-            ? max(0, root.connectivity-selected-index - root.settings-sectioned-visible-rows + 1)
-            : 0;
-    /* Gaming: USER section (RetroAchievements, Hidden Games), then the
-     * DEVICE section (Game Metadata, BIOS Files). */
+    /* Connectivity has three sections: WI-FI (0-2), BLUETOOTH (3-5) and
+     * SERVICES (from 6: SSH, SMB, Web Administration, Password, Regenerate
+     * Password, Syncthing; user requests 2026-10-08: the services sit on
+     * the page itself, no Remote/Online Services sub-pages). Rust keeps the focused row visible (sectioned_scroll); the
+     * category preview stays at offset 0. */
+    in-out property <int> connectivity-scroll: 0;
+    in-out property <[GenRow]> connectivity-services: [];
+    property <int> connectivity-scroll-offset: root.settings-view == 1 ? root.connectivity-scroll : 0;
+    /* Gaming: GAMING (USER: RetroAchievements and the emulation settings),
+     * then LIBRARY (DEVICE, from row gaming-split: ScreenScraper account, Get
+     * Metadata for All Games, BIOS Files). Rows = GenRows built by gameui.rs
+     * (render_gaming); gaming-select: the focused row has an action. */
     in-out property <int> gaming-index: 0;
+    in-out property <int> gaming-split: 1;
+    in-out property <[GenRow]> gaming-rows: [];
+    in-out property <bool> gaming-select: true;
     property <int> gaming-scroll-offset:
         root.settings-view == 68
             ? max(0, root.gaming-index - root.settings-sectioned-visible-rows + 1)
@@ -1709,16 +2160,21 @@ export component HomeWindow inherits Window {
     }
     /* General has four sections: PROFILE (0-2, user), USERS (3-5), DATE &
      * TIME (6-10) and KEYBOARD (11), the last three device-scoped. */
-    pure function general-row-y(k: int, scroll: int) -> length {
-        root.settings-content-y + (k - scroll) * root.settings-row-step
-            + ((scroll < 3 && k >= 3 ? 1 : 0) + (scroll < 6 && k >= 6 ? 1 : 0)
-               + (scroll < 11 && k >= 11 ? 1 : 0)) * root.settings-section-gap
-    }
-    pure function general-row-visible(k: int, scroll: int) -> bool {
-        k >= scroll && root.general-row-y(k, scroll) + root.settings-row-height <= root.settings-list-bottom
-    }
     pure function srow-visible(k: int, scroll: int, rows: int) -> bool {
         k >= scroll && k < scroll + rows
+    }
+    /* Sectioned category pages (user request 2026-10-08): a, b and c are the
+     * first rows of the second, third and fourth section (0 = none). The
+     * section of the first visible row is the sticky header; every later
+     * section below it gets an inline header. Rust keeps the focused row
+     * visible through sec-row-visible (sectioned_scroll in main.rs). */
+    pure function sec-row-y(k: int, scroll: int, a: int, b: int, c: int) -> length {
+        root.settings-content-y + (k - scroll) * root.settings-row-step
+            + ((a > 0 && scroll < a && k >= a ? 1 : 0) + (b > 0 && scroll < b && k >= b ? 1 : 0)
+               + (c > 0 && scroll < c && k >= c ? 1 : 0)) * root.settings-section-gap
+    }
+    public pure function sec-row-visible(k: int, scroll: int, a: int, b: int, c: int) -> bool {
+        k >= scroll && root.sec-row-y(k, scroll, a, b, c) + root.settings-row-height <= root.settings-list-bottom
     }
     pure function signal-label(dbm: int) -> string {
         dbm == 0 ? ""
@@ -1747,7 +2203,7 @@ export component HomeWindow inherits Window {
             : root.general-scroll-offset >= 6 ? root.i18n-strings[335]
             : root.general-scroll-offset >= 3 ? root.i18n-strings[334]
             : root.i18n-strings[333])
-        /* General sub-pages keep the section they were opened from. */
+        /* Sub-pages keep the section they were opened from. */
         : root.settings-view == 24 ? root.i18n-strings[333]
         : root.settings-view == 25 || root.settings-view == 26 ? root.i18n-strings[334]
         : root.settings-view == 30 ? root.i18n-strings[335]
@@ -1757,18 +2213,25 @@ export component HomeWindow inherits Window {
         : root.settings-view == 41 ? (root.moonlight-host.paired ? root.i18n-strings[135] : root.i18n-strings[436])
         : root.settings-view == 42 ? root.i18n-strings[473]
         : root.settings-view == 45 ? root.i18n-strings[477]
-        : root.settings-view == 27 ? root.i18n-strings[498]
-        : root.settings-view == 28 ? (root.safe-mode ? root.i18n-strings[518] : root.i18n-strings[499])
-        : root.settings-view >= 50 && root.settings-view <= 67 ? root.gen-section
-        : root.page-gaming ? (root.gaming-scroll-offset >= 2 ? root.i18n-strings[704] : root.i18n-strings[703])
-        : root.page-connectivity ? (root.connectivity-scroll-offset >= 3 ? root.i18n-strings[160] : root.i18n-strings[156])
+        : root.settings-view == 28 && root.safe-mode ? root.i18n-strings[518]
+        : root.settings-view >= 50 && root.settings-view <= 67
+            ? (root.gen-split > 0 && root.gen-scroll >= root.gen-split ? root.gen-split-label : root.gen-section)
+        : root.page-gaming ? (root.gaming-scroll-offset >= root.gaming-split ? root.i18n-strings[704] : root.i18n-strings[703])
+        : root.page-connectivity ? (root.connectivity-scroll-offset >= 6 ? root.i18n-strings[727]
+            : root.connectivity-scroll-offset >= 3 ? root.i18n-strings[160] : root.i18n-strings[156])
         : root.settings-view >= 2 && root.settings-view <= 4 ? root.i18n-strings[156]
         : root.settings-view >= 7 && root.settings-view <= 9 ? root.i18n-strings[160]
         /* Controller Mapping: 17 button rows, then the sticks. */
         : root.settings-view == 15 ? (root.controller-mapping-scroll-offset >= 17 ? root.i18n-strings[368] : root.i18n-strings[367])
-        : root.controllers-group ? root.i18n-strings[110]
-        : root.page-display-audio ? root.i18n-strings[131]
-        : root.page-system || (root.settings-view >= 20 && root.settings-view <= 22) || root.settings-view == 27 || root.settings-view == 28 ? root.i18n-strings[49]
+        : root.page-controllers || (root.settings-view >= 11 && root.settings-view <= 14) ? root.i18n-strings[734]
+        : root.settings-view == 16 ? root.i18n-strings[735]
+        : root.settings-view == 17 ? (root.lighting-scroll-offset >= 4 ? root.i18n-strings[129] : root.i18n-strings[130])
+        : root.page-display-audio ? (root.display-audio-scroll-offset >= root.da-sounds-start ? root.i18n-strings[730]
+            : root.display-audio-scroll-offset >= root.da-audio-start ? root.i18n-strings[729] : root.i18n-strings[728])
+        : root.page-system ? (root.system-scroll-offset >= root.system-support-start ? root.i18n-strings[733]
+            : root.system-scroll-offset >= root.system-storage-start ? root.i18n-strings[732] : root.i18n-strings[731])
+        : root.settings-view == 20 || root.settings-view == 21 ? root.i18n-strings[732]
+        : root.settings-view == 22 || root.settings-view == 27 || root.settings-view == 28 ? root.i18n-strings[733]
         : "";
     /* Ownership chip. General and the user pages are split purely by
      * ownership, so they show the USER/DEVICE chip alone. */
@@ -1780,11 +2243,11 @@ export component HomeWindow inherits Window {
         : root.settings-view >= 40 && root.settings-view <= 42 ? root.i18n-strings[312]
         /* The Steam Link application is shared by every user. */
         : root.settings-view == 45 ? root.i18n-strings[313]
-        /* A game's details and settings, achievements and hidden games are
-         * the user's; BIOS files and metadata are device-wide. */
-        : root.settings-view == 50 || root.settings-view == 51 || root.settings-view == 54 || root.settings-view == 56 || root.settings-view == 62 || root.settings-view == 66 || root.settings-view == 67 ? root.i18n-strings[312]
-        : root.settings-view == 52 || root.settings-view == 53 || root.settings-view == 55 ? root.i18n-strings[313]
-        : root.page-gaming ? (root.gaming-scroll-offset >= 2 ? root.i18n-strings[313] : root.i18n-strings[312])
+        /* A game's details and settings and achievements are the user's;
+         * BIOS files and the ScreenScraper account are device-wide. */
+        : root.settings-view == 50 || root.settings-view == 51 || (root.settings-view >= 54 && root.settings-view <= 57) || root.settings-view == 62 || root.settings-view == 66 || root.settings-view == 67 ? root.i18n-strings[312]
+        : root.settings-view == 52 || root.settings-view == 53 ? root.i18n-strings[313]
+        : root.page-gaming ? (root.gaming-scroll-offset >= root.gaming-split ? root.i18n-strings[313] : root.i18n-strings[312])
         : root.settings-section-label == "" ? ""
         : root.controllers-group ? root.i18n-strings[312]
         : root.i18n-strings[313];
@@ -1792,9 +2255,13 @@ export component HomeWindow inherits Window {
     property <string> settings-notice:
         root.moonlight-active && (root.settings-view >= 40 || root.settings-view == 6) ? root.moonlight-notice
         : root.steamlink-active && root.settings-view == 45 ? root.steamlink-notice
-        : root.settings-view >= 2 && root.settings-view <= 4 ? root.wifi-notice
+        : root.settings-view >= 2 && root.settings-view <= 4 ? (root.wifi-notice != "" ? root.wifi-notice
+            /* A scan with networks already listed (e.g. the current one)
+             * still says it is searching. */
+            : root.settings-view == 2 && root.wifi-scanning && root.wifi-networks.length > 0 ? root.i18n-strings[164]
+            : "")
         : root.settings-view >= 50 && root.settings-view <= 67 ? root.gen-notice
-        : root.settings-view == 68 ? ""
+        : root.settings-view == 68 ? root.gen-notice
         : root.settings-view == 31 ? (root.wifi-notice != "" ? root.wifi-notice : root.oob-notice)
         : root.settings-view >= 30 ? root.oob-notice
         : root.settings-view == 27 || root.settings-view == 28 ? root.recovery-notice
@@ -1803,20 +2270,31 @@ export component HomeWindow inherits Window {
         : root.settings-view == 15 && root.controller-remap-waiting ? root.controller-remap-prompt
         : "";
 
-    property <string> lighting-mode-label:
-        root.lighting-mode == "off" ? root.i18n-strings[54]
-        : root.lighting-mode == "static" ? root.i18n-strings[114]
-        : root.lighting-mode == "breathe" ? root.i18n-strings[115]
-        : root.lighting-mode == "rainbow" ? root.i18n-strings[116]
-        : root.lighting-mode == "pulse" ? root.i18n-strings[117]
-        : root.lighting-mode == "chase" ? root.i18n-strings[118]
-        : root.lighting-mode == "wave" ? root.i18n-strings[119]
-        : root.lighting-mode == "sparkle" ? root.i18n-strings[120]
-        : root.lighting-mode == "screen" ? root.i18n-strings[121]
-        : root.lighting-mode;
-    property <bool> lighting-color-capable: root.lighting-mode == "static"
-        || root.lighting-mode == "breathe" || root.lighting-mode == "pulse"
-        || root.lighting-mode == "chase" || root.lighting-mode == "wave";
+    pure function lighting-effect-index(effect: string) -> int {
+        effect == "solid" ? 114 : effect == "breathe" ? 115 : effect == "orbit" ? 116
+            : effect == "aurora" ? 117 : effect == "spectrum" ? 118 : effect == "battery" ? 119
+            : effect == "game" ? 120 : 54
+    }
+    pure function lighting-effect-detail-index(effect: string) -> int {
+        effect == "solid" ? 742 : effect == "breathe" ? 743 : effect == "orbit" ? 744
+            : effect == "aurora" ? 745 : effect == "spectrum" ? 746 : effect == "battery" ? 747
+            : effect == "game" ? 748 : 741
+    }
+    /* Same palette as lighting.rs COLORS. */
+    pure function lighting-color-index(value: string) -> int {
+        value == "theme" ? 749 : value == "3a86ff" ? 209 : value == "00c2e0" ? 750
+            : value == "2ee6a6" ? 751 : value == "a6e22e" ? 752 : value == "ffb020" ? 753
+            : value == "ff6a1a" ? 754 : value == "ff2e3e" ? 755 : value == "ff3ea5" ? 756
+            : value == "9b5cff" ? 757 : value == "ffffff" ? 758 : 759
+    }
+    property <string> lighting-effect-label: root.i18n-strings[root.lighting-effect-index(root.lighting-effect)];
+    property <bool> lighting-color-capable: root.lighting-effect == "solid"
+        || root.lighting-effect == "breathe" || root.lighting-effect == "orbit"
+        || root.lighting-effect == "aurora";
+    property <bool> lighting-speed-capable: root.lighting-effect == "breathe"
+        || root.lighting-effect == "orbit" || root.lighting-effect == "aurora"
+        || root.lighting-effect == "spectrum";
+    property <int> lighting-scroll-offset: root.settings-view == 17 ? root.lighting-scroll : 0;
     in-out property <int> wifi-ip-index: 0;
 
     in-out property <bool> wifi-enabled: false;
@@ -2021,9 +2499,9 @@ export component HomeWindow inherits Window {
                 width: 76px;
                 horizontal-alignment: center;
                 text: root.topbar-time;
-                color: #d9dce1;
+                color: Theme.text;
                 font-size: 19px;
-                font-weight: 600;
+                font-weight: 500;
             }
 
             /* Right: connected external controllers (up to eight players). */
@@ -2083,13 +2561,10 @@ export component HomeWindow inherits Window {
             }
         }
 
-        /* Home: focus header + carousels (Recently Played, Systems &
-         * Collections, Applications) or the library grid of one system /
-         * collection. Rows scroll so the focused row and card stay visible. */
-        /* Home: carousels (Recently Played, Systems & Collections,
-         * Applications) or the library grid of one system / collection.
-         * The selected row shows the focused card's title + metadata under
-         * its covers; rows scroll so it stays whole on screen. */
+        /* Home: Recently Played covers with the focused game's title +
+         * metadata, then the Systems & Collections and Applications chip
+         * shelves, all on one screen; or the library grid of one system /
+         * collection. */
         home-view := Rectangle {
             x: 0;
             y: 50px;
@@ -2099,93 +2574,78 @@ export component HomeWindow inherits Window {
             visible: !root.settings-open;
             clip: true;
 
-            property <length> row-gap: 10px * root.home-s;
-            property <bool> show-recent: root.home-recent.length > 0;
-            property <bool> show-shelf: root.home-shelf.length > 0;
-            property <bool> show-apps: root.home-apps.length > 0;
-            property <length> h0: self.show-recent ? root.home-label-h + root.home-big-h
-                + (root.home-row == 0 ? root.home-info-h : 0px) + self.row-gap : 0px;
-            property <length> h1: self.show-shelf ? root.home-label-h + root.home-small-h
-                + (root.home-row == 1 ? root.home-info-h : 0px) + self.row-gap : 0px;
-            property <length> h2: self.show-apps ? root.home-label-h + root.home-small-h
-                + (root.home-row == 2 ? root.home-info-h : 0px) : 0px;
-            property <length> y1: self.h0;
-            property <length> y2: self.h0 + self.h1;
-            property <length> total: self.y2 + self.h2;
-            property <length> focus-y: root.home-row == 0 ? 0px : root.home-row == 1 ? self.y1 : self.y2;
-            /* Scroll only to row boundaries: never leave a row half visible
-             * at the top, never scroll past the stop showing the last row. */
-            property <length> overflow: self.total - root.home-rows-h;
-            property <length> last-stop: self.overflow <= 0px ? 0px : self.overflow <= self.y1 ? self.y1 : self.y2;
-            property <length> v-scroll: min(self.focus-y, self.last-stop);
+            /* Fixed positions: moving between sections never moves the
+             * layout. Every section stays on screen; an empty one shows a
+             * playful empty-state card instead of covers or chips. */
+            property <int> variant: root.home-empty-variant;
+            property <length> y1: root.home-label-h + root.home-big-h + root.home-info-h + root.home-row-gap;
+            property <length> y2: self.y1 + root.home-label-h + root.home-chip-h + root.home-row-gap;
             property <string> status: root.library-scanning ? root.i18n-strings[410] : "";
 
-            /* Carousels. */
             Rectangle {
                 x: 0;
                 y: root.home-top-pad;
                 width: parent.width;
                 height: root.home-rows-h;
                 clip: true;
-                visible: !root.library-open && root.home-has-items;
+                visible: !root.library-open;
 
-                Rectangle {
-                    x: 0;
-                    y: -home-view.v-scroll;
-                    width: parent.width;
-                    height: home-view.total;
-                    animate y { duration: 180ms; easing: ease-out; }
-
-                    if home-view.show-recent: HomeRow {
-                        x: 0; y: 0; width: parent.width;
-                        label: root.i18n-strings[0];
-                        cards: root.home-recent;
-                        index: root.home-recent-index;
-                        active: root.home-row == 0;
-                        card-h: root.home-big-h;
-                        label-h: root.home-label-h;
-                        info-h: root.home-info-h;
-                        pad: root.home-pad;
-                        gap: root.home-gap;
-                        s: root.home-s;
-                        notice: root.home-notice;
-                        status: home-view.status;
-                        unavailable-label: root.i18n-strings[205];
-                    }
-                    if home-view.show-shelf: HomeRow {
-                        x: 0; y: home-view.y1; width: parent.width;
-                        animate y { duration: 180ms; easing: ease-out; }
-                        label: root.i18n-strings[1];
-                        cards: root.home-shelf;
-                        index: root.home-shelf-index;
-                        active: root.home-row == 1;
-                        card-h: root.home-small-h;
-                        label-h: root.home-label-h;
-                        info-h: root.home-info-h;
-                        pad: root.home-pad;
-                        gap: root.home-gap;
-                        s: root.home-s;
-                        notice: root.home-notice;
-                        status: home-view.status;
-                        unavailable-label: root.i18n-strings[205];
-                    }
-                    if home-view.show-apps: HomeRow {
-                        x: 0; y: home-view.y2; width: parent.width;
-                        animate y { duration: 180ms; easing: ease-out; }
-                        label: root.i18n-strings[135];
-                        cards: root.home-apps;
-                        index: root.home-apps-index;
-                        active: root.home-row == 2;
-                        card-h: root.home-small-h;
-                        label-h: root.home-label-h;
-                        info-h: root.home-info-h;
-                        pad: root.home-pad;
-                        gap: root.home-gap;
-                        s: root.home-s;
-                        notice: root.home-notice;
-                        status: home-view.status;
-                        unavailable-label: root.i18n-strings[205];
-                    }
+                HomeRow {
+                    x: 0; y: 0; width: parent.width;
+                    label: root.i18n-strings[0];
+                    cards: root.home-recent;
+                    index: root.home-recent-index;
+                    active: root.home-row == 0;
+                    card-h: root.home-big-h;
+                    label-h: root.home-label-h;
+                    info-h: root.home-info-h;
+                    pad: root.home-pad;
+                    gap: root.home-gap;
+                    s: root.home-s;
+                    notice: root.home-notice;
+                    status: home-view.status;
+                    unavailable-label: root.i18n-strings[205];
+                    empty-headline: root.i18n-strings[714 + 2 * mod(home-view.variant, 4)];
+                    empty-body: root.i18n-strings[715 + 2 * mod(home-view.variant, 4)];
+                    empty-icon: 0;
+                }
+                HomeRow {
+                    x: 0; y: home-view.y1; width: parent.width;
+                    label: root.i18n-strings[1];
+                    cards: root.home-shelf;
+                    index: root.home-shelf-index;
+                    active: root.home-row == 1;
+                    card-h: root.home-chip-h;
+                    chip-w: root.home-chip-w;
+                    label-h: root.home-label-h;
+                    pad: root.home-pad;
+                    gap: root.home-gap * 0.75;
+                    s: root.home-s;
+                    notice: root.home-notice;
+                    status: home-view.status;
+                    unavailable-label: root.i18n-strings[205];
+                    empty-headline: root.i18n-strings[722 + mod(home-view.variant, 3)];
+                    empty-body: root.library-scanning ? root.i18n-strings[410] : root.i18n-strings[2];
+                    empty-icon: 1;
+                }
+                HomeRow {
+                    x: 0; y: home-view.y2; width: parent.width;
+                    label: root.i18n-strings[135];
+                    cards: root.home-apps;
+                    index: root.home-apps-index;
+                    active: root.home-row == 2;
+                    card-h: root.home-chip-h;
+                    chip-w: root.home-chip-w;
+                    label-h: root.home-label-h;
+                    pad: root.home-pad;
+                    gap: root.home-gap * 0.75;
+                    s: root.home-s;
+                    notice: root.home-notice;
+                    status: home-view.status;
+                    unavailable-label: root.i18n-strings[205];
+                    empty-headline: root.i18n-strings[725];
+                    empty-body: root.i18n-strings[726];
+                    empty-icon: 2;
                 }
             }
 
@@ -2212,10 +2672,10 @@ export component HomeWindow inherits Window {
                     x: root.home-pad;
                     y: 0;
                     width: parent.width - 2 * root.home-pad;
-                    height: root.home-label-h - 10px;
+                    height: root.home-label-h - 6px * root.home-s;
                     label: root.library-detail != "" ? root.library-title + "  •  " + root.library-detail : root.library-title;
                     active: true;
-                    label-size: 19px * root.home-s;
+                    label-size: 16px * root.home-s;
                     status: home-view.status;
                 }
 
@@ -2249,9 +2709,9 @@ export component HomeWindow inherits Window {
 
                 if root.home-focus-valid: HomeFocusInfo {
                     x: root.home-pad;
-                    y: root.home-label-h + root.library-view-h + 8px * root.home-s;
+                    y: root.home-label-h + root.library-view-h + 6px * root.home-s;
                     width: parent.width - 2 * root.home-pad;
-                    height: root.home-info-h - 8px * root.home-s;
+                    height: root.home-info-h - 6px * root.home-s;
                     title: root.home-focused.title;
                     detail: root.home-focused.detail;
                     notice: root.home-notice;
@@ -2259,36 +2719,6 @@ export component HomeWindow inherits Window {
                 }
             }
 
-            /* Nothing to show yet: say where games go. */
-            if !root.home-has-items && !root.library-open: VerticalLayout {
-                x: 40px;
-                y: 0px;
-                width: parent.width - 80px;
-                height: parent.height;
-                alignment: center;
-                spacing: 10px * root.home-s;
-
-                Text {
-                    text: root.i18n-strings[398];
-                    horizontal-alignment: center;
-                    color: Theme.text;
-                    font-size: 28px * root.home-s;
-                    font-weight: 700;
-                }
-                Text {
-                    text: root.i18n-strings[2];
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
-                    color: Theme.text-secondary;
-                    font-size: 18px * root.home-s;
-                }
-                if root.library-scanning: Text {
-                    text: root.i18n-strings[410];
-                    horizontal-alignment: center;
-                    color: Theme.text-faint;
-                    font-size: 14px * root.home-s;
-                }
-            }
         }
 
         /* Settings shell: thematic categories only, no fake functionality. */
@@ -2309,8 +2739,8 @@ export component HomeWindow inherits Window {
                     : root.details-active ? (root.details-shell-title != "" ? root.details-shell-title : root.i18n-strings[522])
                     : root.i18n-strings[3];
                 color: Theme.text;
-                font-size: 29px;
-                font-weight: 700;
+                font-size: 28px;
+                font-weight: 600;
             }
 
             Rectangle {
@@ -2318,10 +2748,8 @@ export component HomeWindow inherits Window {
                 y: 54px;
                 width: root.settings-rail-width;
                 height: parent.height - 70px;
-                background: #101114;
-                border-width: 1px;
-                border-color: #202329;
-                border-radius: 8px;
+                background: Theme.surface-container-low;
+                border-radius: Shape.large;
                 clip: true;
 
                 for category[i] in [4, 5, 6, 702, 7, 8]: SettingsCategory {
@@ -2414,10 +2842,7 @@ export component HomeWindow inherits Window {
                 y: 0px;
                 width: parent.width - root.settings-pane-x;
                 height: parent.height;
-                background: #111214;
-                border-width: 1px;
-                border-color: #202329;
-                border-radius: 0px;
+                background: Theme.background;
                 clip: true;
 
                 /* settings-view == 0 means the category rail owns focus.
@@ -2428,64 +2853,63 @@ export component HomeWindow inherits Window {
                     y: 14px;
                     width: root.settings-content-width;
                     height: 36px;
-                    label: root.settings-view == 0
+                    label: root.settings-title-view == 0
                         ? (root.settings-selected-index == 0 ? root.i18n-strings[4]
                             : root.settings-selected-index == 1 ? root.i18n-strings[5]
                             : root.settings-selected-index == 2 ? root.i18n-strings[6]
                             : root.settings-selected-index == 3 ? root.i18n-strings[702]
                             : root.settings-selected-index == 4 ? root.i18n-strings[7]
                             : root.i18n-strings[8])
-                        : root.settings-view == 1 ? root.i18n-strings[5]
-                        : root.settings-view == 2 ? root.i18n-strings[9]
-                        : root.settings-view == 3 ? root.i18n-strings[10]
-                        : root.settings-view == 4 ? root.wifi-selected-ssid
-                        : root.settings-view == 6 ? root.keyboard-title
-                        : root.settings-view == 7 ? root.i18n-strings[11]
-                        : root.settings-view == 8 ? root.i18n-strings[12]
-                        : root.settings-view == 9 ? root.bluetooth-selected-name
-                        : root.settings-view == 10 ? root.i18n-strings[6]
-                        : root.settings-view == 11 ? root.i18n-strings[13]
-                        : root.settings-view == 12 ? root.i18n-strings[14]
-                        : root.settings-view == 13 ? root.controller-selected-name
-                        : root.settings-view == 14 ? root.i18n-strings[15]
-                        : root.settings-view == 15 ? root.i18n-strings[16]
-                        : root.settings-view == 16 ? root.i18n-strings[17]
-                        : root.settings-view == 17 ? root.i18n-strings[18]
-                        : root.settings-view == 18 ? root.i18n-strings[7]
-                        : root.settings-view == 19 ? root.i18n-strings[8]
-                        : root.settings-view == 20 ? root.i18n-strings[19]
-                        : root.settings-view == 21 ? root.i18n-strings[20]
-                        : root.settings-view == 22 ? root.i18n-strings[21]
-                        : root.settings-view == 23 ? root.i18n-strings[4]
-                        : root.settings-view == 24 ? root.i18n-strings[284]
-                        : root.settings-view == 25 ? root.i18n-strings[287]
-                        : root.settings-view == 26 ? root.profile-edit-name
-                        : root.settings-view == 30 ? root.i18n-strings[46]
-                        : root.settings-view == 31 ? root.i18n-strings[157]
-                        : root.settings-view == 32 ? root.i18n-strings[275]
-                        : root.settings-view == 40 ? root.i18n-strings[436]
-                        : root.settings-view == 41 ? root.moonlight-host.name
-                        : root.settings-view == 42 ? root.i18n-strings[437]
-                        : root.settings-view == 45 ? root.i18n-strings[477]
-                        : root.settings-view == 27 ? root.i18n-strings[498]
-                        : root.settings-view == 28 ? (root.safe-mode ? root.i18n-strings[518] : root.i18n-strings[499])
-                        : root.settings-view == 50 ? root.i18n-strings[523]
-                        : root.settings-view == 51 ? root.i18n-strings[524]
-                        : root.settings-view == 52 || root.settings-view == 53 ? root.i18n-strings[576]
-                        : root.settings-view == 54 ? root.i18n-strings[584]
-                        : root.settings-view == 55 ? root.i18n-strings[564]
-                        : root.settings-view == 56 ? root.i18n-strings[541]
-                        : root.settings-view == 57 ? root.i18n-strings[599]
-                        : root.settings-view == 58 ? root.i18n-strings[609]
-                        : root.settings-view == 60 ? root.i18n-strings[611]
-                        : root.settings-view == 61 ? root.i18n-strings[625]
-                        : root.settings-view == 62 ? root.i18n-strings[630]
-                        : root.settings-view == 63 ? root.i18n-strings[651]
-                        : root.settings-view == 64 ? root.i18n-strings[661]
-                        : root.settings-view == 65 ? root.i18n-strings[665]
-                        : root.settings-view == 66 ? root.i18n-strings[669]
-                        : root.settings-view == 67 ? root.i18n-strings[678]
-                        : root.settings-view == 68 ? root.i18n-strings[702]
+                        : root.settings-title-view == 1 ? root.i18n-strings[5]
+                        : root.settings-title-view == 2 ? root.i18n-strings[9]
+                        : root.settings-title-view == 3 ? root.i18n-strings[10]
+                        : root.settings-title-view == 4 ? root.wifi-selected-ssid
+                        : root.settings-title-view == 6 ? root.keyboard-title
+                        : root.settings-title-view == 7 ? root.i18n-strings[11]
+                        : root.settings-title-view == 8 ? root.i18n-strings[12]
+                        : root.settings-title-view == 9 ? root.bluetooth-selected-name
+                        : root.settings-title-view == 10 ? root.i18n-strings[6]
+                        : root.settings-title-view == 11 ? root.i18n-strings[13]
+                        : root.settings-title-view == 12 ? root.i18n-strings[14]
+                        : root.settings-title-view == 13 ? root.controller-selected-name
+                        : root.settings-title-view == 14 ? root.i18n-strings[15]
+                        : root.settings-title-view == 15 ? root.i18n-strings[16]
+                        : root.settings-title-view == 16 ? root.i18n-strings[17]
+                        : root.settings-title-view == 17 ? root.i18n-strings[18]
+                        : root.settings-title-view == 18 ? root.i18n-strings[7]
+                        : root.settings-title-view == 19 ? root.i18n-strings[8]
+                        : root.settings-title-view == 20 ? root.i18n-strings[19]
+                        : root.settings-title-view == 21 ? root.i18n-strings[20]
+                        : root.settings-title-view == 22 ? root.i18n-strings[109]
+                        : root.settings-title-view == 23 ? root.i18n-strings[4]
+                        : root.settings-title-view == 24 ? root.i18n-strings[284]
+                        : root.settings-title-view == 25 ? root.i18n-strings[287]
+                        : root.settings-title-view == 26 ? root.profile-edit-name
+                        : root.settings-title-view == 30 ? root.i18n-strings[46]
+                        : root.settings-title-view == 31 ? root.i18n-strings[157]
+                        : root.settings-title-view == 32 ? root.i18n-strings[275]
+                        : root.settings-title-view == 40 ? root.i18n-strings[436]
+                        : root.settings-title-view == 41 ? root.moonlight-host.name
+                        : root.settings-title-view == 42 ? root.i18n-strings[437]
+                        : root.settings-title-view == 45 ? root.i18n-strings[477]
+                        : root.settings-title-view == 27 ? root.i18n-strings[498]
+                        : root.settings-title-view == 28 ? (root.safe-mode ? root.i18n-strings[518] : root.i18n-strings[499])
+                        : root.settings-title-view == 50 ? root.i18n-strings[523]
+                        : root.settings-title-view == 51 ? root.i18n-strings[524]
+                        : root.settings-title-view == 52 || root.settings-title-view == 53 ? root.i18n-strings[576]
+                        : root.settings-title-view == 54 ? root.i18n-strings[584]
+                        : root.settings-title-view == 55 ? root.i18n-strings[772]
+                        : root.settings-title-view == 56 ? root.i18n-strings[774]
+                        : root.settings-title-view == 57 ? root.i18n-strings[762]
+                        : root.settings-title-view == 58 ? root.i18n-strings[609]
+                        : root.settings-title-view == 60 ? root.i18n-strings[611]
+                        : root.settings-title-view == 61 ? root.i18n-strings[625]
+                        : root.settings-title-view == 62 ? root.i18n-strings[630]
+                        : root.settings-title-view == 63 ? root.i18n-strings[651]
+                        : root.settings-title-view == 65 ? root.i18n-strings[665]
+                        : root.settings-title-view == 66 ? root.i18n-strings[669]
+                        : root.settings-title-view == 67 ? root.i18n-strings[678]
+                        : root.settings-title-view == 68 ? root.i18n-strings[702]
                         : root.i18n-strings[3];
                     text-color: Theme.text;
                     text-size: 26px;
@@ -2504,17 +2928,20 @@ export component HomeWindow inherits Window {
                     visible: root.settings-section-label != "" || root.settings-section-scope != "";
                 }
 
-                /* Inline header for Connectivity's second section while it is
-                 * below the top. */
-                SettingsSectionHeader {
+                /* Inline headers for Connectivity's later sections while they
+                 * are below the top. */
+                for section[i] in [
+                    { start: 3, label: root.i18n-strings[160] },
+                    { start: 6, label: root.i18n-strings[727] },
+                ]: SettingsSectionHeader {
                     x: root.settings-content-x;
-                    y: root.srow-y(3, root.connectivity-scroll-offset, 3) - root.settings-section-gap;
+                    y: root.sec-row-y(section.start, root.connectivity-scroll-offset, 3, 6, 0) - root.settings-section-gap;
                     width: root.settings-content-width;
-                    label: root.i18n-strings[160];
+                    label: section.label;
                     scope-label: root.i18n-strings[313];
                     visible: root.page-connectivity
-                        && root.connectivity-scroll-offset < 3
-                        && 3 < root.connectivity-scroll-offset + root.settings-sectioned-visible-rows;
+                        && root.connectivity-scroll-offset < section.start
+                        && root.sec-row-visible(section.start, root.connectivity-scroll-offset, 3, 6, 0);
                 }
 
                 /* Inline headers for General's later sections. */
@@ -2524,13 +2951,13 @@ export component HomeWindow inherits Window {
                     { start: 11, label: root.i18n-strings[336] },
                 ]: SettingsSectionHeader {
                     x: root.settings-content-x;
-                    y: root.general-row-y(section.start, root.general-scroll-offset) - root.settings-section-gap;
+                    y: root.sec-row-y(section.start, root.general-scroll-offset, 3, 6, 11) - root.settings-section-gap;
                     width: root.settings-content-width;
                     label: section.label;
                     scope-label: root.i18n-strings[313];
                     visible: root.page-general
                         && root.general-scroll-offset < section.start
-                        && root.general-row-visible(section.start, root.general-scroll-offset);
+                        && root.sec-row-visible(section.start, root.general-scroll-offset, 3, 6, 11);
                 }
 
                 /* ---------------------------------------------------------- General */
@@ -2549,7 +2976,7 @@ export component HomeWindow inherits Window {
                     { title: root.i18n-strings[283], value: root.keyboard-layout-label, enabled: true, nav: false, toggle: false, on: false, detail: "" },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.general-row-y(k, root.general-scroll-offset);
+                    y: root.sec-row-y(k, root.general-scroll-offset, 3, 6, 11);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -2561,7 +2988,7 @@ export component HomeWindow inherits Window {
                     toggle-on: row.on;
                     selected: root.settings-view == 23 && root.general-index == k;
                     visible: root.page-general
-                        && root.general-row-visible(k, root.general-scroll-offset);
+                        && root.sec-row-visible(k, root.general-scroll-offset, 3, 6, 11);
                 }
 
                 /* ------------------------------------------- Profile (own / other) */
@@ -2584,7 +3011,7 @@ export component HomeWindow inherits Window {
                         && root.srow-visible(1, root.profile-row-scroll, root.settings-list-visible-rows);
                 }
                 /* Own profile only: per-user features. */
-                for item[k] in [630, 669]: SettingsSelectableRow {
+                for item[k] in [630]: SettingsSelectableRow {
                     x: root.settings-content-x; y: root.srow-y(k + 2, root.profile-row-scroll, 0); width: root.settings-content-width; height: root.settings-row-height;
                     title: root.i18n-strings[item];
                     navigates: true;
@@ -2593,7 +3020,9 @@ export component HomeWindow inherits Window {
                 }
                 SettingsActionButton {
                     x: root.settings-content-x; y: root.srow-y(2, root.profile-row-scroll, 0); width: root.settings-content-width; height: root.settings-row-height;
-                    label: root.user-delete-confirm ? root.i18n-strings[290] : root.i18n-strings[289];
+                    armed: root.user-delete-confirm;
+                    label: root.i18n-strings[289];
+                    prompt: root.i18n-strings[290];
                     danger: true;
                     selected: root.settings-view == 26 && root.profile-index == 2;
                     enabled: root.profile-edit-user-id != root.active-user-id && root.user-count > 1;
@@ -2827,7 +3256,9 @@ export component HomeWindow inherits Window {
                     y: root.srow-y(root.moonlight-remove-row, root.moonlight-scroll, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
-                    label: root.moonlight-remove-confirm ? root.i18n-strings[191] : root.i18n-strings[450];
+                    armed: root.moonlight-remove-confirm;
+                    label: root.i18n-strings[450];
+                    prompt: root.i18n-strings[191];
                     danger: true;
                     selected: root.settings-view == 41 && root.moonlight-index == root.moonlight-remove-row;
                     visible: root.settings-view == 41
@@ -2904,7 +3335,9 @@ export component HomeWindow inherits Window {
                     y: root.srow-y(2, 0, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
-                    label: root.steamlink-remove-confirm ? root.i18n-strings[191] : root.i18n-strings[490];
+                    armed: root.steamlink-remove-confirm;
+                    label: root.i18n-strings[490];
+                    prompt: root.i18n-strings[191];
                     danger: true;
                     selected: root.settings-view == 45 && root.steamlink-index == 2;
                     visible: root.settings-view == 45 && root.steamlink-state == "installed";
@@ -2922,27 +3355,46 @@ export component HomeWindow inherits Window {
                 /* ----------------------------------------------------------- Gaming */
                 SettingsSectionHeader {
                     x: root.settings-content-x;
-                    y: root.srow-y(2, root.gaming-scroll-offset, 2) - root.settings-section-gap;
+                    y: root.srow-y(root.gaming-split, root.gaming-scroll-offset, root.gaming-split) - root.settings-section-gap;
                     width: root.settings-content-width;
                     label: root.i18n-strings[704];
                     scope-label: root.i18n-strings[313];
                     visible: root.page-gaming
-                        && root.gaming-scroll-offset < 2
-                        && 2 < root.gaming-scroll-offset + root.settings-sectioned-visible-rows;
+                        && root.gaming-scroll-offset < root.gaming-split
+                        && root.gaming-split < root.gaming-scroll-offset + root.settings-sectioned-visible-rows;
                 }
-                for item[k] in [584, 541, 564, 576]: SettingsSelectableRow {
+                for row[k] in root.gaming-rows: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.srow-y(k, root.gaming-scroll-offset, 2);
+                    y: root.srow-y(k, root.gaming-scroll-offset, root.gaming-split);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
-                    title: root.i18n-strings[item];
-                    navigates: true;
+                    title: row.title;
+                    value: row.value;
+                    detail: row.detail;
+                    navigates: row.navigates;
+                    toggle: row.toggle;
+                    toggle-on: row.toggle-on;
+                    enabled: row.enabled;
+                    armed: row.armed;
                     selected: root.settings-view == 68 && root.gaming-index == k;
                     visible: root.page-gaming
                         && root.srow-visible(k, root.gaming-scroll-offset, root.settings-sectioned-visible-rows);
                 }
 
                 /* ----------------------------------------------------------- System */
+                for section[i] in [
+                    { start: root.system-storage-start, label: root.i18n-strings[732] },
+                    { start: root.system-support-start, label: root.i18n-strings[733] },
+                ]: SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(section.start, root.system-scroll-offset, root.system-storage-start, root.system-support-start, 0) - root.settings-section-gap;
+                    width: root.settings-content-width;
+                    label: section.label;
+                    scope-label: root.i18n-strings[313];
+                    visible: root.page-system
+                        && root.system-scroll-offset < section.start
+                        && root.sec-row-visible(section.start, root.system-scroll-offset, root.system-storage-start, root.system-support-start, 0);
+                }
                 for row[k] in [
                     {
                         title: root.i18n-strings[50],
@@ -2979,16 +3431,14 @@ export component HomeWindow inherits Window {
                         nav: false,
                     },
                     { title: root.i18n-strings[19], value: root.system-storage-active + " • " + root.system-storage-health, detail: "", nav: true },
+                    { title: root.i18n-strings[651], value: "", detail: "", nav: true },
                     { title: root.i18n-strings[20], value: "", detail: "", nav: true },
-                    { title: root.i18n-strings[21], value: "", detail: "", nav: true },
                     { title: root.i18n-strings[498], value: "", detail: "", nav: true },
                     { title: root.i18n-strings[499], value: root.safe-mode ? root.i18n-strings[518] : "", detail: "", nav: true },
-                    { title: root.i18n-strings[599], value: "", detail: "", nav: true },
-                    { title: root.i18n-strings[651], value: "", detail: "", nav: true },
-                    { title: root.i18n-strings[661], value: "", detail: "", nav: true },
+                    { title: root.i18n-strings[109], value: "", detail: "", nav: true },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.srow-y(k, root.system-scroll-offset, 0);
+                    y: root.sec-row-y(k, root.system-scroll-offset, root.system-storage-start, root.system-support-start, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -2997,7 +3447,7 @@ export component HomeWindow inherits Window {
                     navigates: row.nav;
                     selected: root.settings-view == 19 && root.system-index == k;
                     visible: root.page-system
-                        && root.srow-visible(k, root.system-scroll-offset, root.settings-list-visible-rows);
+                        && root.sec-row-visible(k, root.system-scroll-offset, root.system-storage-start, root.system-support-start, 0);
                 }
 
                 /* Storage page. Every row participates in controller navigation,
@@ -3082,6 +3532,9 @@ export component HomeWindow inherits Window {
                     detail: root.system-tf2-state == "FOREIGN" && root.system-storage-confirm ? root.i18n-strings[86]
                         : root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2" && root.system-storage-confirm ? root.i18n-strings[87]
                         : "";
+                    armed: root.system-storage-confirm
+                        && (root.system-tf2-state == "FOREIGN"
+                            || (root.system-tf2-state == "OWNED" && root.system-storage-active == "TF2"));
                     enabled: root.system-storage-job-state != "running"
                         && (root.system-tf2-state == "FOREIGN" || root.system-tf2-state == "OWNED");
                     selected: root.settings-view == 20 && root.system-storage-index == 4;
@@ -3188,7 +3641,9 @@ export component HomeWindow inherits Window {
                     Rectangle { height: root.settings-row-gap; }
                     SettingsActionButton {
                         height: root.settings-row-height;
-                        label: root.system-reset-confirm ? root.i18n-strings[108] : root.i18n-strings[109];
+                        armed: root.system-reset-confirm;
+                        label: root.i18n-strings[109];
+                        prompt: root.i18n-strings[108];
                         selected: true;
                         danger: true;
                     }
@@ -3235,15 +3690,27 @@ export component HomeWindow inherits Window {
                     detail: root.recovery-armed != k ? row.detail
                         : k == 3 && root.recovery-stage == 1 ? root.i18n-strings[517]
                         : root.i18n-strings[516];
+                    armed: root.recovery-armed == k;
                     selected: root.settings-view == 28 && root.recovery-index == k;
                     visible: root.settings-view == 28 && (k < 4 || root.safe-mode)
                         && root.srow-visible(k, root.recovery-scroll-offset, root.settings-list-visible-rows);
                 }
 
-                /* Data-driven pages 50-56. */
+                /* Data-driven pages 50-67: inline header of the second
+                 * section while it is below the top. */
+                SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(root.gen-split, root.gen-scroll, root.gen-split, 0, 0) - root.settings-section-gap;
+                    width: root.settings-content-width;
+                    label: root.gen-split-label;
+                    scope-label: root.settings-section-scope;
+                    visible: root.settings-view >= 50 && root.settings-view <= 67
+                        && root.gen-split > 0 && root.gen-scroll < root.gen-split
+                        && root.sec-row-visible(root.gen-split, root.gen-scroll, root.gen-split, 0, 0);
+                }
                 for row[k] in root.gen-rows: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.srow-y(k, root.gen-scroll, 0);
+                    y: root.sec-row-y(k, root.gen-scroll, root.gen-split, 0, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -3253,12 +3720,24 @@ export component HomeWindow inherits Window {
                     toggle: row.toggle;
                     toggle-on: row.toggle-on;
                     enabled: row.enabled;
+                    armed: row.armed;
                     selected: root.gen-index == k;
                     visible: root.settings-view >= 50 && root.settings-view <= 67
-                        && root.srow-visible(k, root.gen-scroll, root.settings-list-visible-rows);
+                        && (root.gen-split > 0 ? root.sec-row-visible(k, root.gen-scroll, root.gen-split, 0, 0)
+                            : root.srow-visible(k, root.gen-scroll, root.settings-list-visible-rows));
                 }
 
                 /* ---------------------------------------------- Controllers & Input */
+                /* CONTROLLERS (Player Assignment, Controllers), then RUMBLE &
+                 * LIGHTING (Internal Rumble, RGB Lighting). */
+                SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(2, 0, 2, 0, 0) - root.settings-section-gap;
+                    width: root.settings-content-width;
+                    label: root.i18n-strings[735];
+                    scope-label: root.i18n-strings[312];
+                    visible: root.page-controllers && root.sec-row-visible(2, 0, 2, 0, 0);
+                }
                 for row[k] in [
                     { title: root.i18n-strings[13], value: root.i18n-strings[111], enabled: true },
                     { title: root.i18n-strings[14], value: root.controllers.length + root.i18n-strings[219], enabled: true },
@@ -3269,12 +3748,12 @@ export component HomeWindow inherits Window {
                     },
                     {
                         title: root.i18n-strings[18],
-                        value: root.lighting-supported ? root.lighting-mode-label : root.i18n-strings[205],
+                        value: root.lighting-supported ? root.lighting-effect-label : root.i18n-strings[205],
                         enabled: root.lighting-supported,
                     },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.srow-y(k, 0, 0);
+                    y: root.sec-row-y(k, 0, 2, 0, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -3282,7 +3761,7 @@ export component HomeWindow inherits Window {
                     enabled: row.enabled;
                     navigates: row.enabled;
                     selected: root.settings-view == 10 && root.controllers-menu-index == k;
-                    visible: root.page-controllers;
+                    visible: root.page-controllers && root.sec-row-visible(k, 0, 2, 0, 0);
                 }
 
                 /* Preferred player assignment. */
@@ -3325,12 +3804,15 @@ export component HomeWindow inherits Window {
                     visible: root.settings-view == 13;
                 }
 
-                /* Per-controller Input Tester: one graphical controller plus
-                 * one large mapped/physical label. */
+                /* Per-controller Input Tester: the controller drawing fills
+                 * the page above the last-input chip and the exit combo. */
                 tester-visual := ControllerTesterVisual {
                     x: root.settings-content-x;
                     y: root.settings-content-y;
                     width: root.settings-content-width;
+                    height: min(root.settings-content-width * 200 / 360,
+                        max(120px, root.settings-list-bottom - root.settings-content-y
+                            - root.settings-row-height - 2 * root.settings-row-gap - 28px));
                     visible: root.settings-view == 14;
                     face-south: root.tester-face-south;
                     face-east: root.tester-face-east;
@@ -3351,17 +3833,47 @@ export component HomeWindow inherits Window {
                     left-trigger: root.tester-left-trigger;
                     right-trigger: root.tester-right-trigger;
                 }
-                MarqueeText {
+                /* Last input: logical control • physical source. */
+                Rectangle {
                     x: root.settings-content-x;
-                    y: tester-visual.y + tester-visual.height + root.settings-row-gap;
+                    y: tester-visual.y + tester-visual.drawn-height + root.settings-row-gap;
                     width: root.settings-content-width;
                     height: root.settings-row-height;
-                    label: root.tester-action;
-                    text-color: Theme.text;
-                    text-size: 20px;
-                    text-weight: 700;
-                    align-center: true;
+                    border-radius: Shape.medium;
+                    background: Theme.surface-container-high;
                     visible: root.settings-view == 14;
+                    MarqueeText {
+                        x: 16px;
+                        width: parent.width - 32px;
+                        height: parent.height;
+                        label: root.tester-action;
+                        text-color: Theme.text;
+                        text-size: 18px;
+                        text-weight: 700;
+                        align-center: true;
+                    }
+                }
+                /* Exit combo: the tester owns every control of this
+                 * controller, so Back cannot leave the page. */
+                HorizontalLayout {
+                    x: root.settings-content-x;
+                    y: tester-visual.y + tester-visual.drawn-height + root.settings-row-height + 2 * root.settings-row-gap;
+                    width: root.settings-content-width;
+                    height: 28px;
+                    alignment: center;
+                    spacing: 8px;
+                    visible: root.settings-view == 14;
+                    VerticalLayout { alignment: center; MenuActionHint { } }
+                    Text { text: "+"; color: Theme.text-secondary; font-size: 16px; font-weight: 700; vertical-alignment: center; }
+                    VerticalLayout { alignment: center; StartActionHint { } }
+                    Text {
+                        text: root.i18n-strings[740];
+                        color: Theme.text-secondary;
+                        font-size: 15px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 0;
+                    }
                 }
 
                 /* Controller Mapping: buttons, stick axes with their deadzones and
@@ -3375,8 +3887,9 @@ export component HomeWindow inherits Window {
                     /* The capture prompt itself is the page notice line. */
                     value: root.controller-remap-waiting && root.controller-mapping-index == i ? "…"
                         : mapping.kind == 2 ? (mapping.control == "left_deadzone" ? root.controller-left-deadzone : root.controller-right-deadzone) + "%"
-                        : mapping.kind == 3 && root.controller-mapping-reset-armed ? root.i18n-strings[366]
                         : mapping.value;
+                    detail: mapping.kind == 3 && root.controller-mapping-reset-armed ? root.i18n-strings[366] : "";
+                    armed: mapping.kind == 3 && root.controller-mapping-reset-armed;
                     selected: root.settings-view == 15 && root.controller-mapping-index == i;
                     visible: root.settings-view == 15
                         && root.srow-visible(i, root.controller-mapping-scroll-offset, root.settings-list-visible-rows);
@@ -3398,61 +3911,104 @@ export component HomeWindow inherits Window {
                     visible: root.settings-view == 16;
                 }
 
-                /* RGB Lighting. */
+                /* RGB Lighting: LIGHTING (0-3) | SYSTEM SIGNALS (4-8). */
+                SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(4, root.lighting-scroll-offset, 4, 0, 0) - root.settings-section-gap;
+                    width: root.settings-content-width;
+                    label: root.i18n-strings[129];
+                    scope-label: root.i18n-strings[312];
+                    visible: root.settings-view == 17 && root.lighting-scroll-offset < 4
+                        && root.sec-row-visible(4, root.lighting-scroll-offset, 4, 0, 0);
+                }
                 for row[k] in [
-                    { title: root.i18n-strings[126], value: root.lighting-mode-label, enabled: true, toggle: false },
-                    { title: root.i18n-strings[127], value: root.lighting-brightness + "%", enabled: true, toggle: false },
                     {
-                        title: root.i18n-strings[128],
-                        value: root.lighting-color-capable ? root.lighting-color-name : root.i18n-strings[122],
-                        enabled: root.lighting-color-capable,
-                        toggle: false,
+                        title: root.i18n-strings[126], detail: root.i18n-strings[root.lighting-effect-detail-index(root.lighting-effect)],
+                        value: root.lighting-effect-label, enabled: true, toggle: false, on: false, swatch: false,
                     },
-                    { title: root.i18n-strings[129], value: "", enabled: true, toggle: true },
-                    { title: root.i18n-strings[130], value: "", enabled: true, toggle: false },
+                    {
+                        title: root.i18n-strings[128], detail: "",
+                        value: root.lighting-color-capable ? root.i18n-strings[root.lighting-color-index(root.lighting-color)] : root.i18n-strings[122],
+                        enabled: root.lighting-color-capable, toggle: false, on: false, swatch: root.lighting-color-capable,
+                    },
+                    {
+                        title: root.i18n-strings[127], detail: "", value: root.lighting-brightness + "%",
+                        enabled: true, toggle: false, on: false, swatch: false,
+                    },
+                    {
+                        title: root.i18n-strings[121], detail: "",
+                        value: !root.lighting-speed-capable ? root.i18n-strings[205]
+                            : root.lighting-speed == "slow" ? root.i18n-strings[144]
+                            : root.lighting-speed == "fast" ? root.i18n-strings[146] : root.i18n-strings[145],
+                        enabled: root.lighting-speed-capable, toggle: false, on: false, swatch: false,
+                    },
+                    { title: root.i18n-strings[147], detail: root.i18n-strings[151], value: "", enabled: true, toggle: true, on: mod(root.lighting-signals, 2) == 1, swatch: false },
+                    { title: root.i18n-strings[100], detail: root.i18n-strings[152], value: "", enabled: true, toggle: true, on: mod(floor(root.lighting-signals / 2), 2) == 1, swatch: false },
+                    { title: root.i18n-strings[148], detail: root.i18n-strings[153], value: "", enabled: true, toggle: true, on: mod(floor(root.lighting-signals / 4), 2) == 1, swatch: false },
+                    { title: root.i18n-strings[149], detail: root.i18n-strings[154], value: "", enabled: true, toggle: true, on: mod(floor(root.lighting-signals / 8), 2) == 1, swatch: false },
+                    { title: root.i18n-strings[150], detail: root.i18n-strings[155], value: "", enabled: true, toggle: true, on: mod(floor(root.lighting-signals / 16), 2) == 1, swatch: false },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.srow-y(k, 0, 0);
+                    y: root.sec-row-y(k, root.lighting-scroll-offset, 4, 0, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
+                    detail: row.detail;
                     value: row.value;
                     enabled: row.enabled;
                     toggle: row.toggle;
-                    toggle-on: root.lighting-system-effects;
+                    toggle-on: row.on;
+                    show-swatch: row.swatch;
+                    swatch: root.lighting-color == "theme" ? Theme.accent : root.lighting-swatch;
                     selected: root.settings-view == 17 && root.lighting-index == k;
                     visible: root.settings-view == 17
-                        && root.srow-visible(k, 0, root.settings-list-visible-rows);
+                        && root.sec-row-visible(k, root.lighting-scroll-offset, 4, 0, 0);
                 }
 
                 /* --------------------------------------------------- Display & Audio */
+                for section[i] in [
+                    { start: root.da-audio-start, label: root.i18n-strings[729] },
+                    { start: root.da-sounds-start, label: root.i18n-strings[730] },
+                ]: SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(section.start, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, 0) - root.settings-section-gap;
+                    width: root.settings-content-width;
+                    label: section.label;
+                    scope-label: root.i18n-strings[313];
+                    visible: root.page-display-audio
+                        && root.display-audio-scroll-offset < section.start
+                        && root.sec-row-visible(section.start, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, 0);
+                }
                 for row[k] in [
                     {
+                        pos: 0,
                         title: root.i18n-strings[127],
                         value: root.display-brightness-available ? root.display-brightness + "%" : root.i18n-strings[132],
                         enabled: root.display-brightness-available, toggle: false, on: false, shown: true,
                     },
-                    { title: root.i18n-strings[133], value: root.audio-output-label, enabled: true, toggle: false, on: false, shown: true },
                     {
-                        title: root.i18n-strings[134],
-                        value: root.audio-volume-supported ? root.audio-volume + "%" : root.audio-selected == "hdmi" ? root.i18n-strings[223] : root.i18n-strings[205],
-                        enabled: root.audio-volume-supported, toggle: false, on: false, shown: true,
-                    },
-                    { title: root.i18n-strings[135], value: root.applications-volume + "%", enabled: true, toggle: false, on: false, shown: true },
-                    { title: root.i18n-strings[136], value: root.system-sounds-volume + "%", enabled: true, toggle: false, on: false, shown: true },
-                    { title: root.i18n-strings[137], value: "", enabled: true, toggle: true, on: root.navigation-sounds-enabled, shown: true },
-                    { title: root.i18n-strings[138], value: "", enabled: true, toggle: true, on: root.power-sounds-enabled, shown: true },
-                    { title: root.i18n-strings[139], value: root.home-music-volume + "%", enabled: true, toggle: false, on: false, shown: true },
-                    { title: root.i18n-strings[140], value: root.audio-test-tone-playing ? root.i18n-strings[141] : root.i18n-strings[142], enabled: true, toggle: false, on: false, shown: true },
-                    {
+                        pos: 1,
                         title: root.i18n-strings[143],
                         value: root.display-color-temperature + root.i18n-strings[224],
                         enabled: true, toggle: false, on: false,
                         shown: root.display-color-temperature-available,
                     },
+                    { pos: root.da-audio-start, title: root.i18n-strings[133], value: root.audio-output-label, enabled: true, toggle: false, on: false, shown: true },
+                    {
+                        pos: root.da-audio-start + 1,
+                        title: root.i18n-strings[134],
+                        value: root.audio-volume-supported ? root.audio-volume + "%" : root.audio-selected == "hdmi" ? root.i18n-strings[223] : root.i18n-strings[205],
+                        enabled: root.audio-volume-supported, toggle: false, on: false, shown: true,
+                    },
+                    { pos: root.da-audio-start + 2, title: root.i18n-strings[135], value: root.applications-volume + "%", enabled: true, toggle: false, on: false, shown: true },
+                    { pos: root.da-audio-start + 3, title: root.i18n-strings[139], value: root.home-music-volume + "%", enabled: true, toggle: false, on: false, shown: true },
+                    { pos: root.da-audio-start + 4, title: root.i18n-strings[140], value: root.audio-test-tone-playing ? root.i18n-strings[141] : root.i18n-strings[142], enabled: true, toggle: false, on: false, shown: true },
+                    { pos: root.da-sounds-start, title: root.i18n-strings[136], value: root.system-sounds-volume + "%", enabled: true, toggle: false, on: false, shown: true },
+                    { pos: root.da-sounds-start + 1, title: root.i18n-strings[137], value: "", enabled: true, toggle: true, on: root.navigation-sounds-enabled, shown: true },
+                    { pos: root.da-sounds-start + 2, title: root.i18n-strings[138], value: "", enabled: true, toggle: true, on: root.power-sounds-enabled, shown: true },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.srow-y(k, root.display-audio-scroll-offset, 0);
+                    y: root.sec-row-y(row.pos, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -3460,9 +4016,9 @@ export component HomeWindow inherits Window {
                     enabled: row.enabled;
                     toggle: row.toggle;
                     toggle-on: row.on;
-                    selected: root.settings-view == 18 && root.display-audio-index == k;
+                    selected: root.settings-view == 18 && root.display-audio-index == row.pos;
                     visible: row.shown && root.page-display-audio
-                        && root.srow-visible(k, root.display-audio-scroll-offset, root.settings-list-visible-rows);
+                        && root.sec-row-visible(row.pos, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, 0);
                 }
 
                 /* ------------------------------------------------------ Connectivity */
@@ -3487,7 +4043,7 @@ export component HomeWindow inherits Window {
                     },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.srow-y(k, root.connectivity-scroll-offset, 3);
+                    y: root.sec-row-y(k, root.connectivity-scroll-offset, 3, 6, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -3498,7 +4054,28 @@ export component HomeWindow inherits Window {
                     navigates: row.nav;
                     selected: root.settings-view == 1 && root.connectivity-selected-index == k;
                     visible: root.page-connectivity
-                        && root.srow-visible(k, root.connectivity-scroll-offset, root.settings-sectioned-visible-rows);
+                        && root.sec-row-visible(k, root.connectivity-scroll-offset, 3, 6, 0);
+                }
+
+                /* SERVICES: the optional network services themselves (rows
+                 * from 6, built by gameui.rs from nuubos-remotectl and
+                 * nuubos-syncctl). */
+                for row[i] in root.connectivity-services: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(6 + i, root.connectivity-scroll-offset, 3, 6, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    detail: row.detail;
+                    toggle: row.toggle;
+                    toggle-on: row.toggle-on;
+                    enabled: row.enabled;
+                    navigates: row.navigates;
+                    armed: row.armed;
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == 6 + i;
+                    visible: root.page-connectivity
+                        && root.sec-row-visible(6 + i, root.connectivity-scroll-offset, 3, 6, 0);
                 }
 
                 /* Connect page. Entering this view starts a product-service scan
@@ -3705,10 +4282,8 @@ export component HomeWindow inherits Window {
                         parent.height - self.y - 12px,
                         root.settings-choice-list-y + min(root.settings-choice-options.length, root.settings-choice-visible-rows) * root.settings-row-step + 4px
                     );
-                    background: #17191d;
-                    border-width: 1px;
-                    border-color: Theme.accent;
-                    border-radius: 8px;
+                    background: Theme.surface-container-high;
+                    border-radius: Shape.large;
                     clip: true;
                     visible: root.settings-choice-open;
                     z: 95;
@@ -3731,78 +4306,6 @@ export component HomeWindow inherits Window {
                     }
                 }
 
-                /* System Effect preview carousel. It overlays RGB Settings and can be
-                 * interrupted immediately with Back. */
-                Rectangle {
-                    x: root.settings-content-x - 8px;
-                    y: root.settings-section-y;
-                    width: root.settings-content-width + 16px;
-                    height: min(parent.height - self.y - 12px, 280px);
-                    background: #17191d;
-                    border-width: 1px;
-                    border-color: Theme.accent;
-                    border-radius: 10px;
-                    visible: root.settings-view == 17 && root.lighting-preview-open;
-                    z: 90;
-
-                    VerticalLayout {
-                        padding: 14px;
-                        spacing: 10px;
-                        alignment: center;
-
-                        Text {
-                            text: root.i18n-strings[144];
-                            color: Theme.text; font-size: 20px; font-weight: 700;
-                            horizontal-alignment: center;
-                        }
-                        HorizontalLayout {
-                            alignment: center;
-                            Image {
-                                width: 56px; height: 56px;
-                                source: root.lighting-preview-index == 0
-                                    ? @image-url("assets/icons/battery-empty.svg")
-                                    : root.lighting-preview-index == 1
-                                    ? @image-url("assets/icons/gamepad.svg")
-                                    : root.lighting-preview-index == 2
-                                    ? @image-url("assets/icons/wifi.svg")
-                                    : @image-url("assets/icons/circle-notch.svg");
-                                image-fit: contain;
-                            }
-                        }
-                        Text {
-                            text: root.lighting-preview-index == 0 ? root.i18n-strings[145]
-                                : root.lighting-preview-index == 1 ? root.i18n-strings[146]
-                                : root.lighting-preview-index == 2 ? root.i18n-strings[147]
-                                : root.lighting-preview-index == 3 ? root.i18n-strings[148]
-                                : root.i18n-strings[149];
-                            color: Theme.text; font-size: 19px; font-weight: 700;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
-                        }
-                        Text {
-                            text: root.lighting-preview-index == 0 ? root.i18n-strings[150]
-                                : root.lighting-preview-index == 1 ? root.i18n-strings[151]
-                                : root.lighting-preview-index == 2 ? root.i18n-strings[152]
-                                : root.lighting-preview-index == 3 ? root.i18n-strings[153]
-                                : root.i18n-strings[154];
-                            color: Theme.text-dim; font-size: 14px;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
-                        }
-                        Text {
-                            text: (root.lighting-preview-index + 1) + " / 5";
-                            color: Theme.accent; font-size: 14px; font-weight: 700;
-                            horizontal-alignment: center;
-                        }
-                        Text {
-                            text: root.i18n-strings[155];
-                            color: Theme.text-faint; font-size: 13px;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
-                        }
-                    }
-                }
-
                 /* One status line at the pane bottom, reserved by the row grid. */
                 MarqueeText {
                     x: root.settings-content-x;
@@ -3820,12 +4323,14 @@ export component HomeWindow inherits Window {
 
         /* System-wide virtual keyboard bottom sheet. It intentionally spans the
          * full display width so every Settings domain shares the same keyboard
-         * surface, independent of the right-pane width. */
+         * surface, independent of the right-pane width. It sits on the action
+         * bar; the field label says what is entered, the page title above
+         * stays the page the keyboard was opened from. */
         system-keyboard := SystemVirtualKeyboard {
             x: 0px;
-            y: 176px;
+            y: parent.height - 52px - self.content-height;
             width: parent.width;
-            height: parent.height - 228px;
+            height: self.content-height;
             z: 20;
             visible: root.settings-open && root.settings-view == 6;
             value <=> root.keyboard-value;
@@ -3879,14 +4384,16 @@ export component HomeWindow inherits Window {
                     kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[186];
                 }
                 if !root.settings-open: Rectangle { horizontal-stretch: 1; }
-                if root.settings-open: ActionHint { kind: "nav"; label: root.i18n-strings[184]; }
+                if root.settings-open && root.settings-view != 14: ActionHint { kind: "nav"; label: root.i18n-strings[184]; }
                 if root.settings-select-hint-visible: ActionHint {
-                    kind: "face"; face-position: root.select-face-position; label: root.i18n-strings[185];
+                    kind: "face"; face-position: root.select-face-position;
+                    label: !root.settings-choice-open && root.settings-view >= 50 && root.settings-view <= 67
+                        && root.gen-select-label != "" ? root.gen-select-label : root.i18n-strings[185];
                 }
                 if root.settings-open: ActionHint {
                     kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[186];
                 }
-                if root.settings-open && root.settings-north-hint != "": ActionHint {
+                if root.settings-open && !root.settings-choice-open && root.settings-north-hint != "": ActionHint {
                     kind: "face"; face-position: root.context-face-position; label: root.settings-north-hint;
                 }
                 if root.settings-open: Rectangle { horizontal-stretch: 1; }
@@ -4008,7 +4515,7 @@ export component HomeWindow inherits Window {
 
         Rectangle {
             x: 0; y: parent.height - 58px; width: parent.width; height: 58px;
-            background: #0a0b0d;
+            background: Theme.background;
             Rectangle { x: 16px; y: 0; width: parent.width - 32px; height: 1px; background: Theme.surface; }
             HorizontalLayout {
                 x: 18px; y: 0; width: parent.width - 36px; height: parent.height;
@@ -4021,6 +4528,137 @@ export component HomeWindow inherits Window {
                 }
                 if root.oob-step == 4: ActionHint {
                     kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[186];
+                }
+            }
+        }
+    }
+
+    /* Safe mode (EPIC-050): the supervisor restarted nuubUI after a crash
+     * loop. A full-screen recovery screen in the OOB hero style instead of a
+     * Settings page; the actions are nuubos-recoveryctl's, the restart is the
+     * central lifecycle's. Power stays on the global power menu. */
+    safe-hero := Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: Theme.background;
+        visible: root.safe-screen-open;
+        z: 190;
+
+        property <float> type-scale: max(1.0, min(1.35, root.height / 480px));
+        property <length> column: min(560px * self.type-scale, root.width - 64px);
+        property <length> cell: (self.column - 10px) / 2;
+        property <length> button-h: root.settings-row-height;
+        /* The armed button carries its own prompt; this line always
+         * describes the focused action. */
+        property <string> detail: root.recovery-notice != "" ? root.recovery-notice
+            : root.safe-index == 0 ? root.i18n-strings[712]
+            : root.safe-index == 1 ? root.i18n-strings[512]
+            : root.safe-index == 2 ? root.i18n-strings[504]
+            : root.safe-index == 3 ? root.i18n-strings[513]
+            : root.safe-index == 4 ? root.i18n-strings[713]
+            : root.safe-index == 5 ? root.i18n-strings[514]
+            : root.i18n-strings[515];
+
+        VerticalLayout {
+            x: 32px;
+            y: 0px;
+            width: parent.width - 64px;
+            height: parent.height - 58px;
+            alignment: center;
+            spacing: 10px;
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: 0px;
+                Text { text: "nuub"; color: Theme.text; font-size: 28px * safe-hero.type-scale; font-weight: 700; }
+                Text { text: "OS"; color: Theme.accent; font-size: 28px * safe-hero.type-scale; font-weight: 700; }
+            }
+            HorizontalLayout {
+                alignment: center;
+                Rectangle { width: 86px; height: 3px; background: Theme.warning; border-radius: 2px; }
+            }
+            Text {
+                text: root.i18n-strings[518];
+                color: Theme.text;
+                font-size: 24px * safe-hero.type-scale;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            HorizontalLayout {
+                alignment: center;
+                Text {
+                    width: safe-hero.column;
+                    text: root.i18n-strings[519];
+                    color: Theme.text-secondary;
+                    font-size: 15px * safe-hero.type-scale;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+            Rectangle { height: 2px; }
+            HorizontalLayout {
+                alignment: center;
+                SettingsActionButton {
+                    width: safe-hero.column;
+                    height: safe-hero.button-h;
+                    label: root.i18n-strings[520];
+                    selected: root.safe-index == 0;
+                }
+            }
+            for pair[r] in [
+                { left: root.i18n-strings[505], right: root.i18n-strings[500] },
+                { left: root.i18n-strings[508], right: root.i18n-strings[3] },
+                { left: root.i18n-strings[510], right: root.i18n-strings[511] },
+            ]: HorizontalLayout {
+                alignment: center;
+                spacing: 10px;
+                SettingsActionButton {
+                    width: safe-hero.cell;
+                    height: safe-hero.button-h;
+                    armed: root.recovery-armed == 1 + r * 2;
+                    label: pair.left;
+                    prompt: root.i18n-strings[191];
+                    selected: root.safe-index == 1 + r * 2;
+                    danger: r == 2;
+                    enabled: r != 1 || root.active-user-id != "";
+                }
+                SettingsActionButton {
+                    width: safe-hero.cell;
+                    height: safe-hero.button-h;
+                    armed: root.recovery-armed == 2 + r * 2;
+                    label: pair.right;
+                    prompt: r == 2 && root.recovery-stage == 1 ? root.i18n-strings[517] : root.i18n-strings[191];
+                    selected: root.safe-index == 2 + r * 2;
+                    danger: r == 2;
+                    enabled: r != 0 || !root.diag-busy;
+                }
+            }
+            HorizontalLayout {
+                alignment: center;
+                Text {
+                    width: safe-hero.column;
+                    height: 2 * 18px * safe-hero.type-scale;
+                    text: safe-hero.detail;
+                    color: Theme.text-faint;
+                    font-size: 13px * safe-hero.type-scale;
+                    horizontal-alignment: center;
+                    vertical-alignment: top;
+                    wrap: word-wrap;
+                    overflow: elide;
+                }
+            }
+        }
+
+        Rectangle {
+            x: 0; y: parent.height - 58px; width: parent.width; height: 58px;
+            background: Theme.background;
+            Rectangle { x: 16px; y: 0; width: parent.width - 32px; height: 1px; background: Theme.surface; }
+            HorizontalLayout {
+                x: 18px; y: 0; width: parent.width - 36px; height: parent.height;
+                spacing: 20px;
+                alignment: start;
+                ActionHint { kind: "nav"; label: root.i18n-strings[184]; }
+                ActionHint {
+                    kind: "face"; face-position: root.select-face-position; label: root.i18n-strings[185];
                 }
             }
         }
@@ -4069,10 +4707,10 @@ export component HomeWindow inherits Window {
             y: 58px + (parent.height - 116px) / 2 - user-card.card-height / 2;
             width: user-card.card-width;
             height: user-card.card-height;
-            border-radius: 14px;
-            background: user-card.focused ? #151c27 : #101318;
-            border-width: user-card.focused ? 2px : 1px;
-            border-color: user-card.focused ? Theme.accent : #252b33;
+            border-radius: Shape.large;
+            background: user-card.focused ? Theme.secondary-container : Theme.surface-container-low;
+            border-width: user-card.focused ? 3px : 0px;
+            border-color: Theme.primary;
             visible: i >= root.user-picker-index - 2 && i <= root.user-picker-index + 2;
 
             Rectangle {
@@ -4081,8 +4719,8 @@ export component HomeWindow inherits Window {
                 width: user-card.focused ? 112px : 88px;
                 height: user-card.focused ? 112px : 88px;
                 border-radius: self.width * 0.22;
-                border-width: user-card.focused ? 2px : 1px;
-                border-color: user-card.focused ? #5b9cff : #343a43;
+                border-width: 1px;
+                border-color: user-card.focused ? Theme.primary : Theme.outline-variant;
                 background: #11151a;
                 clip: true;
 
@@ -4102,9 +4740,9 @@ export component HomeWindow inherits Window {
                 width: parent.width - 20px;
                 height: 30px;
                 label: user.name;
-                text-color: user-card.focused ? #ffffff : #a9afb8;
+                text-color: user-card.focused ? Theme.text : Theme.text-secondary;
                 text-size: user-card.focused ? 20px : 16px;
-                text-weight: user-card.focused ? 700 : 600;
+                text-weight: user-card.focused ? 600 : 500;
                 active: user-card.focused;
                 align-center: true;
                 
@@ -4114,7 +4752,7 @@ export component HomeWindow inherits Window {
 
         Rectangle {
             x: 0; y: parent.height - 58px; width: parent.width; height: 58px;
-            background: #0a0b0d;
+            background: Theme.background;
             z: 2;
             Rectangle { x: 16px; y: 0; width: parent.width - 32px; height: 1px; background: Theme.surface; }
             HorizontalLayout {
@@ -4141,26 +4779,18 @@ export component HomeWindow inherits Window {
             height: root.avatar-picker-card-height;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: #0d1014;
-            border-radius: 14px;
-            border-width: 1px;
-            border-color: #28303a;
+            /* M3 dialog: tonal surface, extra-large shape. */
+            background: Theme.surface-container-high;
+            border-radius: Shape.extra-large;
 
             MarqueeText {
-                x: 22px; y: 10px;
+                x: 22px; y: 14px;
                 width: parent.width - 44px; height: 32px;
                 label: root.i18n-strings[321];
                 text-color: Theme.text;
-                text-size: 19px;
-                text-weight: 700;
+                text-size: 20px;
+                text-weight: 600;
                 align-center: true;
-            }
-            Rectangle {
-                x: (parent.width - 86px) / 2;
-                y: 49px;
-                width: 86px; height: 3px;
-                background: Theme.accent;
-                border-radius: 2px;
             }
             for avatar[i] in root.avatar-choices : tile := Rectangle {
                 property <bool> focused: root.avatar-picker-index == i;
@@ -4171,10 +4801,10 @@ export component HomeWindow inherits Window {
                 y: 62px + (tile.grid-row - root.avatar-picker-scroll) * root.avatar-picker-tile-height;
                 width: tile.cell-width - 8px;
                 height: root.avatar-picker-tile-height - 8px;
-                border-radius: 14px;
-                background: tile.focused ? #151c27 : transparent;
-                border-width: tile.focused ? 2px : 0px;
-                border-color: Theme.accent;
+                border-radius: Shape.large;
+                background: tile.focused ? Theme.secondary-container : transparent;
+                border-width: tile.focused ? 3px : 0px;
+                border-color: Theme.primary;
                 visible: tile.grid-row >= root.avatar-picker-scroll
                     && tile.grid-row < root.avatar-picker-scroll + root.avatar-picker-rows;
 
@@ -4184,8 +4814,8 @@ export component HomeWindow inherits Window {
                     width: tile.size;
                     height: tile.size;
                     border-radius: tile.size * 0.22;
-                    border-width: tile.focused ? 2px : 1px;
-                    border-color: tile.focused ? #5b9cff : #343a43;
+                    border-width: 1px;
+                    border-color: tile.focused ? Theme.primary : Theme.outline-variant;
                     background: #11151a;
                     clip: true;
 
@@ -4204,9 +4834,9 @@ export component HomeWindow inherits Window {
                     width: parent.width - 12px;
                     height: 24px;
                     label: avatar.label;
-                    text-color: tile.focused ? #ffffff : #a9afb8;
+                    text-color: tile.focused ? Theme.text : Theme.text-secondary;
                     text-size: 13px;
-                    text-weight: tile.focused ? 700 : 600;
+                    text-weight: tile.focused ? 600 : 500;
                     active: tile.focused;
                     align-center: true;
                 }
@@ -4230,7 +4860,7 @@ export component HomeWindow inherits Window {
     Rectangle {
         x: 0; y: 0; width: parent.width; height: parent.height;
         background: #050608;
-        visible: root.screensaver-active && !root.power-menu-open;
+        visible: root.screensaver-active;
         z: 200;
 
         logo := Rectangle {
@@ -4259,123 +4889,6 @@ export component HomeWindow inherits Window {
                 color: Theme.accent;
                 font-size: 28px;
                 font-weight: 700;
-            }
-        }
-    }
-
-    /* Power OSD: compact nuubOS console styling. The UI only presents
-     * lifecycle actions; nuubos-systemd owns their behavior. */
-    Rectangle {
-        x: 0; y: 0; width: parent.width; height: parent.height;
-        background: #000000d4;
-        visible: root.power-menu-open;
-        z: 210;
-
-        Rectangle {
-            width: min(parent.width - 56px, 500px);
-            height: 256px;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            background: #0d1014;
-            border-radius: 14px;
-            border-width: 1px;
-            border-color: #252b33;
-
-            Text {
-                x: 0px; y: 15px;
-                width: parent.width; height: 30px;
-                text: root.i18n-strings[188];
-                color: Theme.text;
-                font-size: 16px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            Rectangle {
-                x: (parent.width - 92px) / 2;
-                y: 49px;
-                width: 92px;
-                height: 3px;
-                background: Theme.accent;
-                border-radius: 2px;
-            }
-
-            Rectangle {
-                x: 24px; y: 64px;
-                width: parent.width - 48px; height: 92px;
-                background: root.power-menu-index == 0 ? Theme.focus-fill : #15191f;
-                border-radius: 11px;
-                border-width: root.power-menu-index == 0 ? 2px : 1px;
-                border-color: root.power-menu-index == 0 ? Theme.accent : #2a3038;
-
-                Text {
-                    x: 18px; y: 0; width: parent.width - 36px; height: parent.height;
-                    text: root.i18n-strings[189];
-                    color: Theme.text;
-                    font-size: 25px;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-
-            Rectangle {
-                x: 24px; y: 172px;
-                width: (parent.width - 56px) / 2; height: 60px;
-                background: root.power-menu-index == 1 ? Theme.focus-fill : #15191f;
-                border-radius: 10px;
-                border-width: root.power-menu-index == 1 ? 2px : 1px;
-                border-color: root.power-menu-index == 1 ? Theme.accent : #2a3038;
-
-                Text {
-                    x: 12px; y: 0;
-                    width: root.power-menu-index == 1 && root.power-menu-confirm ? 72px : parent.width - 24px;
-                    height: parent.height;
-                    text: root.i18n-strings[190];
-                    color: Theme.text;
-                    font-size: 18px;
-                    font-weight: 700;
-                    horizontal-alignment: root.power-menu-index == 1 && root.power-menu-confirm ? left : center;
-                    vertical-alignment: center;
-                }
-                Text {
-                    x: 84px; y: 0; width: parent.width - 96px; height: parent.height;
-                    text: root.power-menu-index == 1 && root.power-menu-confirm ? root.i18n-strings[191] : "";
-                    color: Theme.warning;
-                    font-size: 10px;
-                    horizontal-alignment: right;
-                    vertical-alignment: center;
-                }
-            }
-
-            Rectangle {
-                x: 32px + (parent.width - 56px) / 2; y: 172px;
-                width: (parent.width - 56px) / 2; height: 60px;
-                background: root.power-menu-index == 2 ? Theme.focus-fill : #15191f;
-                border-radius: 10px;
-                border-width: root.power-menu-index == 2 ? 2px : 1px;
-                border-color: root.power-menu-index == 2 ? Theme.accent : #2a3038;
-
-                Text {
-                    x: 12px; y: 0;
-                    width: root.power-menu-index == 2 && root.power-menu-confirm ? 84px : parent.width - 24px;
-                    height: parent.height;
-                    text: root.i18n-strings[58];
-                    color: Theme.text;
-                    font-size: 18px;
-                    font-weight: 700;
-                    horizontal-alignment: root.power-menu-index == 2 && root.power-menu-confirm ? left : center;
-                    vertical-alignment: center;
-                }
-                Text {
-                    x: 96px; y: 0; width: parent.width - 108px; height: parent.height;
-                    text: root.power-menu-index == 2 && root.power-menu-confirm ? root.i18n-strings[191] : "";
-                    color: Theme.warning;
-                    font-size: 10px;
-                    horizontal-alignment: right;
-                    vertical-alignment: center;
-                }
             }
         }
     }

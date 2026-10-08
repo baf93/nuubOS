@@ -35,6 +35,7 @@
 #define WIFI_BACKEND_MARKER WIFI_STATE_DIR "/backend-v2"
 #define WPA_CTRL_SOCKET "/var/run/wpa_supplicant/" WIFI_IFACE
 #define WPA_MONITOR_DIR "/run/nuubos"
+#define DHCP_LOG "/run/nuubos/wifi-dhcp.log"
 #define MAX_NETWORKS 64
 #define MAX_CAPTURE 32768
 #define SCAN_SESSION_INTERVAL_MS 5000ULL
@@ -188,6 +189,9 @@ static const char introspection_xml[] =
 /* Self-pipe: libdbus restarts its own poll on EINTR, so signals must wake
  * the main loop through a descriptor instead of a periodic timeout. */
 static int wake_pipe[2] = {-1, -1};
+/* The udhcpc of the current association (0 = none) and its SSID. */
+static pid_t dhcp_pid = 0;
+static char dhcp_ssid[128];
 
 static uint64_t monotonic_ms(void);
 
@@ -1414,42 +1418,68 @@ static bool apply_manual_ip(const struct ip_config *cfg)
     return write_resolv_conf(cfg->dns);
 }
 
-static void spawn_automatic_ip(void)
+static void stop_dhcp(void)
 {
-    pid_t pid = fork();
-    if (pid != 0)
-        return;
-    setsid();
-    execlp("udhcpc", "udhcpc", "-i", WIFI_IFACE, "-q", "-n",
-           "-t", "5", "-T", "3", "-s", "/usr/libexec/nuubos-wifi-udhcpc",
-           (char *)NULL);
-    _exit(127);
+    if (dhcp_pid > 0)
+        (void)kill(dhcp_pid, SIGTERM);
+    dhcp_pid = 0;
 }
 
-static void apply_ip_profile_now(const char *ssid)
+/* One udhcpc per association, kept for its whole life: it retries until a
+ * lease arrives (a one-shot client that gave up after 15 s left the device
+ * without an address when the first DHCP exchange after boot failed, until
+ * a manual reconnect) and renews the lease. The loop stops it when the
+ * association ends; the hook signals wifid on every lease change. */
+static void start_dhcp(const char *ssid)
 {
-    struct ip_config cfg;
-    if (!valid_ssid(ssid))
+    pid_t pid;
+
+    /* Same association (rekey/handshake seen as a reconnect): keep the
+     * client and its lease, a restart would deconfigure the address. */
+    if (dhcp_pid > 0 && strcmp(dhcp_ssid, ssid) == 0)
         return;
-    load_ip_profile(ssid, &cfg);
-    if (strcmp(cfg.mode, "manual") == 0) {
-        if (cfg.address[0] != '\0' && cfg.prefix <= 32)
-            (void)apply_manual_ip(&cfg);
-        return;
+    stop_dhcp();
+    pid = fork();
+    if (pid == 0) {
+        int fd = open(DHCP_LOG, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        setsid();
+        if (fd >= 0) {
+            (void)dup2(fd, STDOUT_FILENO);
+            (void)dup2(fd, STDERR_FILENO);
+        }
+        execlp("udhcpc", "udhcpc", "-i", WIFI_IFACE, "-f",
+               "-t", "5", "-T", "3", "-A", "10",
+               "-s", "/usr/libexec/nuubos-wifi-udhcpc", (char *)NULL);
+        _exit(127);
     }
-    spawn_automatic_ip();
+    if (pid > 0) {
+        dhcp_pid = pid;
+        copy_string(dhcp_ssid, sizeof(dhcp_ssid), ssid);
+    }
 }
 
 static void spawn_apply_ip_profile(const char *ssid)
 {
+    struct ip_config cfg;
     pid_t pid;
-    char ssid_copy[128];
-    copy_string(ssid_copy, sizeof(ssid_copy), ssid);
+
+    if (!valid_ssid(ssid))
+        return;
+    load_ip_profile(ssid, &cfg);
+    if (strcmp(cfg.mode, "manual") != 0) {
+        start_dhcp(ssid);
+        return;
+    }
+    stop_dhcp();
     pid = fork();
     if (pid != 0)
         return;
     setsid();
-    apply_ip_profile_now(ssid_copy);
+    if (cfg.address[0] != '\0' && cfg.prefix <= 32)
+        (void)apply_manual_ip(&cfg);
+    /* The address is in place: refresh the snapshot, which carries the
+     * IPv4 address. */
+    (void)kill(getppid(), SIGUSR1);
     _exit(0);
 }
 
@@ -2505,14 +2535,21 @@ int main(void)
             }
         }
 
-        while (waitpid(-1, NULL, WNOHANG) > 0)
-            ;
+        /* The association ended (drop, Disconnect, Forget, Off: the SSID
+         * changes or Wi-Fi is off): its DHCP client goes with it. */
+        if (dhcp_pid > 0 && (!current.enabled || strcmp(current.ssid, dhcp_ssid) != 0))
+            stop_dhcp();
+
+        for (pid_t pid; (pid = waitpid(-1, NULL, WNOHANG)) > 0;)
+            if (pid == dhcp_pid)
+                dhcp_pid = 0;
 
         dbus_connection_flush(conn);
         if (!dbus_connection_get_is_connected(conn))
             break;
     }
 
+    stop_dhcp();
     close_wpa_monitor();
     dbus_connection_unref(conn);
     if (dbus_error_is_set(&error)) dbus_error_free(&error);

@@ -1,0 +1,53 @@
+// nuubUI presentation tokens, shared by home.slint and its components.
+// quick_menu.slint keeps an identical copy (separate package).
+
+/* Presentation tokens of the active theme (EPIC-008). Defaults are the
+ * built-in nuubOS theme; nuubUI sets them from the user's theme package
+ * (themes.rs) and falls back to these values on any theme error. Colors
+ * not covered by a token are fixed by the product design. */
+export global Theme {
+    in-out property <color> accent: #3a86ff;
+    in-out property <color> accent-light: #73a8ff;
+    in-out property <color> accent-muted: #5b86d6;
+    in-out property <color> accent-text: #cfe2ff;
+    in-out property <color> focus-fill: #18283c;
+    in-out property <color> text: #f5f6f8;
+    in-out property <color> text-secondary: #a8adb5;
+    in-out property <color> text-dim: #8e949d;
+    in-out property <color> text-faint: #7f858e;
+    in-out property <color> text-disabled: #555b64;
+    in-out property <color> background: #0d0e10;
+    in-out property <color> surface: #24272d;
+    in-out property <color> border: #30343b;
+    in-out property <color> border-soft: #2c3036;
+    in-out property <color> warning: #f2b84b;
+
+    /* Material 3 colour roles (dark scheme), derived from the tokens above
+     * so every theme package keeps working without new keys. Surfaces are
+     * tonal steps between background and surface; elevation and focus are
+     * expressed through these tones, not through extra outlines. */
+    out property <color> primary: root.accent-light;
+    out property <color> on-primary: root.background;
+    out property <color> primary-container: root.accent.mix(root.background, 0.38);
+    out property <color> on-primary-container: root.accent-text;
+    out property <color> secondary-container: root.focus-fill;
+    out property <color> on-secondary-container: root.accent-text;
+    out property <color> surface-container-low: root.surface.mix(root.background, 0.38);
+    out property <color> surface-container: root.surface.mix(root.background, 0.62);
+    out property <color> surface-container-high: root.surface;
+    out property <color> surface-container-highest: root.surface.mix(root.text, 0.88);
+    out property <color> outline: root.text-disabled;
+    out property <color> outline-variant: root.border;
+    out property <color> error: #ffb4ab;
+    out property <color> error-container: #6e1f26;
+    out property <color> on-error-container: #ffdad6;
+}
+
+/* Material 3 shape scale, used instead of ad-hoc radii. */
+export global Shape {
+    out property <length> extra-small: 4px;
+    out property <length> small: 8px;
+    out property <length> medium: 12px;
+    out property <length> large: 16px;
+    out property <length> extra-large: 28px;
+}

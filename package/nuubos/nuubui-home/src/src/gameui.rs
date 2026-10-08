@@ -6,27 +6,33 @@
  *   51 Game Settings (EPIC-018)     nuubos-emud GAME_SETTINGS / GAME_SET
  *   52/53 BIOS Files (EPIC-033)     nuubos-biosctl
  *   54 RetroAchievements (EPIC-017) nuubos-achievementsctl
- *   55 Game Metadata (EPIC-015)     nuubos-scraper (account), nuubos-jobd
- *   56 Hidden Games (EPIC-011)      nuubos-libraryd GAMES hidden / HIDE
- *   57 Remote Services (EPIC-037/039) nuubos-remotectl
+ *   55 Game Hotkeys, 56 Performance Overlay   nuubos-emud SETTINGS / SET
+ *   57 Start Game (Details shell)   nuubos-emud STATES, LAUNCH <mode>
  *   63 Software Update (EPIC-048)   nuubos-updatectl, nuubos-update-apply
  *   66 Syncthing (EPIC-034)         nuubos-syncctl (per user)
- *   64 Online Services (EPIC-055)   every optional network service, its
- *                                   state and the page that controls it
+ *
+ * Settings → Gaming (68) itself is built here too (gaming-rows): the
+ * RetroAchievements account, the ScreenScraper account and bulk scraping
+ * (EPIC-015, nuubos-scraper, nuubos-jobd) and BIOS Files.
+ *
+ * The optional network services (Remote Services EPIC-037/039 through
+ * nuubos-remotectl, Syncthing) are also rows of Settings → Connectivity,
+ * section SERVICES (connectivity-services), built here from the same
+ * replies.
  *
  * 50 and 51 are a Settings shell of their own (details-active), opened from
- * Home with the Details action; 52-56 are Settings pages. This module keeps
+ * Home with the Details action; 52-54 are Settings pages. This module keeps
  * no product state: every row reflects the last service reply and every
  * action is a service request. Long work (scraping) is a nuubos-jobd job
  * whose progress is the job's Live Notification.
  */
 
 use crate::{
-    guarded_scroll_offset, handle_settings_action, move_model_selection, navigate_settings_view,
+    guarded_scroll_offset, handle_settings_action, move_model_selection, navigate_settings_view, sectioned_scroll,
     open_settings_choice, open_system_keyboard, play_ui_sound, tr, tr_arg, write_ui_context,
     GenRow, HomeWindow,
 };
-use slint::{ComponentHandle, Image, ModelRc, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -65,7 +71,6 @@ struct Details {
     title: String,
     available: bool,
     favorite: bool,
-    hidden: bool,
     last: i64,
     time: i64,
     sessions: i64,
@@ -120,20 +125,29 @@ struct State {
     ss_user: String,
     ss_available: bool,
     ss_name_pending: String,
-    hidden: Vec<(String, String, String)>,
+    /* A bulk scrape job is running. */
+    ss_busy: bool,
+    /* Row keys of Settings → Gaming, in order. */
+    gaming_keys: Vec<String>,
+    /* The user's emulation settings (nuubos-emud SETTINGS). */
+    emu: Vec<(String, String)>,
+    /* Start Game (57): the game's save states (slot, mtime, local hh:mm;
+     * slot -1 = the automatic state). */
+    states: Vec<(i32, i64, String)>,
     remote: Vec<(String, String)>,
     remote_password: String,
     update: Vec<(String, String)>,
     update_result: String,
-    online: Vec<(String, String)>,
     sync: Vec<(String, String)>,
+    /* Row keys of Connectivity's SERVICES section, in order. */
+    service_keys: Vec<String>,
     /* Row keys of the page on screen, in GenRow order. */
     keys: Vec<String>,
     actionable: Vec<bool>,
     /* The destructive row waiting for its confirming press. */
     armed: String,
     busy: bool,
-    /* Where Back goes from pages 52-57 and 63-64. */
+    /* Where Back goes from pages 52-54, 63 and 66. */
     back: i32,
 }
 
@@ -220,7 +234,6 @@ fn parse_details(reply: &str, d: &mut Details) {
             "system_name" => d.system_name = value.into(),
             "sessions" => d.sessions = value.parse().unwrap_or(0),
             "path" => d.path = value.into(),
-            "hidden" => d.hidden = value == "1",
             "member" => {
                 let f: Vec<&str> = value.split('\t').collect();
                 if f.len() >= 3 {
@@ -284,6 +297,53 @@ fn kv<'a>(reply: &'a str, key: &str) -> &'a str {
         .lines()
         .find_map(|l| l.strip_prefix(key).and_then(|r| r.strip_prefix('=')))
         .unwrap_or("")
+}
+
+fn pairs(reply: &str) -> Vec<(String, String)> {
+    reply
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .filter(|(k, _)| *k != "end")
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect()
+}
+
+fn emu_get(st: &State, key: &str) -> String {
+    st.emu.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()).unwrap_or_default()
+}
+
+/* Game hotkey actions in page order, with their labels. */
+const HOTKEYS: [(&str, usize, &str); 7] = [
+    ("save_state", 417, "Save State"),
+    ("load_state", 418, "Load State"),
+    ("slot_next", 779, "Next Slot"),
+    ("slot_prev", 780, "Previous Slot"),
+    ("fast_forward", 781, "Fast Forward"),
+    ("quit", 422, "Quit Game"),
+    ("screenshot", 592, "Screenshot"),
+];
+
+/* Controls a hotkey can use (Quick Menu button + this control). */
+const HOTKEY_CONTROLS: [&str; 16] = [
+    "menu_confirm", "menu_back", "face_north", "face_west", "menu_up", "menu_down", "menu_left",
+    "menu_right", "l1", "r1", "l2", "r2", "l3", "r3", "settings", "select",
+];
+
+/* Performance overlay fields, in overlay order. */
+const OVERLAY_FIELDS: [(&str, usize, &str); 8] = [
+    ("fps", 783, "Frame Rate"),
+    ("cpu", 0, "CPU"),
+    ("gpu", 0, "GPU"),
+    ("ram", 0, "RAM"),
+    ("temp", 784, "Temperature"),
+    ("power", 785, "Power Draw"),
+    ("battery", 786, "Battery"),
+    ("clock", 787, "Clock"),
+];
+
+/* "today • 15:32" for a state saved at mtime (local hh:mm from emud). */
+fn saved_when(ui: &HomeWindow, mtime: i64, hhmm: &str) -> String {
+    format!("{} • {}", days_ago(ui, mtime), hhmm)
 }
 
 /* ---------------------------------------------------------------- */
@@ -424,7 +484,6 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
                 rows.push(("info".into(), row(tr(ui, 525, "Emulator"), d.core.clone(), String::new()), false));
             }
             rows.push(("info".into(), row(tr(ui, 558, "File"), String::new(), d.path.clone()), false));
-            rows.push(("hide".into(), toggle(tr(ui, 540, "Hide Game"), d.hidden, tr(ui, 543, "Only for you; the game stays available to other users")), true));
             if d.last > 0 {
                 rows.push(("stats".into(), row(tr(ui, 549, "Reset Play Statistics"), String::new(),
                     armed_detail(&st.armed, "stats", tr(ui, 598, "Press again to reset"), String::new())), true));
@@ -447,12 +506,24 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
                     tr(ui, 536, "Changes apply the next time the game starts"))), true));
         }
         52 => {
-            for s in &st.bios {
+            /* YOUR SYSTEMS (at least one game in the library) first, then
+             * the other supported systems (bios_split). */
+            let mine = crate::library::system_ids();
+            let (own, other): (Vec<&BiosSystem>, Vec<&BiosSystem>) = st.bios.iter().partition(|s| mine.contains(&s.id));
+            if own.is_empty() {
+                let mut r = row(tr(ui, 398, "No games yet"), String::new(), String::new());
+                r.enabled = false;
+                rows.push(("info".into(), r, false));
+            }
+            for s in own.into_iter().chain(other) {
                 let mut r = nav(s.name.clone(), bios_state_label(ui, &s.state));
-                r.detail = tr(ui, 582, "{0} of {1} present")
-                    .replace("{0}", &s.present.to_string())
-                    .replace("{1}", &s.total.to_string())
-                    .into();
+                /* Only a system that cannot start says how far it is. */
+                if s.state == "missing" || s.state == "invalid" {
+                    r.detail = tr(ui, 582, "{0} of {1} present")
+                        .replace("{0}", &s.present.to_string())
+                        .replace("{1}", &s.total.to_string())
+                        .into();
+                }
                 rows.push((format!("sys:{}", s.id), r, true));
             }
         }
@@ -476,30 +547,6 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
                     tr(ui, 586, "No save states or fast-forward; achievements count double")), true));
                 rows.push(("ra-signout".into(), row(tr(ui, 567, "Sign Out"), String::new(),
                     armed_detail(&st.armed, "ra-signout", tr(ui, 191, "Press again to confirm"), String::new())), true));
-            }
-        }
-        55 => {
-            rows.push(("info".into(), row(tr(ui, 564, "Game Metadata"),
-                if st.ss_available { tr(ui, 67, "Available") } else { tr(ui, 205, "Unavailable") },
-                if st.ss_available { tr(ui, 569, "Uses the Internet only when you ask. Games without metadata keep their file name.") }
-                else { tr(ui, 570, "The metadata service is not available in this build") }), false));
-            if st.ss_user.is_empty() {
-                rows.push(("ss-signin".into(), row(tr(ui, 565, "ScreenScraper Account"), tr(ui, 566, "Not signed in"), String::new()), st.ss_available));
-            } else {
-                rows.push(("ss-signout".into(), row(tr(ui, 565, "ScreenScraper Account"), st.ss_user.clone(),
-                    armed_detail(&st.armed, "ss-signout", tr(ui, 191, "Press again to confirm"), tr(ui, 567, "Sign Out"))), true));
-            }
-            rows.push(("bulk".into(), row(tr(ui, 568, "Get Metadata for All Games"),
-                if st.busy { tr(ui, 571, "Getting metadata") } else { String::new() }, String::new()), st.ss_available && !st.busy));
-        }
-        56 => {
-            if st.hidden.is_empty() {
-                let mut r = row(tr(ui, 542, "No hidden games"), String::new(), String::new());
-                r.enabled = false;
-                rows.push(("info".into(), r, false));
-            }
-            for (id, title, system) in &st.hidden {
-                rows.push((format!("unhide:{id}"), toggle(title.clone(), true, system.clone()), true));
             }
         }
         66 => {
@@ -529,27 +576,6 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
                 }
             }
         }
-        64 => {
-            let get = |k: &str| st.online.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or_default();
-            rows.push(("info".into(), row(tr(ui, 661, "Online Services"), String::new(),
-                tr(ui, 662, "nuubOS works fully offline. These services use the network only when you enable or start them.")), false));
-            let meta = if get("ss_provider") != "available" { tr(ui, 205, "Unavailable") }
-                else if get("ss_user").is_empty() { tr(ui, 566, "Not signed in") } else { get("ss_user") };
-            rows.push(("open-meta".into(), nav(tr(ui, 564, "Game Metadata"), meta), true));
-            let ra = if get("ra_user").is_empty() { tr(ui, 566, "Not signed in") } else { get("ra_user") };
-            rows.push(("open-ra".into(), nav(tr(ui, 584, "RetroAchievements"), ra), true));
-            rows.push(("open-update".into(), nav(tr(ui, 651, "Software Update"), tr(ui, 663, "Only when you check")), true));
-            let remote: Vec<&str> = [("ssh", "SSH"), ("smb", "SMB"), ("web", "Web")]
-                .iter()
-                .filter(|(k, _)| get(k) == "1")
-                .map(|(_, n)| *n)
-                .collect();
-            rows.push(("open-remote".into(), nav(tr(ui, 599, "Remote Services"),
-                if remote.is_empty() { tr(ui, 54, "Off") } else { remote.join(", ") }), true));
-            let shares = get("shares");
-            rows.push(("info".into(), row(tr(ui, 611, "Network Shares"),
-                if shares.is_empty() || shares == "0" { tr(ui, 664, "Not in use") } else { shares }, String::new()), false));
-        }
         63 => {
             let get = |k: &str| st.update.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or_default();
             let build = get("build");
@@ -574,26 +600,41 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
                 }
             }
         }
+        55 => {
+            let mut hint = row(tr(ui, 773, "Hold Hotkey and press a button"), String::new(), String::new());
+            hint.enabled = false;
+            rows.push(("info".into(), hint, false));
+            for (action, idx, fallback) in HOTKEYS {
+                let control = emu_get(st, &format!("hotkey_{action}"));
+                rows.push((format!("hk:{action}"), nav(tr(ui, idx, fallback), crate::control_label(ui, &control)), true));
+            }
+        }
+        56 => {
+            let on = emu_get(st, "overlay") == "1";
+            rows.push(("ov-on".into(), toggle(tr(ui, 782, "Show Overlay"), on, String::new()), true));
+            let items = emu_get(st, "overlay_items");
+            for (field, idx, fallback) in OVERLAY_FIELDS {
+                let label = if idx == 0 { fallback.to_owned() } else { tr(ui, idx, fallback) };
+                let shown = items.split(',').any(|f| f == field);
+                let mut r = toggle(label, shown, String::new());
+                r.enabled = on;
+                rows.push((format!("ov:{field}"), r, on));
+            }
+        }
         57 => {
-            let get = |k: &str| st.remote.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or_default();
-            let address = get("address");
-            rows.push(("info".into(), row(tr(ui, 599, "Remote Services"), String::new(),
-                tr(ui, 604, "Only on networks you trust. Never exposed to the Internet.")), false));
-            rows.push(("svc:ssh".into(), toggle(tr(ui, 600, "SSH, SCP and SFTP"), get("ssh") == "1",
-                tr(ui, 601, "Sign in as root with the device password")), true));
-            rows.push(("svc:smb".into(), toggle(tr(ui, 602, "File Sharing (SMB)"), get("smb") == "1",
-                if address.is_empty() { String::new() } else { format!("\\\\{address}\\nuubOS") }), true));
-            rows.push(("svc:web".into(), toggle(tr(ui, 603, "Web Administration"), get("web") == "1",
-                if address.is_empty() { String::new() } else { format!("http://{address}") }), true));
-            rows.push(("info".into(), row(tr(ui, 605, "Address"),
-                if address.is_empty() { tr(ui, 159, "Not connected") } else { address.clone() }, String::new()), false));
-            rows.push(("info".into(), row(tr(ui, 285, "Username"), get("user"), String::new()), false));
-            rows.push(("password".into(), row(tr(ui, 172, "Password"),
-                if st.remote_password.is_empty() { "••••-••••-••••".into() } else { st.remote_password.clone() },
-                if st.remote_password.is_empty() { tr(ui, 608, "Press to show") } else { String::new() }), true));
-            rows.push(("regen".into(), row(tr(ui, 606, "Regenerate Password"), String::new(),
-                armed_detail(&st.armed, "regen", tr(ui, 191, "Press again to confirm"),
-                    tr(ui, 607, "The old password stops working"))), true));
+            /* Continue = the most recent state; then every state; then a
+             * fresh start. */
+            if let Some(newest) = st.states.iter().max_by_key(|s| s.1) {
+                let what = if newest.0 < 0 { tr(ui, 765, "Automatic Save") } else { tr_arg(ui, 423, "Slot {0}", &newest.0.to_string()) };
+                rows.push(("start:resume".into(), row(tr(ui, 763, "Continue"), what,
+                    tr_arg(ui, 766, "Saved {0}", &saved_when(ui, newest.1, &newest.2))), true));
+            }
+            for (slot, mtime, hhmm) in &st.states {
+                let title = if *slot < 0 { tr(ui, 765, "Automatic Save") } else { tr_arg(ui, 423, "Slot {0}", &slot.to_string()) };
+                rows.push((format!("start:slot:{slot}"), row(title, String::new(),
+                    tr_arg(ui, 766, "Saved {0}", &saved_when(ui, *mtime, hhmm))), true));
+            }
+            rows.push(("start:new".into(), row(tr(ui, 764, "Start from the Beginning"), String::new(), String::new()), true));
         }
         _ => {}
     }
@@ -614,29 +655,51 @@ pub(crate) fn render(ui: &HomeWindow) {
         crate::webui::render(ui);
         return;
     }
-    if !(50..=57).contains(&view) && !(63..=64).contains(&view) && view != 66 {
+    if view == 1 || (view == 0 && ui.get_settings_selected_index() == 1) {
+        render_services(ui);
+        return;
+    }
+    if view == GAMING_VIEW || (view == 0 && ui.get_settings_selected_index() == 3) {
+        render_gaming(ui);
+        return;
+    }
+    if !(50..=57).contains(&view) && view != 63 && view != 66 {
         return;
     }
     let rows = STATE.with(|st| build_rows(ui, &st.borrow(), view));
     let section = match view {
         50 => STATE.with(|st| st.borrow().details.system_name.clone()),
         51 => tr(ui, 524, "Game Settings"),
-        52 => tr(ui, 576, "BIOS Files"),
+        52 => {
+            /* First row of OTHER SYSTEMS; none when all are the user's. */
+            let mine = crate::library::system_ids();
+            let split = rows.iter().position(|r| r.0.starts_with("sys:") && !mine.contains(&r.0[4..].to_owned()))
+                .unwrap_or(0) as i32;
+            apply_rows_split(ui, rows, tr(ui, 760, "YOUR SYSTEMS"), split, tr(ui, 761, "OTHER SYSTEMS"));
+            return;
+        }
         53 => STATE.with(|st| {
             let st = st.borrow();
             st.bios.iter().find(|s| s.id == st.bios_system).map(|s| s.name.clone()).unwrap_or_default()
         }),
         54 => tr(ui, 584, "RetroAchievements"),
-        55 => tr(ui, 564, "Game Metadata"),
-        57 | 63 | 64 => tr(ui, 8, "System"),
-        66 => tr(ui, 669, "Syncthing"),
-        _ => tr(ui, 541, "Hidden Games"),
+        55 => tr(ui, 772, "Game Hotkeys"),
+        56 => tr(ui, 774, "Performance Overlay"),
+        57 => STATE.with(|st| st.borrow().details.title.clone()),
+        63 => tr(ui, 732, "STORAGE & SOFTWARE"),
+        _ => tr(ui, 727, "SERVICES"),
     };
     apply_rows(ui, rows, section);
 }
 
 /* Show rows on the generic page: (key, row, actionable). */
 pub(crate) fn apply_rows(ui: &HomeWindow, rows: Vec<(String, GenRow, bool)>, section: String) {
+    apply_rows_split(ui, rows, section, 0, String::new());
+}
+
+/* The same with a second section from row `split` (0 = none). */
+pub(crate) fn apply_rows_split(ui: &HomeWindow, rows: Vec<(String, GenRow, bool)>, section: String, split: i32,
+    split_label: String) {
     let count = rows.len() as i32;
     let index = ui.get_gen_index().clamp(0, (count - 1).max(0));
     STATE.with(|st| {
@@ -645,10 +708,26 @@ pub(crate) fn apply_rows(ui: &HomeWindow, rows: Vec<(String, GenRow, bool)>, sec
         st.actionable = rows.iter().map(|r| r.2).collect();
     });
     let select = rows.get(index as usize).map(|r| r.2).unwrap_or(false);
-    ui.set_gen_rows(ModelRc::from(Rc::new(VecModel::from(rows.into_iter().map(|r| r.1).collect::<Vec<_>>()))));
+    /* The row waiting for its confirming press shows the armed style. */
+    let armed = armed();
+    let rows: Vec<GenRow> = rows
+        .into_iter()
+        .map(|(key, mut row, _)| {
+            row.armed = !armed.is_empty() && key == armed;
+            row
+        })
+        .collect();
+    ui.set_gen_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
     ui.set_gen_index(index);
     ui.set_gen_select(select);
-    ui.set_gen_scroll(guarded_scroll_offset(index, count, ui.get_settings_list_visible_rows(), ui.get_gen_scroll()));
+    ui.set_gen_select_label("".into());
+    ui.set_gen_split(split);
+    ui.set_gen_split_label(split_label.into());
+    ui.set_gen_scroll(if split > 0 {
+        sectioned_scroll(ui, index, count, ui.get_gen_scroll(), (split, 0, 0))
+    } else {
+        guarded_scroll_offset(index, count, ui.get_settings_list_visible_rows(), ui.get_gen_scroll())
+    });
     ui.set_gen_section(section.into());
 }
 
@@ -715,6 +794,47 @@ pub fn open_details(ui: &HomeWindow, id: &str, title: &str, cover: Option<Image>
     ui.set_settings_open(true);
     write_ui_context("settings");
     load_details(ui, id.to_owned());
+}
+
+/* Home: a long press on a game card. The rows come from emud STATES. */
+pub fn open_launch_menu(ui: &HomeWindow, id: &str, title: &str, cover: Option<Image>) {
+    ACTIVE.store(true, Ordering::SeqCst);
+    STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        st.details = Details { id: id.to_owned(), title: title.to_owned(), available: true, ..Default::default() };
+        st.states.clear();
+        st.busy = false;
+    });
+    ui.set_details_active(true);
+    ui.set_details_title(title.into());
+    ui.set_details_subtitle("".into());
+    ui.set_details_description("".into());
+    ui.set_details_has_cover(cover.is_some());
+    ui.set_details_cover(cover.unwrap_or_default());
+    show(ui, 57);
+    ui.set_settings_open(true);
+    write_ui_context("settings");
+    let weak = ui.as_weak();
+    let id = id.to_owned();
+    thread::spawn(move || {
+        let reply = emulation(&format!("STATES\t{id}"), true);
+        let states: Vec<(i32, i64, String)> = reply
+            .lines()
+            .filter_map(|l| l.strip_prefix("state="))
+            .filter_map(|v| {
+                let f: Vec<&str> = v.split('\t').collect();
+                Some((f.first()?.parse().ok()?, f.get(1)?.parse().ok()?, f.get(2).unwrap_or(&"").to_string()))
+            })
+            .collect();
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            if !ACTIVE.load(Ordering::SeqCst) || ui.get_settings_view() != 57 {
+                return;
+            }
+            STATE.with(|st| st.borrow_mut().states = states);
+            render(&ui);
+        });
+    });
 }
 
 pub fn leave_details(ui: &HomeWindow) {
@@ -845,6 +965,8 @@ pub fn apply_choice(ui: &HomeWindow, context: &str, value: String) {
         "game-core" => game_set(ui, "core", value),
         "game-aspect" => game_set(ui, "aspect", value),
         "game-filter" => game_set(ui, "filter", value),
+        "emu-slots" => emu_set(ui, "slots", value),
+        c if c.starts_with("emu-hotkey:") => emu_set(ui, &format!("hotkey_{}", &c[11..]), value),
         "game-collection" => {
             if value == "new" {
                 open_system_keyboard(ui, &tr(ui, 539, "Collection name"), KEYBOARD_COLLECTION, 50, "text", "");
@@ -886,7 +1008,6 @@ fn details_confirm(ui: &HomeWindow, key: &str) {
             crate::library::launch_by_id(ui, &id, d.available);
         }
         "favorite" => details_command(ui, format!("FAVORITE\t{}\t{}", d.id, if d.favorite { 0 } else { 1 })),
-        "hide" => details_command(ui, format!("HIDE\t{}\t{}", d.id, if d.hidden { 0 } else { 1 })),
         "collections" => open_collections(ui),
         "settings" => show(ui, 51),
         "bios" => {
@@ -935,6 +1056,12 @@ fn details_confirm(ui: &HomeWindow, key: &str) {
                     }
                 });
             });
+        }
+        k if k.starts_with("start:") => {
+            let id = d.id.clone();
+            let mode = k[6..].to_owned();
+            leave_details(ui);
+            crate::library::launch_with_mode(ui, &id, true, &mode);
         }
         "core" => open_core_choice(ui),
         "aspect" => open_aspect_choice(ui),
@@ -994,17 +1121,191 @@ pub fn handle_details_action(ui: &HomeWindow, action: &str, settings_active: &Ar
 }
 
 /* ---------------------------------------------------------------- */
-/* Settings pages 52-57, 63-64                                      */
+/* Settings → Gaming, pages 52-54, 63, 66                           */
 /* ---------------------------------------------------------------- */
 
-/* Settings → Gaming, the home of pages 52-56. */
+/* Settings → Gaming: RetroAchievements (USER), then LIBRARY (DEVICE) with
+ * the ScreenScraper account and bulk scraping on the page itself and BIOS
+ * Files (user request 2026-10-08: no Game Metadata sub-page, no Hidden
+ * Games). */
 pub const GAMING_VIEW: i32 = 68;
 
-/* Pages opened from Online Services go back there, the others to their
- * category page. */
-fn set_back(ui: &HomeWindow, category: i32) {
-    let back = if ui.get_settings_view() == 64 { 64 } else { category };
-    STATE.with(|st| st.borrow_mut().back = back);
+fn gaming_rows(ui: &HomeWindow, st: &State) -> Vec<(String, GenRow, bool)> {
+    let mut rows = Vec::new();
+    let on = |k: &str| emu_get(st, k) == "1";
+    rows.push(("ra".into(), nav(tr(ui, 584, "RetroAchievements"),
+        if st.ra_user.is_empty() { tr(ui, 566, "Not signed in") } else { st.ra_user.clone() }), true));
+    /* The user's emulation settings (nuubos-emud). */
+    rows.push(("boot_screens".into(), toggle(tr(ui, 767, "Console Boot Screens"), on("boot_screens"),
+        tr(ui, 768, "Shows the console's start-up logo when its BIOS is available")), true));
+    rows.push(("slots".into(), nav(tr(ui, 769, "Save State Slots"), emu_get(st, "slots")), true));
+    rows.push(("slot_rotation".into(), toggle(tr(ui, 770, "Rotate Save Slots"), on("slot_rotation"),
+        tr(ui, 771, "Each save goes to the next slot, then starts again from slot 0")), true));
+    rows.push(("hotkeys".into(), nav(tr(ui, 772, "Game Hotkeys"), String::new()), true));
+    rows.push(("overlay".into(), nav(tr(ui, 774, "Performance Overlay"),
+        if on("overlay") { tr(ui, 222, "On") } else { tr(ui, 54, "Off") }), true));
+    rows.push(("bezels".into(), toggle(tr(ui, 775, "Bezels"), on("bezels"),
+        tr(ui, 776, "Frames the game when it does not fill the screen")), true));
+    rows.push(("crt".into(), toggle(tr(ui, 777, "CRT Effect"), on("crt"),
+        tr(ui, 778, "Scanlines for consoles played on TVs")), true));
+    if !st.ss_available {
+        let mut r = row(tr(ui, 565, "ScreenScraper Account"), tr(ui, 205, "Unavailable"),
+            tr(ui, 570, "The metadata service is not available in this build"));
+        r.enabled = false;
+        rows.push(("info".into(), r, false));
+    } else if st.ss_user.is_empty() {
+        rows.push(("ss-signin".into(), row(tr(ui, 565, "ScreenScraper Account"), tr(ui, 566, "Not signed in"),
+            String::new()), true));
+    } else {
+        rows.push(("ss-signout".into(), row(tr(ui, 565, "ScreenScraper Account"), st.ss_user.clone(),
+            armed_detail(&st.armed, "ss-signout", tr(ui, 191, "Press again to confirm"), tr(ui, 567, "Sign Out"))), true));
+    }
+    let mut bulk = row(tr(ui, 568, "Get Metadata for All Games"),
+        if st.ss_busy { tr(ui, 571, "Getting metadata") } else { String::new() },
+        tr(ui, 569, "Uses the Internet only when you ask. Games without metadata keep their file name."));
+    bulk.enabled = st.ss_available;
+    rows.push(("bulk".into(), bulk, st.ss_available && !st.ss_busy));
+    let mut bios = nav(tr(ui, 576, "BIOS Files"), String::new());
+    bios.detail = tr(ui, 581, "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.").into();
+    rows.push(("bios".into(), bios, true));
+    rows
+}
+
+fn render_gaming(ui: &HomeWindow) {
+    let (rows, select) = STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        let rows = gaming_rows(ui, &st);
+        st.gaming_keys = rows.iter().map(|r| r.0.clone()).collect();
+        /* LIBRARY (DEVICE) starts after the user's rows. */
+        let split = rows.iter().position(|r| matches!(r.0.as_str(), "info" | "ss-signin" | "ss-signout"))
+            .unwrap_or(rows.len()) as i32;
+        ui.set_gaming_split(split);
+        let select = rows.get(ui.get_gaming_index().max(0) as usize).map(|r| r.2).unwrap_or(false);
+        let armed = st.armed.clone();
+        let rows = rows.into_iter()
+            .map(|(key, mut row, _)| {
+                row.armed = !armed.is_empty() && key == armed;
+                row
+            })
+            .collect::<Vec<GenRow>>();
+        (rows, select)
+    });
+    ui.set_gaming_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+    ui.set_gaming_select(select);
+}
+
+/* Entering or previewing Gaming: both accounts from their services. */
+pub fn refresh_gaming(ui: &HomeWindow) {
+    STATE.with(|st| st.borrow_mut().armed.clear());
+    ui.set_gen_notice("".into());
+    render_gaming(ui);
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let user = active_user();
+        let ra = if user.is_empty() { String::new() } else { run_tool("/usr/bin/nuubos-achievementsctl", &["status", &user], None) };
+        let ss = run_tool("/usr/bin/nuubos-scraper", &["account", "status"], None);
+        let emu = pairs(&emulation("SETTINGS", true));
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            STATE.with(|st| {
+                let mut st = st.borrow_mut();
+                st.emu = emu;
+                st.ra_user = kv(&ra, "user").to_owned();
+                st.ra_enabled = kv(&ra, "enabled") == "1";
+                st.ra_hardcore = kv(&ra, "hardcore") == "1";
+                st.ss_user = kv(&ss, "user").to_owned();
+                st.ss_available = kv(&ss, "provider") == "available";
+            });
+            render_gaming(&ui);
+        });
+    });
+}
+
+/* Input on Settings → Gaming (from handle_settings_action). */
+pub fn handle_gaming(ui: &HomeWindow, action: &str) {
+    match action {
+        "menu_up" | "menu_down" => {
+            let count = STATE.with(|st| st.borrow().gaming_keys.len()).max(1) as i32;
+            ui.set_gaming_index(move_model_selection(ui.get_gaming_index(), count, if action == "menu_up" { -1 } else { 1 }));
+            /* Moving off an armed row cancels the pending confirmation. */
+            STATE.with(|st| st.borrow_mut().armed.clear());
+            render_gaming(ui);
+        }
+        "menu_confirm" => {
+            let key = STATE.with(|st| st.borrow().gaming_keys.get(ui.get_gaming_index().max(0) as usize).cloned())
+                .unwrap_or_default();
+            if key != "ss-signout" {
+                STATE.with(|st| st.borrow_mut().armed.clear());
+            }
+            match key.as_str() {
+                "ra" => open_achievements(ui),
+                "bios" => open_bios(ui),
+                "boot_screens" | "slot_rotation" | "bezels" | "crt" => {
+                    let on = STATE.with(|st| emu_get(&st.borrow(), &key) == "1");
+                    emu_set(ui, &key, if on { "0" } else { "1" }.to_owned());
+                }
+                "slots" => {
+                    let current = STATE.with(|st| emu_get(&st.borrow(), "slots"));
+                    let options = ["3", "5", "10", "20", "50", "99"].iter().map(|n| (n.to_string(), n.to_string())).collect();
+                    open_settings_choice(ui, "emu-slots", &tr(ui, 769, "Save State Slots"), options, &current);
+                }
+                "hotkeys" => {
+                    set_back(ui, GAMING_VIEW);
+                    show(ui, 55);
+                }
+                "overlay" => {
+                    set_back(ui, GAMING_VIEW);
+                    show(ui, 56);
+                }
+                "ss-signin" => {
+                    open_system_keyboard(ui, &tr(ui, 285, "Username"), KEYBOARD_SS_NAME, GAMING_VIEW, "text", "");
+                }
+                "ss-signout" => {
+                    if arm_or(ui, "ss-signout") {
+                        tool_then(ui, "/usr/bin/nuubos-scraper", vec!["account".into(), "clear".into()],
+                            None, |ui, _| refresh_gaming(ui));
+                    }
+                }
+                "bulk" if !STATE.with(|st| st.borrow().ss_busy) => {
+                    STATE.with(|st| st.borrow_mut().ss_busy = true);
+                    render_gaming(ui);
+                    tool_then(ui, "/usr/bin/nuubos-jobctl", vec!["run".into(), "scrape-bulk".into(), "all".into()],
+                        None, |ui, out| {
+                            STATE.with(|st| st.borrow_mut().ss_busy = false);
+                            let text = scrape_outcome(ui, out.trim());
+                            notice(ui, text);
+                            render_gaming(ui);
+                        });
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+/* SET one emulation setting, then show the stored values again. */
+fn emu_set(ui: &HomeWindow, key: &str, value: String) {
+    let line = format!("SET\t{key}\t{value}");
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let _ = emulation(&line, false);
+        let emu = pairs(&emulation("SETTINGS", true));
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            STATE.with(|st| st.borrow_mut().emu = emu);
+            if ui.get_settings_view() == GAMING_VIEW {
+                render_gaming(&ui);
+            } else {
+                render(&ui);
+            }
+        });
+    });
+}
+
+/* Back from these pages returns to their category page. */
+fn set_back(_ui: &HomeWindow, category: i32) {
+    STATE.with(|st| st.borrow_mut().back = category);
 }
 
 pub fn open_bios(ui: &HomeWindow) {
@@ -1016,7 +1317,6 @@ pub fn open_bios(ui: &HomeWindow) {
     }
     let target = STATE.with(|st| st.borrow().bios_system.clone());
     show(ui, 52);
-    notice(ui, tr(ui, 581, "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them."));
     let weak = ui.as_weak();
     thread::spawn(move || {
         let (systems, files) = parse_bios(&run_tool("/usr/bin/nuubos-biosctl", &["status"], None));
@@ -1062,49 +1362,135 @@ fn refresh_achievements(ui: &HomeWindow) {
     });
 }
 
-pub fn open_metadata(ui: &HomeWindow) {
-    set_back(ui, GAMING_VIEW);
-    show(ui, 55);
-    refresh_metadata(ui);
+/* ---------------------------------------------------------------- */
+/* Connectivity → SERVICES                                          */
+/* ---------------------------------------------------------------- */
+
+/* First row of the SERVICES section on the Connectivity page. */
+pub const SERVICES_FIRST: i32 = 6;
+
+fn service_rows(ui: &HomeWindow, st: &State) -> Vec<(String, GenRow, bool)> {
+    let get = |k: &str| st.remote.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or_default();
+    let address = get("address");
+    let mut rows = Vec::new();
+    rows.push(("svc:ssh".into(), toggle(tr(ui, 600, "SSH, SCP and SFTP"), get("ssh") == "1",
+        if address.is_empty() { tr(ui, 601, "Sign in as root with the device password") } else { format!("root@{address}") }), true));
+    rows.push(("svc:smb".into(), toggle(tr(ui, 602, "File Sharing (SMB)"), get("smb") == "1",
+        if address.is_empty() { String::new() } else { format!("\\\\{address}\\nuubOS") }), true));
+    rows.push(("svc:web".into(), toggle(tr(ui, 603, "Web Administration"), get("web") == "1",
+        if address.is_empty() { String::new() } else { format!("http://{address}") }), true));
+    rows.push(("password".into(), row(tr(ui, 172, "Password"),
+        if st.remote_password.is_empty() { "••••-••••-••••".into() } else { st.remote_password.clone() },
+        if st.remote_password.is_empty() { tr(ui, 608, "Press to show") }
+        else { tr(ui, 604, "Only on networks you trust. Never exposed to the Internet.") }), true));
+    rows.push(("regen".into(), row(tr(ui, 606, "Regenerate Password"), String::new(),
+        armed_detail(&st.armed, "regen", tr(ui, 191, "Press again to confirm"),
+            tr(ui, 607, "The old password stops working"))), true));
+    let sync = |k: &str| st.sync.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or_default();
+    rows.push(("open-sync".into(), nav(tr(ui, 669, "Syncthing"),
+        if sync("enabled") == "1" { tr(ui, 222, "On") } else { tr(ui, 54, "Off") }),
+        true));
+    if let Some(r) = rows.last_mut() {
+        r.1.detail = if sync("failed") == "1" { tr(ui, 677, "Syncthing stopped unexpectedly") }
+            else { tr(ui, 670, "Keeps your saves in sync with your other devices. It is not a backup.") }.into();
+    }
+    rows
 }
 
-fn refresh_metadata(ui: &HomeWindow) {
+fn render_services(ui: &HomeWindow) {
+    let rows = STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        let rows = service_rows(ui, &st);
+        st.service_keys = rows.iter().map(|r| r.0.clone()).collect();
+        let armed = st.armed.clone();
+        rows.into_iter()
+            .map(|(key, mut row, _)| {
+                row.armed = !armed.is_empty() && key == armed;
+                row
+            })
+            .collect::<Vec<GenRow>>()
+    });
+    ui.set_connectivity_services(ModelRc::from(Rc::new(VecModel::from(rows))));
+}
+
+/* Number of SERVICES rows (Connectivity's row count is SERVICES_FIRST + this). */
+pub fn service_count() -> i32 {
+    STATE.with(|st| st.borrow().service_keys.len()) as i32
+}
+
+/* Entering or previewing Connectivity: the password is hidden again. */
+pub fn reset_services(ui: &HomeWindow) {
+    STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        st.remote_password.clear();
+        st.armed.clear();
+    });
+    refresh_services(ui);
+}
+
+pub fn refresh_services(ui: &HomeWindow) {
+    if ui.get_connectivity_services().row_count() == 0 {
+        render_services(ui);
+    }
     let weak = ui.as_weak();
     thread::spawn(move || {
-        let out = run_tool("/usr/bin/nuubos-scraper", &["account", "status"], None);
+        let pairs = |out: String| -> Vec<(String, String)> {
+            out.lines().filter_map(|l| l.split_once('=').map(|(k, v)| (k.to_owned(), v.to_owned()))).collect()
+        };
+        let remote = pairs(run_tool("/usr/sbin/nuubos-remotectl", &["status"], None));
+        let sync = pairs(run_tool("/usr/bin/nuubos-syncctl", &["status"], None));
         let _ = slint::invoke_from_event_loop(move || {
             let Some(ui) = weak.upgrade() else { return };
             STATE.with(|st| {
                 let mut st = st.borrow_mut();
-                st.ss_user = kv(&out, "user").to_owned();
-                st.ss_available = kv(&out, "provider") == "available";
+                st.remote = remote;
+                st.sync = sync;
             });
-            render(&ui);
+            render_services(&ui);
         });
     });
 }
 
-pub fn open_remote(ui: &HomeWindow) {
-    set_back(ui, 19);
-    STATE.with(|st| st.borrow_mut().remote_password.clear());
-    show(ui, 57);
-    refresh_remote(ui);
+/* Moving off an armed row cancels the pending confirmation. */
+pub fn services_disarm(ui: &HomeWindow) {
+    if STATE.with(|st| std::mem::take(&mut st.borrow_mut().armed)).is_empty() {
+        return;
+    }
+    render_services(ui);
 }
 
-fn refresh_remote(ui: &HomeWindow) {
-    let weak = ui.as_weak();
-    thread::spawn(move || {
-        let out = run_tool("/usr/sbin/nuubos-remotectl", &["status"], None);
-        let pairs: Vec<(String, String)> = out
-            .lines()
-            .filter_map(|l| l.split_once('=').map(|(k, v)| (k.to_owned(), v.to_owned())))
-            .collect();
-        let _ = slint::invoke_from_event_loop(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            STATE.with(|st| st.borrow_mut().remote = pairs);
-            render(&ui);
-        });
-    });
+pub fn services_confirm(ui: &HomeWindow, index: i32) {
+    let key = STATE.with(|st| st.borrow().service_keys.get((index - SERVICES_FIRST).max(0) as usize).cloned())
+        .unwrap_or_default();
+    if key != "regen" {
+        STATE.with(|st| st.borrow_mut().armed.clear());
+    }
+    match key.as_str() {
+        k if k.starts_with("svc:") => {
+            let svc = k[4..].to_owned();
+            let on = STATE.with(|st| st.borrow().remote.iter().any(|(key, v)| *key == svc && v == "1"));
+            tool_then(ui, "/usr/sbin/nuubos-remotectl", vec!["set".into(), svc, if on { "0".into() } else { "1".into() }],
+                None, |ui, _| refresh_services(ui));
+        }
+        "password" => {
+            /* The local console is the trusted place to read it (EPIC-039). */
+            tool_then(ui, "/usr/sbin/nuubos-remotectl", vec!["credential".into(), "show".into()], None, |ui, out| {
+                STATE.with(|st| st.borrow_mut().remote_password = out.trim().to_owned());
+                render_services(ui);
+            });
+        }
+        "regen" => {
+            if arm_or(ui, "regen") {
+                render_services(ui);
+                tool_then(ui, "/usr/sbin/nuubos-remotectl", vec!["credential".into(), "regenerate".into()], None, |ui, _| {
+                    STATE.with(|st| st.borrow_mut().remote_password.clear());
+                    refresh_services(ui);
+                });
+            }
+        }
+        "open-sync" => open_sync(ui),
+        _ => {}
+    }
 }
 
 pub fn open_update(ui: &HomeWindow) {
@@ -1142,35 +1528,8 @@ fn refresh_update(ui: &HomeWindow) {
     });
 }
 
-pub fn open_online(ui: &HomeWindow) {
-    set_back(ui, 19);
-    show(ui, 64);
-    let weak = ui.as_weak();
-    let user = ui.get_active_user_id().to_string();
-    thread::spawn(move || {
-        let mut pairs: Vec<(String, String)> = Vec::new();
-        let ss = run_tool("/usr/bin/nuubos-scraper", &["account", "status"], None);
-        pairs.push(("ss_user".into(), kv(&ss, "user").to_owned()));
-        pairs.push(("ss_provider".into(), kv(&ss, "provider").to_owned()));
-        if !user.is_empty() {
-            let ra = run_tool("/usr/bin/nuubos-achievementsctl", &["status", &user], None);
-            pairs.push(("ra_user".into(), kv(&ra, "user").to_owned()));
-        }
-        let remote = run_tool("/usr/sbin/nuubos-remotectl", &["status"], None);
-        for k in ["ssh", "smb", "web"] {
-            pairs.push((k.into(), kv(&remote, k).to_owned()));
-        }
-        let shares = run_tool("/usr/sbin/nuubos-sharesctl", &["list"], None);
-        pairs.push(("shares".into(), shares.lines().filter(|l| l.starts_with("share=")).count().to_string()));
-        let _ = slint::invoke_from_event_loop(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            STATE.with(|st| st.borrow_mut().online = pairs);
-            render(&ui);
-        });
-    });
-}
-
 pub fn open_sync(ui: &HomeWindow) {
+    set_back(ui, 1);
     show(ui, 66);
     refresh_sync(ui);
 }
@@ -1185,32 +1544,6 @@ fn refresh_sync(ui: &HomeWindow) {
         let _ = slint::invoke_from_event_loop(move || {
             let Some(ui) = weak.upgrade() else { return };
             STATE.with(|st| st.borrow_mut().sync = pairs);
-            render(&ui);
-        });
-    });
-}
-
-pub fn open_hidden(ui: &HomeWindow) {
-    set_back(ui, GAMING_VIEW);
-    show(ui, 56);
-    refresh_hidden(ui);
-}
-
-fn refresh_hidden(ui: &HomeWindow) {
-    let weak = ui.as_weak();
-    thread::spawn(move || {
-        let reply = library("GAMES\thidden", true);
-        let games: Vec<(String, String, String)> = reply
-            .lines()
-            .filter_map(|l| l.strip_prefix("game="))
-            .filter_map(|v| {
-                let f: Vec<&str> = v.split('\t').collect();
-                (f.len() >= 3).then(|| (f[0].to_owned(), f[2].to_owned(), f[1].to_owned()))
-            })
-            .collect();
-        let _ = slint::invoke_from_event_loop(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            STATE.with(|st| st.borrow_mut().hidden = games);
             render(&ui);
         });
     });
@@ -1232,6 +1565,33 @@ pub(crate) fn tool_then(ui: &HomeWindow, program: &'static str, args: Vec<String
 
 fn page_confirm(ui: &HomeWindow, view: i32, key: &str) {
     match (view, key) {
+        (55, k) if k.starts_with("hk:") => {
+            let action = k[3..].to_owned();
+            let (label, current) = STATE.with(|st| {
+                let st = st.borrow();
+                let label = HOTKEYS.iter().find(|h| h.0 == action).map(|h| tr(ui, h.1, h.2)).unwrap_or_default();
+                (label, emu_get(&st, &format!("hotkey_{action}")))
+            });
+            let options = HOTKEY_CONTROLS.iter().map(|c| (c.to_string(), crate::control_label(ui, c))).collect();
+            open_settings_choice(ui, &format!("emu-hotkey:{action}"), &label, options, &current);
+        }
+        (56, "ov-on") => {
+            let on = STATE.with(|st| emu_get(&st.borrow(), "overlay") == "1");
+            emu_set(ui, "overlay", if on { "0" } else { "1" }.to_owned());
+        }
+        (56, k) if k.starts_with("ov:") => {
+            let field = &k[3..];
+            let items = STATE.with(|st| emu_get(&st.borrow(), "overlay_items"));
+            let mut list: Vec<&str> = items.split(',').filter(|f| !f.is_empty()).collect();
+            if list.contains(&field) {
+                list.retain(|f| *f != field);
+            } else {
+                list.push(field);
+            }
+            /* Kept in overlay order. */
+            let ordered: Vec<&str> = OVERLAY_FIELDS.iter().map(|f| f.0).filter(|f| list.contains(f)).collect();
+            emu_set(ui, "overlay_items", ordered.join(","));
+        }
         (52, k) if k.starts_with("sys:") => {
             STATE.with(|st| st.borrow_mut().bios_system = k[4..].to_owned());
             show(ui, 53);
@@ -1253,32 +1613,6 @@ fn page_confirm(ui: &HomeWindow, view: i32, key: &str) {
                 tool_then(ui, "/usr/bin/nuubos-achievementsctl", vec!["logout".into(), active_user()],
                     None, |ui, _| refresh_achievements(ui));
             }
-        }
-        (55, "ss-signin") => {
-            open_system_keyboard(ui, &tr(ui, 285, "Username"), KEYBOARD_SS_NAME, 55, "text", "");
-        }
-        (55, "ss-signout") => {
-            if arm_or(ui, "ss-signout") {
-                tool_then(ui, "/usr/bin/nuubos-scraper", vec!["account".into(), "clear".into()],
-                    None, |ui, _| refresh_metadata(ui));
-            }
-        }
-        (55, "bulk") => {
-            STATE.with(|st| st.borrow_mut().busy = true);
-            render(ui);
-            tool_then(ui, "/usr/bin/nuubos-jobctl", vec!["run".into(), "scrape-bulk".into(), "all".into()],
-                None, |ui, out| {
-                    STATE.with(|st| st.borrow_mut().busy = false);
-                    let text = scrape_outcome(ui, out.trim());
-                    notice(ui, text);
-                    render(ui);
-                });
-        }
-        (57, k) if k.starts_with("svc:") => {
-            let svc = k[4..].to_owned();
-            let on = STATE.with(|st| st.borrow().remote.iter().any(|(key, v)| *key == svc && v == "1"));
-            tool_then(ui, "/usr/sbin/nuubos-remotectl", vec!["set".into(), svc, if on { "0".into() } else { "1".into() }],
-                None, |ui, _| refresh_remote(ui));
         }
         (66, "sync-enabled") => {
             let on = STATE.with(|st| st.borrow().sync.iter().any(|(k, v)| k == "enabled" && v == "1"));
@@ -1306,10 +1640,6 @@ fn page_confirm(ui: &HomeWindow, view: i32, key: &str) {
                 tool_then(ui, "/usr/bin/nuubos-syncctl", vec!["remove".into(), k[12..].to_owned()], None, |ui, _| refresh_sync(ui));
             }
         }
-        (64, "open-meta") => open_metadata(ui),
-        (64, "open-ra") => open_achievements(ui),
-        (64, "open-update") => open_update(ui),
-        (64, "open-remote") => open_remote(ui),
         (63, "update-check") => {
             STATE.with(|st| st.borrow_mut().busy = true);
             render(ui);
@@ -1352,33 +1682,6 @@ fn page_confirm(ui: &HomeWindow, view: i32, key: &str) {
                 });
             }
         }
-        (57, "password") => {
-            /* The local console is the trusted place to read it (EPIC-039). */
-            tool_then(ui, "/usr/sbin/nuubos-remotectl", vec!["credential".into(), "show".into()], None, |ui, out| {
-                STATE.with(|st| st.borrow_mut().remote_password = out.trim().to_owned());
-                render(ui);
-            });
-        }
-        (57, "regen") => {
-            if arm_or(ui, "regen") {
-                tool_then(ui, "/usr/sbin/nuubos-remotectl", vec!["credential".into(), "regenerate".into()], None, |ui, _| {
-                    STATE.with(|st| st.borrow_mut().remote_password.clear());
-                    refresh_remote(ui);
-                });
-            }
-        }
-        (56, k) if k.starts_with("unhide:") => {
-            let id = k[7..].to_owned();
-            let weak = ui.as_weak();
-            thread::spawn(move || {
-                let _ = library(&format!("HIDE\t{id}\t0"), false);
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = weak.upgrade() {
-                        refresh_hidden(&ui);
-                    }
-                });
-            });
-        }
         _ => {}
     }
 }
@@ -1395,10 +1698,16 @@ pub fn handle_page(ui: &HomeWindow, view: i32, action: &str) {
             STATE.with(|st| st.borrow_mut().bios_system.clear());
             match view {
                 53 => show(ui, 52),
-                66 => navigate_settings_view(ui, 24),
                 _ => {
                     let back = STATE.with(|st| st.borrow().back);
                     navigate_settings_view(ui, if back > 0 { back } else { 19 });
+                    if back == 1 {
+                        /* Syncthing's state on the SERVICES row. */
+                        refresh_services(ui);
+                    } else if back == GAMING_VIEW {
+                        /* The RetroAchievements account on its row. */
+                        refresh_gaming(ui);
+                    }
                 }
             }
         }
@@ -1436,7 +1745,7 @@ pub fn keyboard_done(ui: &HomeWindow, purpose: i32, value: String) {
         }
         KEYBOARD_RA_NAME | KEYBOARD_SS_NAME => {
             if value.is_empty() {
-                navigate_settings_view(ui, if purpose == KEYBOARD_RA_NAME { 54 } else { 55 });
+                navigate_settings_view(ui, if purpose == KEYBOARD_RA_NAME { 54 } else { GAMING_VIEW });
                 render(ui);
                 return;
             }
@@ -1446,7 +1755,7 @@ pub fn keyboard_done(ui: &HomeWindow, purpose: i32, value: String) {
                 if ra { st.ra_name_pending = value.clone() } else { st.ss_name_pending = value.clone() }
             });
             open_system_keyboard(ui, &tr(ui, 172, "Password"),
-                if ra { KEYBOARD_RA_PASSWORD } else { KEYBOARD_SS_PASSWORD }, if ra { 54 } else { 55 }, "password", "");
+                if ra { KEYBOARD_RA_PASSWORD } else { KEYBOARD_SS_PASSWORD }, if ra { 54 } else { GAMING_VIEW }, "password", "");
         }
         KEYBOARD_RA_PASSWORD => {
             ui.set_keyboard_value("".into());
@@ -1469,14 +1778,14 @@ pub fn keyboard_done(ui: &HomeWindow, purpose: i32, value: String) {
         }
         KEYBOARD_SS_PASSWORD => {
             ui.set_keyboard_value("".into());
-            navigate_settings_view(ui, 55);
+            navigate_settings_view(ui, GAMING_VIEW);
             let name = STATE.with(|st| std::mem::take(&mut st.borrow_mut().ss_name_pending));
             if value.is_empty() || name.is_empty() {
                 render(ui);
                 return;
             }
             tool_then(ui, "/usr/bin/nuubos-scraper", vec!["account".into(), "set".into(), name], Some(value),
-                |ui, _| refresh_metadata(ui));
+                |ui, _| refresh_gaming(ui));
         }
         _ => {}
     }

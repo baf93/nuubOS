@@ -1,0 +1,32 @@
+From: nuubOS Project
+Subject: [PATCH] pan/genxml: parenthesize dst in pan_cast_and_pack
+
+The cast in pan_cast_and_pack() binds tighter than pointer arithmetic in
+the argument, so pan_fb_preload.c packs the Bifrost padding attribute
+buffer with
+
+    pan_cast_and_pack(varying_buffer.cpu + pan_size(ATTRIBUTE_BUFFER), ...)
+
+at cpu + 16 * sizeof(mali_attribute_buffer_packed) = +256 bytes instead
+of +16: every framebuffer preload on v6/v7 writes 16 bytes past a 32-byte
+pool allocation (corrupting later descriptors, or SIGSEGV in
+pan_preload_emit_pre_frame_dcd when the allocation ends a slab; seen in
+RetroArch eglSwapBuffers after a window resize on Mali-G31).
+
+Upstream-Status: Pending
+
+--- a/src/panfrost/lib/genxml/pan_pack_helpers.h
++++ b/src/panfrost/lib/genxml/pan_pack_helpers.h
+@@ -98,10 +98,10 @@
+         }))
+ 
+ #define pan_cast_and_pack(dst, T, name)                                        \
+-   pan_pack((PREFIX2(T, PACKED_T) *)dst, T, name)
++   pan_pack((PREFIX2(T, PACKED_T) *)(dst), T, name)
+ 
+ #define pan_cast_and_pack_nodefaults(dst, T, name)                             \
+-   pan_pack_nodefaults((PREFIX2(T, PACKED_T) *)dst, T, name)
++   pan_pack_nodefaults((PREFIX2(T, PACKED_T) *)(dst), T, name)
+ 
+ #define pan_unpack(src, T, name)                                               \
+    UNUSED struct PREFIX1(T) name;                                              \

@@ -1384,14 +1384,23 @@ struct game_hotkey {
 	const char *action;
 };
 
-static const struct game_hotkey game_hotkeys[] = {
+#define GAME_HOTKEY_COUNT 7
+
+/* Defaults; the Emulation Service sends the user's chords (HOTKEYS) when it
+ * takes the gamepads, and again when the user changes them. */
+static const struct game_hotkey default_game_hotkeys[GAME_HOTKEY_COUNT] = {
 	{ PAD_R1, "save_state" },
 	{ PAD_L1, "load_state" },
-	{ PAD_RIGHT, "slot_next" },
-	{ PAD_LEFT, "slot_prev" },
-	{ PAD_R2, "fast_forward" },
+	{ PAD_UP, "slot_next" },
+	{ PAD_DOWN, "slot_prev" },
+	{ PAD_NORTH, "fast_forward" },
+	{ PAD_START, "quit" },
 	{ PAD_L2, "screenshot" },
 };
+static struct game_hotkey game_hotkeys[GAME_HOTKEY_COUNT];
+/* Chord controls held through an axis (hat D-pad, analog trigger): edge
+ * detection while the modifier is held. */
+static bool hotkey_axis_down[PAD_CONTROL_COUNT];
 
 static bool web_on;
 
@@ -1708,6 +1717,7 @@ static bool game_modifier_event(const struct input_dev *input,
 	if (ev->value == 1) {
 		hotkey_held = true;
 		hotkey_used = false;
+		memset(hotkey_axis_down, 0, sizeof(hotkey_axis_down));
 		release_all_vpads();
 	} else if (ev->value == 0 && hotkey_held) {
 		hotkey_held = false;
@@ -1730,17 +1740,64 @@ static bool game_hotkey_event(const struct input_dev *input,
 
 	if (!hotkey_held || !map)
 		return false;
-	if (ev->type != EV_KEY || ev->value != 1 || web_on)
+	if ((ev->type != EV_KEY && ev->type != EV_ABS) || web_on)
 		return true;
-	for (i = 0; i < sizeof(game_hotkeys) / sizeof(game_hotkeys[0]); i++) {
-		const struct pad_source *src = &map->src[game_hotkeys[i].control];
+	for (i = 0; i < GAME_HOTKEY_COUNT; i++) {
+		enum pad_control c = game_hotkeys[i].control;
+		const struct pad_source *src = &map->src[c];
+		bool fire = false;
 
-		if (src->is_key && src->code == ev->code) {
+		if (src->code < 0 || src->code != ev->code)
+			continue;
+		if (ev->type == EV_KEY && src->is_key) {
+			fire = ev->value == 1;
+		} else if (ev->type == EV_ABS && !src->is_key) {
+			/* Same thresholds as a half axis bound to a button. */
+			int n = normalize_abs(input, ev->code, ev->value);
+			int travel = src->dir == 1 ? n : src->dir == -1 ? -n :
+				     src->dir == 2 ? (n + 100) / 2 : (100 - n) / 2;
+			bool down = hotkey_axis_down[c] ? travel >= 30 : travel >= 50;
+
+			fire = down && !hotkey_axis_down[c];
+			hotkey_axis_down[c] = down;
+		}
+		if (fire) {
 			hotkey_used = true;
 			send_game_hotkey(game_hotkeys[i].action);
 		}
 	}
 	return true;
+}
+
+static void reset_game_hotkeys(void)
+{
+	memcpy(game_hotkeys, default_game_hotkeys, sizeof(game_hotkeys));
+}
+
+/* HOTKEYS <action>=<control> ...: the user's chords from the gamepad owner.
+ * Controls are nuubos-controllersd ids; unknown words are ignored. */
+static void set_game_hotkeys(const char *spec)
+{
+	char copy[512];
+	char *save = NULL;
+
+	reset_game_hotkeys();
+	snprintf(copy, sizeof(copy), "%s", spec);
+	for (char *item = strtok_r(copy, " ", &save); item; item = strtok_r(NULL, " ", &save)) {
+		char *eq = strchr(item, '=');
+
+		if (!eq)
+			continue;
+		*eq++ = '\0';
+		for (size_t i = 0; i < GAME_HOTKEY_COUNT; i++) {
+			if (strcmp(game_hotkeys[i].action, item) != 0)
+				continue;
+			for (int c = 0; c < PAD_AXIS_FIRST; c++)
+				if (c != PAD_MODE && strcmp(pad_controls[c].name, eq) == 0)
+					game_hotkeys[i].control = (enum pad_control)c;
+		}
+	}
+	log_message("game-hotkeys %s", spec);
 }
 
 /*
@@ -2290,6 +2347,12 @@ static void handle_command(struct client *client, const char *line)
 	if (strcmp(line, "GAMEPADS ON") == 0) {
 		client->owns_gamepads = true;
 		set_gamepads(true);
+		(void)write_all(client->fd, "OK\n");
+		return;
+	}
+
+	if (strncmp(line, "HOTKEYS ", 8) == 0 && client->owns_gamepads) {
+		set_game_hotkeys(line + 8);
 		(void)write_all(client->fd, "OK\n");
 		return;
 	}
@@ -2935,6 +2998,7 @@ int main(int argc, char **argv)
 			"Usage: %s [--handoff]\n", argv[0]);
 		return 2;
 	}
+	reset_game_hotkeys();
 
 	if (mkdir("/run/nuubos", 0755) != 0 && errno != EEXIST) {
 		perror("nuubos-inputd: mkdir /run/nuubos");
@@ -2974,6 +3038,10 @@ int main(int argc, char **argv)
 	signal(SIGTERM, handle_signal);
 	signal(SIGINT, handle_signal);
 	signal(SIGHUP, handle_signal);
+	/* A subscriber that goes away (UI restart or crash) must not kill the
+	 * service on the next write: write() then fails with EPIPE and the
+	 * client is dropped. */
+	signal(SIGPIPE, SIG_IGN);
 
 	load_bindings();
 	rescan_inputs();

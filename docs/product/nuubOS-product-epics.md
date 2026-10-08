@@ -3929,7 +3929,6 @@ Search results → random from the current result set
 The random candidate set must exclude:
 
 - `UNAVAILABLE` games;
-- games hidden for the active user;
 - entries that cannot currently be launched.
 
 Random selection chooses a game; the exact final UX may either highlight/reveal the selected game or launch it according to the final interaction design. It must not silently select an invalid entry.
@@ -3960,7 +3959,6 @@ Contextual actions may include:
 - Play;
 - Favorite;
 - Add/Remove from Collection;
-- Hide Game;
 - Delete Game;
 - Game Settings;
 - Save States;
@@ -4017,17 +4015,9 @@ The UI must clearly communicate `UNAVAILABLE`.
 
 If the same known content becomes available again through the discovery/storage layer, the entry returns to `AVAILABLE` without losing its retained state.
 
-### Hidden games
+### Hidden games (withdrawn)
 
-`Hide Game` is **per-user**.
-
-Hiding a game:
-
-- does not delete the ROM;
-- does not affect other users;
-- removes it from normal browsing for that user;
-- preserves all game/user data;
-- can be reversed through Library settings/hidden-game management.
+Product decision 2026-10-08: nuubOS has no Hide Game / hidden-game management. Every available game appears in the Library; a game the user does not want is deleted (Delete Game) or kept out of Favorites/collections.
 
 ### Delete Game / ROM
 
@@ -4135,7 +4125,6 @@ SHARED / DEVICE
 
 PER USER
 ├── favorite
-├── hidden state
 ├── custom collections
 ├── recently played
 ├── Last Played
@@ -4160,7 +4149,7 @@ PER USER
 | `US-LIB-009` | MUST | As a user, I want Random Game to select from the currently browsed eligible game set. |
 | `US-LIB-010` | MUST | As a user, I want missing ROMs/storage to mark known games UNAVAILABLE rather than silently deleting their Library data. |
 | `US-LIB-011` | MUST | As a user, I want a returning known ROM/storage to restore the game to AVAILABLE without losing retained data. |
-| `US-LIB-012` | MUST | As a user, I want to hide a game from my own Library without deleting its ROM or affecting other users. |
+| `US-LIB-012` | WITHDRAWN | Hide Game withdrawn by product decision 2026-10-08 (see Hidden games). |
 | `US-LIB-013` | MUST | As a user, I want to permanently delete a game and its ROM directly from Game Details/context management with explicit confirmation. |
 | `US-LIB-014` | MUST | As a user, I want multi-disc games represented as one logical Library entry when the content relationship is known. |
 | `US-LIB-015` | MUST | As a user, I want the Library to remain functional without online metadata services. |
@@ -4179,15 +4168,15 @@ PER USER
 | `US-LIB-006` | Favorites and Recently Played differ correctly between two user profiles using the same shared ROM catalog. |
 | `US-LIB-007` | A user can create/rename/delete a collection and add/remove cross-system game references without copying/deleting ROMs. |
 | `US-LIB-008` | Controller-driven title search returns matching known games and remains usable without a physical keyboard. |
-| `US-LIB-009` | Random selection from All Games, a System and a Collection only selects eligible AVAILABLE/non-hidden entries belonging to that current set. |
+| `US-LIB-009` | Random selection from All Games, a System and a Collection only selects eligible AVAILABLE entries belonging to that current set. |
 | `US-LIB-010` | Removing backing removable storage or a ROM causes the known entry to become visibly UNAVAILABLE while preserving metadata and personal state. |
 | `US-LIB-011` | Restoring the recognized backing content transitions the same logical entry back to AVAILABLE without resetting retained metadata/favorite/history. |
-| `US-LIB-012` | Hiding a game removes it from normal views only for the active user; the ROM remains present and another user remains unaffected. |
+| `US-LIB-012` | Withdrawn (2026-10-08). |
 | `US-LIB-013` | Delete Game requires explicit destructive confirmation, deletes only content identified as safely owned by that game, reports filesystem failure accurately, and makes the deleted content unavailable to all users. |
 | `US-LIB-014` | A validated supported `.m3u` multi-disc set is represented as one logical visible title and launches through its canonical descriptor rather than exposing component discs as ordinary duplicates. |
 | `US-LIB-015` | With no network/scraper configuration, newly discovered supported ROMs still appear with locally derived identity and can be launched. |
 | `US-LIB-016` | The active user can use both Grid and List modes; switching mode does not alter the underlying Library data. |
-| `US-LIB-017` | Two users browsing one shared ROM catalog retain independent favorite/hidden/collection/history/view state. |
+| `US-LIB-017` | Two users browsing one shared ROM catalog retain independent favorite/collection/history/view state. |
 
 ### Dependencies
 
@@ -4195,7 +4184,7 @@ PER USER
 |---|---|
 | `EPIC-001` nuubUI | Library browsing and controller interaction |
 | `EPIC-003` Multi-user Profiles | per-user Library state |
-| `EPIC-004` Settings | Library preferences/hidden-game management |
+| `EPIC-004` Settings | Library preferences |
 | `EPIC-006` Notification System | scan/delete/storage-state feedback |
 | `EPIC-011` Game Library | this Epic |
 | `EPIC-012` Automatic ROM Discovery | game/content identity, system association, availability and deletion ownership |
@@ -4285,7 +4274,6 @@ Approved product decisions include:
 - Random Game is baseline functionality and respects the current browsing/filter context;
 - missing content becomes `UNAVAILABLE` rather than being silently forgotten;
 - returning recognized content becomes `AVAILABLE` again with retained state;
-- Hide Game is per-user and non-destructive;
 - Delete Game permanently deletes the backing ROM/content and is device-global/destructive with explicit confirmation;
 - multi-file deletion requires validated ownership/reference information;
 - multi-disc titles can be represented as one logical game;

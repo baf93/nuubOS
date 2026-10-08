@@ -1,0 +1,121 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] wayland: nuubOS render height through wp_viewporter
+
+NUUBOS_RA_RENDER_HEIGHT=N (set by nuubos-emud) sizes the window buffer at
+N lines, width from the native buffer aspect, and leaves the scaling to
+the viewport destination: wlroots then scans the buffer out on a scaling
+DRM plane (DE33 VI channel, kernel patch 0031), so on a 1080p TV the
+frontend, its shaders and the core's output pass draw the pixels of the
+handheld panel. Unset/0, or a native buffer not taller than N, keeps the
+stock behaviour.
+
+Upstream-Status: Inappropriate [nuubOS specific]
+
+diff --color -ru a/gfx/common/wayland_common.c b/gfx/common/wayland_common.c
+--- a/gfx/common/wayland_common.c
++++ b/gfx/common/wayland_common.c
+@@ -18,6 +18,7 @@
+ #endif
+ 
+ #include <fcntl.h>
++#include <stdlib.h>
+ #include <errno.h>
+ #include <sys/mman.h>
+ #include <sys/syscall.h>
+@@ -28,6 +29,36 @@
+ #include "../../frontend/frontend_driver.h"
+ #include "../../verbosity.h"
+ 
++/* nuubOS: NUUBOS_RA_RENDER_HEIGHT=N renders the window buffer at N lines
++ * (width from the native buffer aspect) and lets wp_viewporter scale it to
++ * the surface: the compositor presents it on a scaling DRM plane, so the
++ * frontend and its shaders draw fewer pixels on a large TV. 0/unset (or a
++ * native buffer not taller than N) keeps the native size. */
++unsigned wl_nuubos_render_height(gfx_ctx_wayland_data_t *wl)
++{
++   static int target = -1;
++   if (target < 0)
++   {
++      const char *s = getenv("NUUBOS_RA_RENDER_HEIGHT");
++      target        = s ? atoi(s) : 0;
++      if (target < 0)
++         target     = 0;
++      if (target)
++         RARCH_LOG("[Wayland] nuubOS render height %d.\n", target);
++   }
++   return wl->viewport ? (unsigned)target : 0;
++}
++
++void wl_nuubos_render_size(gfx_ctx_wayland_data_t *wl,
++      unsigned *width, unsigned *height)
++{
++   unsigned target = wl_nuubos_render_height(wl);
++   if (!target || !*width || *height <= target)
++      return;
++   *width  = ((*width * target + *height / 2) / *height + 1) & ~1u;
++   *height = target;
++}
++
+ #ifdef HAVE_DBUS
+ #include "dbus_common.h"
+ #endif
+@@ -133,6 +164,7 @@
+          FRACTIONAL_SCALE_MULT(wl->width,  wl->fractional_scale_num) : wl->width  * wl->buffer_scale;
+       wl->buffer_height = wl->fractional_scale ?
+          FRACTIONAL_SCALE_MULT(wl->height, wl->fractional_scale_num) : wl->height * wl->buffer_scale;
++      wl_nuubos_render_size(wl, &wl->buffer_width, &wl->buffer_height);
+       wl->resize        = true;
+       if (wl->viewport)
+       {
+@@ -205,6 +237,7 @@
+          FRACTIONAL_SCALE_MULT(width,  wl->fractional_scale_num) : width  * wl->buffer_scale;
+       wl->buffer_height = wl->fractional_scale ?
+          FRACTIONAL_SCALE_MULT(height, wl->fractional_scale_num) : height * wl->buffer_scale;
++      wl_nuubos_render_size(wl, &wl->buffer_width, &wl->buffer_height);
+       wl->resize        = true;
+       if (wl->viewport)
+       {
+@@ -264,6 +297,7 @@
+         FRACTIONAL_SCALE_MULT(wl->width,  wl->pending_fractional_scale_num) : wl->width  * wl->pending_buffer_scale;
+      *height = wl->fractional_scale ?
+         FRACTIONAL_SCALE_MULT(wl->height, wl->pending_fractional_scale_num) : wl->height * wl->pending_buffer_scale;
++     wl_nuubos_render_size(wl, width, height);
+    }
+ }
+ 
+@@ -981,6 +1015,7 @@
+       wl->buffer_height        = wl->fractional_scale ?
+          FRACTIONAL_SCALE_MULT(wl->buffer_height, wl->fractional_scale_num) : wl->buffer_height * wl->buffer_scale;
+    }
++   wl_nuubos_render_size(wl, &wl->buffer_width, &wl->buffer_height);
+    if (wl->viewport)
+    {
+       /* Stretch old buffer to fill new size, commit/roundtrip to apply */
+diff --color -ru a/gfx/common/wayland_common.h b/gfx/common/wayland_common.h
+--- a/gfx/common/wayland_common.h
++++ b/gfx/common/wayland_common.h
+@@ -72,6 +72,11 @@
+ bool gfx_ctx_wl_set_video_mode_common_size(gfx_ctx_wayland_data_t *wl,
+       unsigned width, unsigned height, bool fullscreen);
+ 
++unsigned wl_nuubos_render_height(gfx_ctx_wayland_data_t *wl);
++
++void wl_nuubos_render_size(gfx_ctx_wayland_data_t *wl,
++      unsigned *width, unsigned *height);
++
+ bool gfx_ctx_wl_set_video_mode_common_fullscreen(gfx_ctx_wayland_data_t *wl,
+       bool fullscreen);
+ 
+diff --color -ru a/gfx/drivers_context/wayland_ctx.c b/gfx/drivers_context/wayland_ctx.c
+--- a/gfx/drivers_context/wayland_ctx.c
++++ b/gfx/drivers_context/wayland_ctx.c
+@@ -104,7 +104,8 @@
+    wl->last_buffer_scale         = wl->buffer_scale;
+    wl->last_fractional_scale_num = wl->fractional_scale_num;
+    if (!wl->fractional_scale)
+-      wl_surface_set_buffer_scale(wl->surface, wl->buffer_scale);
++      wl_surface_set_buffer_scale(wl->surface,
++            wl_nuubos_render_height(wl) ? 1 : wl->buffer_scale);
+ 
+    wl->ignore_configuration = false;
+ #ifdef HAVE_EGL

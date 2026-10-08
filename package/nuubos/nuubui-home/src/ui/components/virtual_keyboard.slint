@@ -2,15 +2,51 @@
 // Architecture inspired by Slint's MIT-licensed virtual keyboard example,
 // adapted for controller-first navigation and nuubOS visual language.
 
+import { Theme, Shape } from "../theme.slint";
+
+/* The one text field of nuubOS: what is being entered as a label above an
+ * M3 filled field. Every text entry (system keyboard, Quick Menu Web
+ * keyboard) uses it; the field content comes from the children. The Quick
+ * Menu keeps an identical copy (QmTextEntryField). */
+export component TextEntryField inherits Rectangle {
+    in property <string> title: "";
+
+    height: 62px;
+    background: #00000000;
+
+    Text {
+        x: 2px; y: 0; width: parent.width - 4px; height: 18px;
+        text: root.title;
+        color: Theme.primary;
+        font-size: 13px;
+        font-weight: 600;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        y: 22px; width: parent.width; height: 40px;
+        border-radius: Shape.extra-small;
+        background: Theme.surface-container-high;
+        clip: true;
+
+        @children
+
+        /* Active indicator. */
+        Rectangle {
+            x: 0; y: parent.height - 2px; width: parent.width; height: 2px;
+            background: Theme.primary;
+        }
+    }
+}
+
 component KeyboardKey inherits Rectangle {
     in property <string> label: "";
     in property <bool> selected: false;
 
+    /* Material 3 tonal keys, the focused key filled with the primary role. */
     height: 34px;
-    border-radius: 5px;
-    background: root.selected ? #2d5c9a : #1a1c20;
-    border-width: 1px;
-    border-color: root.selected ? #73a8ff : #343840;
+    border-radius: Shape.small;
+    background: root.selected ? Theme.primary : Theme.surface-container-high;
     visible: root.label != "";
 
     Text {
@@ -19,9 +55,9 @@ component KeyboardKey inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         text: root.label;
-        color: root.selected ? #ffffff : #c8ccd2;
-        font-size: root.label == "Space" || root.label == "Done" || root.label == "Back" ? 12px : 15px;
-        font-weight: root.selected ? 700 : 600;
+        color: root.selected ? Theme.on-primary : Theme.text;
+        font-size: root.label.character-count > 1 ? 12px : 15px;
+        font-weight: root.selected ? 600 : 500;
     }
 }
 
@@ -37,46 +73,45 @@ export component SystemVirtualKeyboard inherits Rectangle {
     in property <[string]> row-one: [];
     in property <[string]> row-two: [];
     in property <[string]> row-three: [];
+    /* Height of the sheet content: the parent anchors the sheet to the
+     * bottom with exactly this height. */
+    out property <length> content-height: 270px;
 
     callback accepted();
     callback focus-entry();
     callback place-cursor-at(int);
 
-    background: #101114;
-    border-width: 1px;
-    border-color: #2b2e34;
+    background: Theme.surface-container-low;
 
     focus-entry() => { physical-input.focus(); }
     place-cursor-at(offset) => { physical-input.set-selection-offsets(offset, offset); }
 
-    Rectangle {
+    TextEntryField {
         x: 18px;
-        y: 10px;
+        y: 12px;
         width: parent.width - 36px;
-        height: 38px;
-        border-radius: 6px;
-        background: #15171b;
-        border-width: 1px;
-        border-color: #343840;
-        clip: true;
+        title: root.title;
 
         physical-input := TextInput {
-            x: 10px;
-            y: 4px;
-            width: max(parent.width - 20px, self.preferred-width + 16px);
-            height: parent.height - 8px;
+            x: 12px;
+            y: 0;
+            width: max(parent.width - 24px, self.preferred-width + 16px);
+            /* Children resolve `parent` to this field (62 px): the inner
+             * container is 40 px with a 2 px indicator. */
+            height: 38px;
             text <=> root.value;
             input-type: root.secret ? InputType.password
                 : root.input-kind == "number" ? InputType.number
                 : root.input-kind == "decimal" ? InputType.decimal
                 : InputType.text;
-            color: #f5f6f8;
+            color: Theme.text;
+            selection-background-color: Theme.primary-container;
             font-size: 17px;
             vertical-alignment: center;
             accepted => { root.accepted(); }
             cursor-position-changed(cursor-position) => {
-                if cursor-position.x + self.x < 10px {
-                    self.x = 10px - cursor-position.x;
+                if cursor-position.x + self.x < 12px {
+                    self.x = 12px - cursor-position.x;
                 } else if cursor-position.x + self.x > parent.width - 12px - self.text-cursor-width {
                     self.x = parent.width - cursor-position.x - 12px - self.text-cursor-width;
                 }
@@ -85,47 +120,48 @@ export component SystemVirtualKeyboard inherits Rectangle {
     }
 
     HorizontalLayout {
-        x: 18px; y: 58px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        x: 18px; y: 84px; width: parent.width - 36px; height: 34px; spacing: 5px;
         for key[i] in root.row-zero: KeyboardKey {
             label: key;
             selected: root.selected-index == i;
         }
     }
     HorizontalLayout {
-        x: 18px; y: 98px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        x: 18px; y: 124px; width: parent.width - 36px; height: 34px; spacing: 5px;
         for key[i] in root.row-one: KeyboardKey {
             label: key;
             selected: root.selected-index == 10 + i;
         }
     }
     HorizontalLayout {
-        x: 18px; y: 138px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        x: 18px; y: 164px; width: parent.width - 36px; height: 34px; spacing: 5px;
         for key[i] in root.row-two: KeyboardKey {
             label: key;
             selected: root.selected-index == 20 + i;
         }
     }
     HorizontalLayout {
-        x: 18px; y: 178px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        x: 18px; y: 204px; width: parent.width - 36px; height: 34px; spacing: 5px;
         for key[i] in root.row-three: KeyboardKey {
             label: key;
             selected: root.selected-index == 30 + i;
         }
     }
 
+    /* Mode label: symbols and layout names only, nothing to translate. */
     Text {
         x: 18px;
-        y: 222px;
+        y: 246px;
         width: parent.width - 36px;
         text: root.input-kind == "ipv4" ? "IPv4"
-            : root.input-kind == "dns" ? "DNS / IPv4 list"
-            : root.input-kind == "number" ? "Numeric"
+            : root.input-kind == "dns" ? "DNS"
+            : root.input-kind == "number" ? "123"
             : root.page == 0 ? (root.layout-name == "azerty" ? "ABC • AZERTY"
                 : root.layout-name == "qwertz" ? "ABC • QWERTZ"
                 : "ABC • QWERTY")
-            : root.page == 1 ? "123 • numbers & punctuation"
-            : "SYM • symbols";
-        color: #6f7580;
+            : root.page == 1 ? "123"
+            : "#+=";
+        color: Theme.text-faint;
         font-size: 12px;
         horizontal-alignment: center;
     }

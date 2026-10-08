@@ -1,0 +1,131 @@
+diff --color -ru a/drivers/gpu/drm/sun4i/sun8i_ui_layer.c b/drivers/gpu/drm/sun4i/sun8i_ui_layer.c
+--- a/drivers/gpu/drm/sun4i/sun8i_ui_layer.c
++++ b/drivers/gpu/drm/sun4i/sun8i_ui_layer.c
+@@ -20,6 +20,7 @@
+ #include <drm/drm_gem_dma_helper.h>
+ #include <drm/drm_print.h>
+ #include <drm/drm_probe_helper.h>
++#include <drm/drm_vblank.h>
+ 
+ #include "sun8i_mixer.h"
+ #include "sun8i_ui_layer.h"
+@@ -198,6 +199,44 @@
+ }
+ 
+ 
++/*
++ * DE33 has no double-buffer latch for the layer size and line pitch (they
++ * act at once) while the buffer address is only taken at the next frame.
++ * A commit that grows the source (leaving a scaled game: its buffer is
++ * smaller than the desktop's) would let the engine read the new size and
++ * pitch from the old buffer for the rest of the frame, past its end (IOMMU
++ * read fault, the buffer may already be unmapped). Program only the new
++ * address first and let the frame take it; the size and pitch follow.
++ */
++static void sun8i_ui_layer_latch_address(struct sun8i_layer *layer,
++					    struct drm_atomic_commit *state,
++					    struct drm_plane *plane)
++{
++	struct drm_plane_state *old_state = drm_atomic_get_old_plane_state(state, plane);
++	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
++	struct drm_crtc_state *crtc_state;
++	u32 ch_base;
++
++	if (!old_state->visible || !old_state->fb || !new_state->fb ||
++	    old_state->crtc != new_state->crtc)
++		return;
++	if (drm_rect_width(&new_state->src) <= drm_rect_width(&old_state->src) &&
++	    drm_rect_height(&new_state->src) <= drm_rect_height(&old_state->src) &&
++	    new_state->fb->pitches[0] <= old_state->fb->pitches[0])
++		return;
++	crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
++	if (!crtc_state || !crtc_state->active ||
++	    drm_atomic_crtc_needs_modeset(crtc_state))
++		return;
++
++	ch_base = sun8i_channel_base(layer);
++	regmap_write(layer->regs,
++		     SUN8I_MIXER_CHAN_UI_LAYER_TOP_LADDR(ch_base, layer->overlay),
++		     lower_32_bits(drm_fb_dma_get_gem_addr(new_state->fb,
++							    new_state, 0)));
++	drm_crtc_wait_one_vblank(new_state->crtc);
++}
++
+ static void sun8i_ui_layer_atomic_update(struct drm_plane *plane,
+ 					 struct drm_atomic_commit *state)
+ {
+@@ -210,6 +249,7 @@
+ 		return;
+ 	}
+ 
++	sun8i_ui_layer_latch_address(layer, state, plane);
+ 	sun8i_ui_layer_update_attributes(layer, plane);
+ 	sun8i_ui_layer_update_coord(layer, plane);
+ 	sun8i_ui_layer_update_buffer(layer, plane);
+diff --color -ru a/drivers/gpu/drm/sun4i/sun8i_vi_layer.c b/drivers/gpu/drm/sun4i/sun8i_vi_layer.c
+--- a/drivers/gpu/drm/sun4i/sun8i_vi_layer.c
++++ b/drivers/gpu/drm/sun4i/sun8i_vi_layer.c
+@@ -13,6 +13,7 @@
+ #include <drm/drm_gem_dma_helper.h>
+ #include <drm/drm_print.h>
+ #include <drm/drm_probe_helper.h>
++#include <drm/drm_vblank.h>
+ 
+ #include "sun4i_crtc.h"
+ #include "sun8i_csc.h"
+@@ -272,6 +273,47 @@
+ 						   true, true);
+ }
+ 
++/*
++ * DE33 has no double-buffer latch for the layer size and line pitch (they
++ * act at once) while the buffer address is only taken at the next frame.
++ * A commit that grows the source (leaving a scaled game: its buffer is
++ * smaller than the desktop's) would let the engine read the new size and
++ * pitch from the old buffer for the rest of the frame, past its end (IOMMU
++ * read fault, the buffer may already be unmapped). Program only the new
++ * address first and let the frame take it; the size and pitch follow.
++ */
++static void sun8i_vi_layer_latch_address(struct sun8i_layer *layer,
++					    struct drm_atomic_commit *state,
++					    struct drm_plane *plane)
++{
++	struct drm_plane_state *old_state = drm_atomic_get_old_plane_state(state, plane);
++	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
++	struct drm_crtc_state *crtc_state;
++	u32 ch_base;
++	unsigned int i;
++
++	if (!old_state->visible || !old_state->fb || !new_state->fb ||
++	    old_state->crtc != new_state->crtc)
++		return;
++	if (drm_rect_width(&new_state->src) <= drm_rect_width(&old_state->src) &&
++	    drm_rect_height(&new_state->src) <= drm_rect_height(&old_state->src) &&
++	    new_state->fb->pitches[0] <= old_state->fb->pitches[0])
++		return;
++	crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
++	if (!crtc_state || !crtc_state->active ||
++	    drm_atomic_crtc_needs_modeset(crtc_state))
++		return;
++
++	ch_base = sun8i_channel_base(layer);
++	for (i = 0; i < new_state->fb->format->num_planes; i++)
++		regmap_write(layer->regs,
++			     SUN8I_MIXER_CHAN_VI_LAYER_TOP_LADDR(ch_base,
++								 layer->overlay, i),
++			     lower_32_bits(drm_fb_dma_get_gem_addr(new_state->fb,
++								    new_state, i)));
++	drm_crtc_wait_one_vblank(new_state->crtc);
++}
++
+ static void sun8i_vi_layer_atomic_update(struct drm_plane *plane,
+ 					 struct drm_atomic_commit *state)
+ {
+@@ -284,6 +326,7 @@
+ 		return;
+ 	}
+ 
++	sun8i_vi_layer_latch_address(layer, state, plane);
+ 	sun8i_vi_layer_update_attributes(layer, plane);
+ 	sun8i_vi_layer_update_coord(layer, plane);
+ 	sun8i_csc_config(layer, new_state);

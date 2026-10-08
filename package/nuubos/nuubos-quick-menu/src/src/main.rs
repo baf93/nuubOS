@@ -69,7 +69,7 @@ const STREAM_SOCKET: &str = "/run/nuubos/streamd.sock";
 const WEB_SOCKET: &str = "/run/nuubos/webd.sock";
 const REGIONAL_SOCKET: &str = "/run/nuubos/regionald.sock";
 /* Web Mode keyboard sheet height (logical px, full output width). */
-const KEYBOARD_SURFACE_HEIGHT: u32 = 236;
+const KEYBOARD_SURFACE_HEIGHT: u32 = 270;
 
 
 const LINE_STAGE_MS: u64 = 220;
@@ -115,7 +115,7 @@ impl UiWindow {
 }
 
 /* Hands out one window per component, in creation order:
- * QuickMenuWindow first, then NotificationWindow. */
+ * QuickMenuWindow, NotificationWindow. */
 struct QuickPlatform {
     windows: RefCell<VecDeque<Rc<dyn WindowAdapter>>>,
     started: Instant,
@@ -972,10 +972,10 @@ fn parse_system_profile(reply: &str) -> (String, String) {
     (requested, effective)
 }
 
-fn system_profile_label(profile: &str) -> &'static str {
+fn system_profile_label(ui: &QuickMenuWindow, profile: &str) -> String {
     match profile {
-        "battery-saver" => "Battery Saver",
-        _ => "Auto",
+        "battery-saver" => tr(ui, 51, "Battery Saver"),
+        _ => tr(ui, 52, "Auto"),
     }
 }
 
@@ -984,15 +984,12 @@ fn refresh_system_profile(ui: &QuickMenuWindow) {
         Ok(reply) => {
             let (requested, effective) = parse_system_profile(&reply);
             let label = if requested != effective {
-                format!(
-                    "{} • {} active",
-                    system_profile_label(&requested),
-                    system_profile_label(&effective)
-                )
+                format!("{} • {}", system_profile_label(ui, &requested), system_profile_label(ui, &effective))
             } else {
-                system_profile_label(&requested).to_owned()
+                system_profile_label(ui, &requested)
             };
             ui.set_performance_profile_label(label.into());
+            ui.set_battery_saver(effective == "battery-saver");
         }
         Err(error) => {
             eprintln!("quick-menu: System profile read failed={error}");
@@ -1841,7 +1838,7 @@ fn toast_view(ui: &QuickMenuWindow, n: &Notification) -> Option<ToastView> {
         ),
         "storage.job" => {
             let title = match n.text("action") {
-                "backup" => tr(ui, 97, "Backup to SD1"),
+                "backup" => tr(ui, 97, "Back Up to SD1"),
                 "move-back" => tr(ui, 96, "Move to SD1"),
                 "adopt" => tr(ui, 95, "Move to SD2"),
                 _ => return None,
@@ -2165,12 +2162,14 @@ impl Notifier {
 struct BatterySnapshot {
     percent: i32,
     state: String,
+    time: String,
 }
 
 fn read_battery_snapshot() -> BatterySnapshot {
     let mut snapshot = BatterySnapshot {
         percent: -1,
         state: "unknown".to_owned(),
+        time: String::new(),
     };
 
     let Ok(contents) = fs::read_to_string(STATUS_STATE) else {
@@ -2186,6 +2185,7 @@ fn read_battery_snapshot() -> BatterySnapshot {
                 snapshot.percent = value.parse::<i32>().unwrap_or(-1).clamp(-1, 100);
             }
             "BATTERY_STATE" => snapshot.state = value.to_owned(),
+            "TIME" => snapshot.time = value.to_owned(),
             _ => {}
         }
     }
@@ -2196,6 +2196,7 @@ fn read_battery_snapshot() -> BatterySnapshot {
 fn apply_battery_snapshot(ui: &QuickMenuWindow, snapshot: BatterySnapshot) {
     ui.set_battery_percent(snapshot.percent);
     ui.set_battery_state(snapshot.state.into());
+    ui.set_clock_label(snapshot.time.into());
     ui.set_battery_label(
         if snapshot.percent >= 0 {
             format!("{}%", snapshot.percent).into()
@@ -2429,7 +2430,13 @@ fn flush_brightness(
 #[derive(Debug, Clone, Default)]
 struct GameSnapshot {
     running: bool,
+    paused: bool,
     slot: i32,
+    slots: i32,
+    /* Performance overlay (Settings -> Gaming) and the game's frame rate. */
+    overlay: bool,
+    overlay_items: String,
+    fps: f32,
 }
 
 fn parse_game_snapshot(reply: &str) -> GameSnapshot {
@@ -2437,11 +2444,163 @@ fn parse_game_snapshot(reply: &str) -> GameSnapshot {
     for line in reply.lines() {
         match line.split_once('=') {
             Some(("state", value)) => snapshot.running = value == "running",
+            Some(("paused", value)) => snapshot.paused = value == "1",
             Some(("slot", value)) => snapshot.slot = value.parse().unwrap_or(0),
+            Some(("slots", value)) => snapshot.slots = value.parse().unwrap_or(10),
+            Some(("overlay", value)) => snapshot.overlay = value == "1",
+            Some(("overlay_items", value)) => snapshot.overlay_items = value.to_owned(),
+            Some(("fps", value)) => snapshot.fps = value.parse().unwrap_or(0.0),
             _ => {}
         }
     }
     snapshot
+}
+
+/* State Slot dropdown: every slot with when it was saved, or Empty. */
+fn open_slot_dropdown(ui: &QuickMenuWindow) {
+    let reply = emulation_command("STATES").unwrap_or_default();
+    let mut slots = 10;
+    let mut saved: Vec<(i32, i64, String)> = Vec::new();
+    for line in reply.lines() {
+        if let Some(v) = line.strip_prefix("slots=") {
+            slots = v.parse().unwrap_or(10);
+        } else if let Some(v) = line.strip_prefix("state=") {
+            let f: Vec<&str> = v.split('\t').collect();
+            if let (Some(slot), Some(mtime)) = (f.first().and_then(|x| x.parse().ok()), f.get(1).and_then(|x| x.parse().ok())) {
+                saved.push((slot, mtime, f.get(2).unwrap_or(&"").to_string()));
+            }
+        }
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let options: Vec<SharedString> = (0..slots)
+        .map(|n| {
+            let name = format_arg(&tr(ui, 423, "Slot {0}"), &n.to_string());
+            match saved.iter().find(|s| s.0 == n) {
+                Some((_, mtime, hhmm)) => {
+                    let days = (now - mtime).max(0) / 86400;
+                    let when = match days {
+                        0 => tr(ui, 402, "today"),
+                        1 => tr(ui, 403, "yesterday"),
+                        d => format_arg(&tr(ui, 404, "{0} days ago"), &d.to_string()),
+                    };
+                    format!("{name} • {when} {hhmm}").into()
+                }
+                None => format!("{name} • {}", tr(ui, 788, "Empty")).into(),
+            }
+        })
+        .collect();
+    let current = read_game_snapshot().slot.clamp(0, (slots - 1).max(0));
+    let visible = ui.get_audio_output_dropdown_visible_rows().max(1);
+    ui.set_game_slot_options(ModelRc::new(Rc::new(VecModel::from(options))));
+    ui.set_game_slot_dropdown_index(current);
+    ui.set_game_slot_dropdown_scroll((current - visible + 1).clamp(0, (slots - visible).max(0)));
+    ui.set_game_slot_dropdown_open(true);
+}
+
+fn move_slot_dropdown(ui: &QuickMenuWindow, delta: i32) {
+    let count = ui.get_game_slot_options().row_count() as i32;
+    if count <= 0 {
+        return;
+    }
+    let next = (ui.get_game_slot_dropdown_index() + delta).rem_euclid(count);
+    ui.set_game_slot_dropdown_index(next);
+    let visible = ui.get_audio_output_dropdown_visible_rows().max(1);
+    let mut scroll = ui.get_game_slot_dropdown_scroll();
+    if next < scroll {
+        scroll = next;
+    } else if next >= scroll + visible {
+        scroll = next - visible + 1;
+    }
+    ui.set_game_slot_dropdown_scroll(scroll.clamp(0, (count - visible).max(0)));
+}
+
+fn apply_slot_dropdown(ui: &QuickMenuWindow) {
+    let slot = ui.get_game_slot_dropdown_index();
+    if let Err(error) = emulation_command(&format!("SLOT\t{slot}")) {
+        eprintln!("quick-menu: game SLOT failed={error}");
+    }
+    ui.set_game_slot_dropdown_open(false);
+    apply_game_snapshot(ui, &read_game_snapshot());
+}
+
+/* One line of the performance overlay from the game snapshot and
+ * nuubos-systemd PERF, fields in the user's order. */
+fn perf_text(ui: &QuickMenuWindow, game: &GameSnapshot) -> String {
+    let perf = system_perf();
+    let get = |k: &str| -> i64 {
+        perf.lines()
+            .find_map(|l| l.strip_prefix(k).and_then(|r| r.strip_prefix('=')))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-1)
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for field in game.overlay_items.split(',') {
+        let part = match field {
+            "fps" => format!("{:.0} FPS", game.fps),
+            "cpu" => {
+                let load = get("cpu.load_pct");
+                let khz = get("cpu.freq_khz");
+                let mut t = String::from("CPU");
+                if load >= 0 { t.push_str(&format!(" {load}%")); }
+                if khz > 0 { t.push_str(&format!(" {:.1} GHz", khz as f64 / 1_000_000.0)); }
+                t
+            }
+            "gpu" => match get("gpu.freq_hz") {
+                hz if hz > 0 => format!("GPU {} MHz", hz / 1_000_000),
+                _ => continue,
+            },
+            "ram" => match get("mem.used_mib") {
+                mib if mib >= 0 => format!("RAM {mib} MB"),
+                _ => continue,
+            },
+            "temp" => match get("temp.cpu_millic") {
+                m if m > 0 => format!("{}°C", (m + 500) / 1000),
+                _ => continue,
+            },
+            "power" => match get("battery.power_mw") {
+                mw if mw >= 0 => format!("{:.1} W", mw as f64 / 1000.0),
+                _ => continue,
+            },
+            "battery" => match get("battery.percent") {
+                /* Labelled: a bare percentage reads as a load figure. */
+                p if p >= 0 => format!("BAT {p}%"),
+                _ => continue,
+            },
+            "clock" => ui.get_clock_label().to_string(),
+            _ => continue,
+        };
+        if !part.is_empty() {
+            parts.push(part);
+        }
+    }
+    parts.join("   ")
+}
+
+fn system_perf() -> String {
+    let Ok(mut stream) = UnixStream::connect(SYSTEM_SOCKET) else { return String::new() };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    if stream.write_all(b"PERF\n").is_err() {
+        return String::new();
+    }
+    let mut reader = BufReader::new(stream);
+    let mut reply = String::new();
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let done = line.trim_end() == "end=1";
+                reply.push_str(&line);
+                if done {
+                    break;
+                }
+            }
+        }
+    }
+    reply
 }
 
 fn emulation_command(command: &str) -> std::io::Result<String> {
@@ -2456,7 +2615,7 @@ fn emulation_command(command: &str) -> std::io::Result<String> {
         if reader.read_line(&mut line)? == 0 {
             break;
         }
-        let done = command != "STATUS" || line.trim_end() == "end=1";
+        let done = (command != "STATUS" && command != "STATES") || line.trim_end() == "end=1";
         reply.push_str(&line);
         if done {
             break;
@@ -2487,6 +2646,7 @@ fn apply_game_snapshot(ui: &QuickMenuWindow, snapshot: &GameSnapshot) {
         ui.set_game_confirm_index(-1);
     }
     ui.set_game_section_visible(snapshot.running);
+    ui.set_game_overlay_on(snapshot.overlay);
     ui.set_game_slot_label(
         format_arg(&tr(ui, 423, "Slot {0}"), &snapshot.slot.to_string()).into(),
     );
@@ -3000,7 +3160,7 @@ fn keyboard_action(ui: &QuickMenuWindow, kb: &mut WebKeyboard, action: &str) -> 
 fn selectable_menu_indices(ui: &QuickMenuWindow) -> Vec<i32> {
     let mut indices = Vec::new();
     if ui.get_game_section_visible() {
-        indices.extend_from_slice(&[8, 9, 10, 11, 12, 13, 18, 14]);
+        indices.extend_from_slice(&[8, 9, 10, 11, 12, 13, 18, 28, 14]);
     }
     if ui.get_stream_section_visible() {
         indices.extend_from_slice(if ui.get_stream_steamlink() { &[15, 16] } else { &[15, 16, 17] });
@@ -3166,6 +3326,34 @@ fn wait_for_configure(
         .ok_or_else(|| "missing layer configure".into())
 }
 
+/* The performance overlay line goes to RetroArch, which draws it into the
+ * game's own frame (emud OVERLAY_TEXT, RetroArch patch 0004). A layer
+ * surface over the game made labwc composite every frame: ~10 % speed on
+ * GPU-bound games (docs/dev/emulation.md). */
+#[derive(Default)]
+struct PerfOverlay {
+    /* The line RetroArch currently draws ("" = none). */
+    text: String,
+}
+
+impl PerfOverlay {
+    fn sync(&mut self, running: bool, want: bool, text: &str) {
+        if !running {
+            /* A new RetroArch starts without a line. */
+            self.text.clear();
+            return;
+        }
+        let text = if want { text } else { "" };
+        if text == self.text {
+            return;
+        }
+        match emulation_command(&format!("OVERLAY_TEXT\t{text}")) {
+            Ok(_) => self.text = text.to_owned(),
+            Err(error) => eprintln!("quick-menu: performance overlay failed={error}"),
+        }
+    }
+}
+
 fn map_overlay(
     ui: &QuickMenuWindow,
     queue: &mut EventQueue<WaylandState>,
@@ -3182,7 +3370,9 @@ fn map_overlay(
     ui.set_lifecycle_mode("".into());
     ui.set_line_progress(1.0);
     ui.set_curtain_progress(1.0);
-    ui.set_menu_panel_visible(true);
+    /* Opened by the power key: the Power OSD replaces the side sheet from
+     * the first frame. */
+    ui.set_menu_panel_visible(!ui.get_power_osd_open());
     ui.set_surface_mode(SurfaceKind::Full.slint_mode());
     ui.set_volume_osd_visible(false);
     refresh_hint_mapping(ui);
@@ -3498,6 +3688,9 @@ fn unmap_overlay(
 
     state.destroy_overlay();
     let _ = ui.hide();
+    ui.set_game_slot_dropdown_open(false);
+    ui.set_power_osd_open(false);
+    ui.set_power_osd_confirm(false);
     set_menu_capture(false);
     if ui.get_game_section_visible() {
         game_action("RESUME");
@@ -3517,7 +3710,13 @@ fn activate_selected(
     qh: &QueueHandle<WaylandState>,
     conn: &Connection,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match ui.get_selected_index() {
+    /* Restart and Power Off end the session: second press (armed row). */
+    let index = ui.get_selected_index();
+    if matches!(index, 1 | 2) && ui.get_game_confirm_index() != index {
+        ui.set_game_confirm_index(index);
+        return redraw_overlay(ui, queue, state, qh, conn);
+    }
+    match index {
         0 => {
             /*
              * Sleep is committed on RELEASE, not on press.  Remembering the
@@ -3533,24 +3732,8 @@ fn activate_selected(
                 "action=sleep phase=confirm-press-observed capture=held",
             );
         }
-        1 => {
-            flush_brightness(ui, brightness_dirty)?;
-            play_named_sound("restart");
-            thread::sleep(Duration::from_millis(220));
-            set_menu_capture(false);
-            notifier.clear(ui, conn);
-            animate_shutdown("reboot", ui, queue, state, qh, conn)?;
-            spawn_lifecycle_action("restart");
-        }
-        2 => {
-            flush_brightness(ui, brightness_dirty)?;
-            play_named_sound("poweroff");
-            thread::sleep(Duration::from_millis(300));
-            set_menu_capture(false);
-            notifier.clear(ui, conn);
-            animate_shutdown("poweroff", ui, queue, state, qh, conn)?;
-            spawn_lifecycle_action("poweroff");
-        }
+        1 => end_session(true, ui, notifier, brightness_dirty, queue, state, qh, conn)?,
+        2 => end_session(false, ui, notifier, brightness_dirty, queue, state, qh, conn)?,
         6 if ui.get_switch_user_visible() => { flush_brightness(ui, brightness_dirty)?; let _=users_command("REQUEST_SWITCH"); unmap_overlay(ui,queue,state,conn); *_mapped=false; }
         7 if ui.get_home_music_playing() => {
             /* Skip keeps the Quick Menu open. AudioService switches tracks
@@ -3567,6 +3750,96 @@ fn activate_selected(
     }
 
     Ok(())
+}
+
+/* Restart (or Power Off): sound, curtain, then the central lifecycle path. */
+fn end_session(
+    restart: bool,
+    ui: &QuickMenuWindow,
+    notifier: &mut Notifier,
+    brightness_dirty: &mut bool,
+    queue: &mut EventQueue<WaylandState>,
+    state: &mut WaylandState,
+    qh: &QueueHandle<WaylandState>,
+    conn: &Connection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    flush_brightness(ui, brightness_dirty)?;
+    play_named_sound(if restart { "restart" } else { "poweroff" });
+    thread::sleep(Duration::from_millis(if restart { 220 } else { 300 }));
+    set_menu_capture(false);
+    notifier.clear(ui, conn);
+    ui.set_power_osd_open(false);
+    animate_shutdown(if restart { "reboot" } else { "poweroff" }, ui, queue, state, qh, conn)?;
+    spawn_lifecycle_action(if restart { "restart" } else { "poweroff" });
+    Ok(())
+}
+
+/* Power OSD (power key, in every context: Home, Settings, games, streams,
+ * Web). The game waits paused underneath, as under the Quick Menu. */
+fn open_power_osd(
+    ui: &QuickMenuWindow,
+    mapped: &mut bool,
+    queue: &mut EventQueue<WaylandState>,
+    state: &mut WaylandState,
+    qh: &QueueHandle<WaylandState>,
+    conn: &Connection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ui.set_power_osd_index(0);
+    ui.set_power_osd_confirm(false);
+    ui.set_power_osd_open(true);
+    ui.set_game_slot_dropdown_open(false);
+    ui.set_audio_output_dropdown_open(false);
+    ui.set_game_confirm_index(-1);
+    if *mapped {
+        ui.set_menu_panel_visible(false);
+    } else {
+        map_overlay(ui, queue, state, qh, conn)?;
+        *mapped = true;
+    }
+    redraw_overlay(ui, queue, state, qh, conn)
+}
+
+/* Power OSD navigation: Sleep on top, Restart | Power Off below (second
+ * press). Sleep is committed on the confirm release (handle_event). */
+fn handle_power_osd(
+    event: &LogicalEvent,
+    ui: &QuickMenuWindow,
+    notifier: &mut Notifier,
+    mapped: &mut bool,
+    pending_sleep: &mut bool,
+    brightness_dirty: &mut bool,
+    queue: &mut EventQueue<WaylandState>,
+    state: &mut WaylandState,
+    qh: &QueueHandle<WaylandState>,
+    conn: &Connection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let current = ui.get_power_osd_index();
+    let select = |index: i32| {
+        ui.set_power_osd_index(index);
+        ui.set_power_osd_confirm(false);
+    };
+    match event.action.as_str() {
+        "menu_back" => {
+            unmap_overlay(ui, queue, state, conn);
+            *mapped = false;
+            return Ok(());
+        }
+        "menu_up" => select(0),
+        "menu_down" if current == 0 => select(1),
+        "menu_left" if current > 0 => select(1),
+        "menu_right" if current > 0 => select(2),
+        "menu_confirm" if current == 0 => {
+            *pending_sleep = true;
+            append_action_log("action=sleep phase=confirm-press-observed capture=held source=power-osd");
+            return Ok(());
+        }
+        "menu_confirm" if ui.get_power_osd_confirm() => {
+            return end_session(current == 1, ui, notifier, brightness_dirty, queue, state, qh, conn);
+        }
+        "menu_confirm" => ui.set_power_osd_confirm(true),
+        _ => return Ok(()),
+    }
+    redraw_overlay(ui, queue, state, qh, conn)
 }
 
 /* STREAM rows: 15 Resume, 16 Quit Stream (the application keeps running
@@ -3603,7 +3876,8 @@ fn activate_stream_row(
     Ok(())
 }
 
-/* GAME rows (8 Resume .. 13 RetroArch Advanced, 18 Screenshot, 14 Quit).
+/* GAME rows (8 Resume .. 13 RetroArch Advanced, 18 Screenshot,
+ * 28 Performance Overlay, 14 Quit).
  * The screenshot is RetroArch's own rendering, so the menu is not in it.
  * Load State, Restart Game and Quit Game
  * lose unsaved progress and take a second press (EPIC-005 safety rules). */
@@ -3627,8 +3901,7 @@ fn activate_game_row(
         9 => game_action("SAVE_STATE"),
         10 => game_action("LOAD_STATE"),
         11 => {
-            game_action("SLOT\t+1");
-            apply_game_snapshot(ui, &read_game_snapshot());
+            open_slot_dropdown(ui);
             return redraw_overlay(ui, queue, state, qh, conn);
         }
         12 => game_action("RESET"),
@@ -3642,6 +3915,16 @@ fn activate_game_row(
             resume = false;
         }
         18 => game_action("SCREENSHOT"),
+        28 => {
+            /* The user's Settings -> Gaming switch; emud applies it live.
+             * The menu stays open (the overlay shows once it closes). */
+            let value = if ui.get_game_overlay_on() { "0" } else { "1" };
+            if let Err(error) = emulation_command(&format!("SET\toverlay\t{value}")) {
+                eprintln!("quick-menu: game overlay {value} failed={error}");
+            }
+            apply_game_snapshot(ui, &read_game_snapshot());
+            return redraw_overlay(ui, queue, state, qh, conn);
+        }
         _ => return Ok(()),
     }
     if !resume {
@@ -3673,10 +3956,16 @@ fn handle_event(
             return Ok(());
         }
 
+        let sleep_selected = if ui.get_power_osd_open() {
+            /* The OSD opens on Sleep: only a press seen there counts. */
+            ui.get_power_osd_index() == 0 && *pending_sleep
+        } else {
+            ui.get_selected_index() == 0
+        };
         if event.action == "menu_confirm"
             && *mapped
             && !ui.get_lifecycle_active()
-            && ui.get_selected_index() == 0
+            && sleep_selected
         {
             let press_seen = *pending_sleep;
             *pending_sleep = false;
@@ -3717,7 +4006,12 @@ fn handle_event(
     if *mapped || event.action == "quick_menu" {
         let lifecycle_confirm = event.action == "menu_confirm"
             && *mapped
-            && (ui.get_selected_index() == 1 || ui.get_selected_index() == 2);
+            && if ui.get_power_osd_open() {
+                ui.get_power_osd_index() > 0 && ui.get_power_osd_confirm()
+            } else {
+                (ui.get_selected_index() == 1 || ui.get_selected_index() == 2)
+                    && ui.get_game_confirm_index() == ui.get_selected_index()
+            };
         let slider_adjustment = *mapped
             && (event.action == "menu_left" || event.action == "menu_right")
             && (ui.get_selected_index() == 3 || ui.get_selected_index() == 24 ||
@@ -3725,6 +4019,37 @@ fn handle_event(
         if !lifecycle_confirm && !slider_adjustment {
             play_ui_sound(event.action.as_str());
         }
+    }
+
+    if event.action == "power" {
+        if ui.get_lifecycle_active() {
+            return Ok(());
+        }
+        flush_brightness(ui, brightness_dirty)?;
+        if *mapped && ui.get_power_osd_open() {
+            unmap_overlay(ui, queue, state, conn);
+            *mapped = false;
+            return Ok(());
+        }
+        return open_power_osd(ui, mapped, queue, state, qh, conn);
+    }
+
+    if *mapped && ui.get_power_osd_open() && event.action != "quick_menu" {
+        return handle_power_osd(
+            event, ui, notifier, mapped, pending_sleep, brightness_dirty, queue, state, qh, conn,
+        );
+    }
+
+    if *mapped && ui.get_game_slot_dropdown_open() {
+        match event.action.as_str() {
+            "menu_up" => move_slot_dropdown(ui, -1),
+            "menu_down" => move_slot_dropdown(ui, 1),
+            "menu_confirm" => apply_slot_dropdown(ui),
+            "menu_back" => ui.set_game_slot_dropdown_open(false),
+            _ => {}
+        }
+        redraw_overlay(ui, queue, state, qh, conn)?;
+        return Ok(());
     }
 
     if *mapped && ui.get_audio_output_dropdown_open() {
@@ -3740,22 +4065,6 @@ fn handle_event(
     }
 
     match event.action.as_str() {
-        /* Over a game Home (and its Power menu) is hidden: the power key
-         * opens the Quick Menu on Sleep, next to Restart and Power Off. */
-        "power" if (ui.get_game_section_visible() || ui.get_stream_section_visible()
-            || ui.get_web_section_visible())
-            && !ui.get_lifecycle_active() => {
-            if *mapped {
-                flush_brightness(ui, brightness_dirty)?;
-                unmap_overlay(ui, queue, state, conn);
-                *mapped = false;
-            } else {
-                map_overlay(ui, queue, state, qh, conn)?;
-                *mapped = true;
-                ui.set_selected_index(0);
-                redraw_overlay(ui, queue, state, qh, conn)?;
-            }
-        }
         "quick_menu" => {
             if *mapped {
                 flush_brightness(ui, brightness_dirty)?;
@@ -3770,15 +4079,6 @@ fn handle_event(
             flush_brightness(ui, brightness_dirty)?;
             unmap_overlay(ui, queue, state, conn);
             *mapped = false;
-        }
-        "menu_left" | "menu_right" if *mapped
-            && !ui.get_lifecycle_active()
-            && ui.get_game_section_visible()
-            && ui.get_selected_index() == 11 =>
-        {
-            game_action(if event.action == "menu_left" { "SLOT\t-1" } else { "SLOT\t+1" });
-            apply_game_snapshot(ui, &read_game_snapshot());
-            redraw_overlay(ui, queue, state, qh, conn)?;
         }
         "menu_confirm" if *mapped
             && !ui.get_lifecycle_active()
@@ -3950,7 +4250,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     platform::set_platform(Box::new(QuickPlatform {
-        windows: RefCell::new(VecDeque::from([render_window.adapter(), card_render_window.adapter()])),
+        windows: RefCell::new(VecDeque::from([
+            render_window.adapter(),
+            card_render_window.adapter(),
+        ])),
         started: Instant::now(),
     }))?;
 
@@ -4009,6 +4312,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         qh: notify_qh,
         mapped: false,
     };
+    let mut perf = PerfOverlay::default();
+    /* Last game snapshot and the overlay line built from it. */
+    let mut game = GameSnapshot::default();
+    let mut perf_line = String::new();
     let mut animation_deadline: Option<Instant> = None;
     let mut pending_sleep = false;
     let mut brightness_dirty = false;
@@ -4079,11 +4386,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             unmap_passive(&ui, &mut queue, &mut state, &conn);
                             passive = None;
                             osd_deadline = None;
-                            map_overlay(&ui, &mut queue, &mut state, &qh, &conn)?;
-                            mapped = true;
                             if event.action == "power" {
-                                ui.set_selected_index(0);
-                                redraw_overlay(&ui, &mut queue, &mut state, &qh, &conn)?;
+                                open_power_osd(&ui, &mut mapped, &mut queue, &mut state, &qh, &conn)?;
+                            } else {
+                                map_overlay(&ui, &mut queue, &mut state, &qh, &conn)?;
+                                mapped = true;
                             }
                         } else if event.pressed {
                             play_ui_sound(event.action.as_str());
@@ -4091,9 +4398,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             dirty = true;
                         }
                     } else if event.pressed
-                        && event.action == "quick_menu"
+                        && (event.action == "quick_menu" || event.action == "power")
                         && passive.is_some()
                         && !mapped
+                        && !ui.get_lifecycle_active()
                     {
                         /* Hotkey can promote a transient volume OSD surface into the
                          * real Quick Menu.  Destroy the non-interactive surface first
@@ -4102,8 +4410,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         unmap_passive(&ui, &mut queue, &mut state, &conn);
                         passive = None;
                         osd_deadline = None;
-                        map_overlay(&ui, &mut queue, &mut state, &qh, &conn)?;
-                        mapped = true;
+                        if event.action == "power" {
+                            open_power_osd(&ui, &mut mapped, &mut queue, &mut state, &qh, &conn)?;
+                        } else {
+                            map_overlay(&ui, &mut queue, &mut state, &qh, &conn)?;
+                            mapped = true;
+                        }
                     } else if passive.is_some() && !mapped {
                         /* Passive surfaces are display-only.  Do not let ordinary
                          * menu navigation affect an invisible Quick Menu. */
@@ -4179,6 +4491,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 AppEvent::Game(snapshot) => {
                     apply_game_snapshot(&ui, &snapshot);
+                    perf_line = if snapshot.running && snapshot.overlay && !snapshot.paused && !mapped {
+                        perf_text(&ui, &snapshot)
+                    } else {
+                        String::new()
+                    };
+                    game = snapshot.clone();
                     if mapped {
                         if !snapshot.running {
                             ui.set_switch_user_visible(switch_user_available());
@@ -4276,6 +4594,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if toast_dirty {
             notifier.sync(&conn, ui.get_lifecycle_active());
         }
+
+        /* Performance overlay: over a running game, never over the menu
+         * or the lifecycle curtain. */
+        perf.sync(
+            game.running,
+            game.overlay && !game.paused && !mapped && !ui.get_lifecycle_active(),
+            &perf_line,
+        );
 
         /* Keep producing frames only while an animation (marquee) runs. */
         if animation_deadline.is_none()

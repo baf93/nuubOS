@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-NUUBOS_RGB_VERSION = 1.0
+NUUBOS_RGB_VERSION = 2.0
 NUUBOS_RGB_SITE = $(BR2_EXTERNAL_NUUBOS_PATH)/package/nuubos/nuubos-rgb/src
 NUUBOS_RGB_SITE_METHOD = local
 NUUBOS_RGB_LICENSE = MIT

@@ -23,9 +23,10 @@
  *
  * Protocol (/run/nuubos/emud.sock, one command per line, tab separated
  * arguments): STATUS and SUBSCRIBE return the session snapshot (SUBSCRIBE
- * pushes a new one on every change); LAUNCH <game>, PAUSE, RESUME,
+ * pushes a new one on every change); LAUNCH <game> [resume|new|slot:N],
+ * STATES [game], SETTINGS, SET <key> <value>, PAUSE, RESUME,
  * SAVE_STATE, LOAD_STATE, SLOT <n|+1|-1>, RESET, FAST_FORWARD, ADVANCED,
- * QUIT, SCREENSHOT reply OK or ERR <reason>; PRE_POWER <sleep|restart|poweroff>
+ * QUIT, SCREENSHOT, OVERLAY_TEXT <line> reply OK or ERR <reason>; PRE_POWER <sleep|restart|poweroff>
  * replies once the game state is safe.
  *
  * Per-game configuration (EPIC-018): GAME_SETTINGS <game> <system> lists the
@@ -80,6 +81,7 @@
 #define PIDFILE RUN_ROOT "/emud.pid"
 #define SESSION_DIR RUN_ROOT "/emulation"
 #define SESSION_CFG SESSION_DIR "/session.cfg"
+#define SESSION_SHADER SESSION_DIR "/session.glslp"
 #define RETROARCH_LOG RUN_ROOT "/retroarch.log"
 #define LIBRARY_SOCKET RUN_ROOT "/libraryd.sock"
 #define INPUT_SOCKET RUN_ROOT "/inputd.sock"
@@ -98,6 +100,23 @@
 #define DEFAULT_CORE_OPTIONS SHARE_DIR "/retroarch-core-options.cfg"
 #define DEFAULT_SHADER_PRESET SHARE_DIR "/shaders/global.glslp"
 #define SHADER_DIR SHARE_DIR "/shaders"
+/* Performance overlay font (RetroArch patch 0004 draws with the OSD font). */
+#define OSD_FONT "/usr/share/fonts/cantarell/Cantarell-Bold.otf"
+#define DISPLAY_CONF SHARE_DIR "/display.conf"
+/* Game render height on HDMI: RetroArch (patch 0005) draws a buffer of
+ * this many lines and the display engine scales it to the 1080p mode on
+ * its plane (kernel patch 0031), so the frontend's per-pixel cost stays
+ * near the handheld panel's (N64 at a 1080p buffer: ~1/3 of full speed).
+ * 360 keeps Majora's Mask PAL at full speed; 240p content then fits at
+ * 1.5x, below the CRT look's 2x scanlines. display.conf field 3 overrides
+ * it per system (0 = native resolution). The panel never uses it. */
+#define GAME_HDMI_LINES 360
+#ifndef HDMI_ENABLED
+#define HDMI_ENABLED "/sys/class/drm/card0-HDMI-A-1/enabled"
+#endif
+#ifndef SYSTEMS_CONF
+#define SYSTEMS_CONF "/usr/share/nuubos/systems.conf"
+#endif
 /* Support files some cores load from the system directory (PPSSPP fonts
  * and UI atlas, ScummVM engine data and themes). */
 #define SYSTEM_FILES SHARE_DIR "/system"
@@ -120,12 +139,15 @@
 #define STATE_USERS "/state/users"
 #endif
 #define GAME_SETTINGS_SUBDIR "appdata/nuubos-emulation/games"
+#define EMU_SETTINGS_FILE "appdata/nuubos-emulation/settings.conf"
 #define ACHIEVEMENTS_FILE "secrets/retroachievements.conf"
 
 #define MAX_CLIENTS 16
 #define MAX_LINE 1024
 #define MAX_PLAYERS 8
-#define MAX_SLOT 9
+/* Save state slots per game: user setting (default 10, at most 99). */
+#define DEFAULT_SLOTS 10
+#define MAX_SLOTS 99
 /* RetroArch's automatic slot (.state.auto), used before power actions. */
 #define AUTO_SLOT -1
 #define SAVE_TIMEOUT_MS 10000
@@ -135,7 +157,9 @@
 #define START_FAILURE_MS 5000
 #define LIBRARY_TIMEOUT_MS 3000
 #define SCREENSHOT_TIMEOUT_MS 5000
-#define MAX_RESTORE_KEYS 16
+#define MAX_RESTORE_KEYS 24
+/* Performance overlay: RetroArch frame rate sampled once a second. */
+#define OVERLAY_TICK_MS 1000
 
 enum session_state {
 	SESSION_IDLE = 0,
@@ -147,6 +171,59 @@ enum pending_kind {
 	PENDING_NONE = 0,
 	PENDING_SAVE,
 	PENDING_LOAD,
+};
+
+/*
+ * The user's emulation settings (Settings -> Gaming), stored in
+ * /userdata/users/<id>/appdata/nuubos-emulation/settings.conf:
+ *   boot_screens  start with the console's own boot sequence (BIOS logo)
+ *   slots         save state slots per game
+ *   slot_rotation each save goes to the next slot, wrapping to 0
+ *   bezels, crt   picture presentation (bezel.glsl, crt.glsl)
+ *   overlay       performance overlay over games, overlay_items its fields
+ *   hotkey_<action> chord control, held with the Quick Menu button
+ */
+enum hotkey_index {
+	HK_SAVE,
+	HK_LOAD,
+	HK_SLOT_NEXT,
+	HK_SLOT_PREV,
+	HK_FAST_FORWARD,
+	HK_QUIT,
+	HK_SCREENSHOT,
+	HK_COUNT,
+};
+
+static const char *const hotkey_actions[HK_COUNT] = {
+	"save_state", "load_state", "slot_next", "slot_prev",
+	"fast_forward", "quit", "screenshot",
+};
+
+/* nuubos-controllersd control ids (the user's mapping applies). */
+static const char *const hotkey_defaults[HK_COUNT] = {
+	"r1", "l1", "menu_up", "menu_down", "face_north", "settings", "l2",
+};
+
+static const char *const hotkey_controls[] = {
+	"menu_confirm", "menu_back", "face_north", "face_west",
+	"menu_up", "menu_down", "menu_left", "menu_right",
+	"l1", "r1", "l2", "r2", "l3", "r3", "settings", "select", NULL,
+};
+
+static const char *const overlay_fields[] = {
+	"fps", "cpu", "gpu", "ram", "temp", "power", "battery", "clock", NULL,
+};
+#define DEFAULT_OVERLAY_ITEMS "fps,cpu,ram,temp,battery,clock"
+
+struct emu_settings {
+	bool boot_screens;
+	int slots;
+	bool slot_rotation;
+	bool bezels;
+	bool crt;
+	bool overlay;
+	char overlay_items[96];
+	char hotkey[HK_COUNT][16];
 };
 
 struct client {
@@ -203,6 +280,12 @@ struct session {
 	int restore_count;
 	char restore_key[MAX_RESTORE_KEYS][48];
 	char *restore_value[MAX_RESTORE_KEYS];
+	/* The user's settings when the game started (hotkeys and overlay
+	 * follow later changes). */
+	struct emu_settings settings;
+	/* Performance overlay: last RetroArch frame rate, next sample. */
+	double fps;
+	long long overlay_tick_ms;
 };
 
 /* Explicit per-game overrides; empty = inherited. */
@@ -500,6 +583,10 @@ static size_t build_status(char *out, size_t size)
 			 "slot=%d\n"
 			 "fast_forward=%d\n"
 			 "state_busy=%d\n"
+			 "slots=%d\n"
+			 "overlay=%d\n"
+			 "overlay_items=%s\n"
+			 "fps=%.1f\n"
 			 "end=1\n",
 			 state_name(),
 			 session.state == SESSION_IDLE ? "" : session.game,
@@ -508,7 +595,11 @@ static size_t build_status(char *out, size_t size)
 			 session.paused ? 1 : 0,
 			 session.slot,
 			 session.fast_forward ? 1 : 0,
-			 session.pending != PENDING_NONE ? 1 : 0);
+			 session.pending != PENDING_NONE ? 1 : 0,
+			 session.state == SESSION_IDLE ? DEFAULT_SLOTS : session.settings.slots,
+			 session.state != SESSION_IDLE && session.settings.overlay ? 1 : 0,
+			 session.state == SESSION_IDLE ? "" : session.settings.overlay_items,
+			 session.fps);
 
 	return n < 0 ? 0 : (size_t)n < size ? (size_t)n : size - 1;
 }
@@ -918,6 +1009,346 @@ static void core_file(const char *core, char *out, size_t size)
 }
 
 /* ------------------------------------------------------------------ */
+/* User emulation settings (Settings -> Gaming)                        */
+/* ------------------------------------------------------------------ */
+
+static bool word_in(const char *const *list, const char *word)
+{
+	for (; *list; list++)
+		if (!strcmp(*list, word))
+			return true;
+	return false;
+}
+
+/* "a,b,c" made only of known overlay fields (empty allowed). */
+static bool valid_overlay_items(const char *v)
+{
+	char copy[96];
+	char *save = NULL;
+
+	if (strlen(v) >= sizeof(copy))
+		return false;
+	copy_text(copy, sizeof(copy), v);
+	for (char *w = strtok_r(copy, ",", &save); w; w = strtok_r(NULL, ",", &save))
+		if (!word_in(overlay_fields, w))
+			return false;
+	return true;
+}
+
+static void default_settings(struct emu_settings *e)
+{
+	memset(e, 0, sizeof(*e));
+	e->slots = DEFAULT_SLOTS;
+	e->slot_rotation = true;
+	copy_text(e->overlay_items, sizeof(e->overlay_items), DEFAULT_OVERLAY_ITEMS);
+	for (int i = 0; i < HK_COUNT; i++)
+		copy_text(e->hotkey[i], sizeof(e->hotkey[i]), hotkey_defaults[i]);
+}
+
+/* Applies key=value to e; false when the key or value is not valid. */
+static bool settings_set(struct emu_settings *e, const char *key, const char *v)
+{
+	bool flag = !strcmp(v, "1");
+
+	if (!strcmp(key, "boot_screens") || !strcmp(key, "slot_rotation") ||
+	    !strcmp(key, "bezels") || !strcmp(key, "crt") || !strcmp(key, "overlay")) {
+		if (strcmp(v, "0") && strcmp(v, "1"))
+			return false;
+		if (!strcmp(key, "boot_screens"))
+			e->boot_screens = flag;
+		else if (!strcmp(key, "slot_rotation"))
+			e->slot_rotation = flag;
+		else if (!strcmp(key, "bezels"))
+			e->bezels = flag;
+		else if (!strcmp(key, "crt"))
+			e->crt = flag;
+		else
+			e->overlay = flag;
+		return true;
+	}
+	if (!strcmp(key, "slots")) {
+		char *end;
+		long n = strtol(v, &end, 10);
+
+		if (*end || n < 1 || n > MAX_SLOTS)
+			return false;
+		e->slots = (int)n;
+		return true;
+	}
+	if (!strcmp(key, "overlay_items")) {
+		if (!valid_overlay_items(v))
+			return false;
+		copy_text(e->overlay_items, sizeof(e->overlay_items), v);
+		return true;
+	}
+	if (!strncmp(key, "hotkey_", 7)) {
+		for (int i = 0; i < HK_COUNT; i++) {
+			if (strcmp(key + 7, hotkey_actions[i]))
+				continue;
+			if (!word_in(hotkey_controls, v))
+				return false;
+			copy_text(e->hotkey[i], sizeof(e->hotkey[i]), v);
+			return true;
+		}
+	}
+	return false;
+}
+
+static void settings_path(const char *user, char *out, size_t size)
+{
+	snprintf(out, size, USERS_DIR "/%s/" EMU_SETTINGS_FILE, user);
+}
+
+static void load_settings(const char *user, struct emu_settings *e)
+{
+	char path[PATH_MAX];
+	char line[256];
+	FILE *fp;
+
+	default_settings(e);
+	settings_path(user, path, sizeof(path));
+	fp = fopen(path, "r");
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp)) {
+		char *eq;
+
+		trim(line);
+		if (!(eq = strchr(line, '=')))
+			continue;
+		*eq++ = '\0';
+		(void)settings_set(e, line, eq);
+	}
+	fclose(fp);
+}
+
+static size_t format_settings(const struct emu_settings *e, char *out, size_t size)
+{
+	size_t len;
+	int n = snprintf(out, size,
+			 "boot_screens=%d\nslots=%d\nslot_rotation=%d\nbezels=%d\ncrt=%d\n"
+			 "overlay=%d\noverlay_items=%s\n",
+			 e->boot_screens, e->slots, e->slot_rotation, e->bezels, e->crt,
+			 e->overlay, e->overlay_items);
+
+	len = n < 0 ? 0 : (size_t)n < size ? (size_t)n : size - 1;
+	for (int i = 0; i < HK_COUNT && len < size; i++) {
+		n = snprintf(out + len, size - len, "hotkey_%s=%s\n",
+			     hotkey_actions[i], e->hotkey[i]);
+		if (n > 0)
+			len = (size_t)n < size - len ? len + (size_t)n : size - 1;
+	}
+	return len;
+}
+
+static int save_settings(const char *user, const struct emu_settings *e)
+{
+	char path[PATH_MAX];
+	char tmp[PATH_MAX + 8];
+	char dir[PATH_MAX];
+	char text[1024];
+	size_t len = format_settings(e, text, sizeof(text));
+	FILE *fp;
+	int rc = 0;
+
+	snprintf(dir, sizeof(dir), USERS_DIR "/%s/appdata/nuubos-emulation", user);
+	if (mkdir_p(dir) != 0)
+		return -1;
+	settings_path(user, path, sizeof(path));
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	fp = fopen(tmp, "w");
+	if (!fp)
+		return -1;
+	if (fwrite(text, 1, len, fp) != len)
+		rc = -1;
+	if (fclose(fp) != 0)
+		rc = -1;
+	if (rc == 0 && rename(tmp, path) != 0)
+		rc = -1;
+	if (rc != 0)
+		unlink(tmp);
+	return rc;
+}
+
+/* The chords inputd applies while this session holds the gamepads. */
+static void send_hotkeys(void)
+{
+	char line[512] = "HOTKEYS";
+	size_t len = strlen(line);
+
+	if (session.input_fd < 0)
+		return;
+	for (int i = 0; i < HK_COUNT; i++) {
+		int n = snprintf(line + len, sizeof(line) - len, " %s=%s",
+				 hotkey_actions[i], session.settings.hotkey[i]);
+
+		if (n > 0 && (size_t)n < sizeof(line) - len)
+			len += (size_t)n;
+	}
+	line[len++] = '\n';
+	if (write_all(session.input_fd, line, len) != 0)
+		log_msg("emud: hotkeys to inputd failed");
+}
+
+/* ------------------------------------------------------------------ */
+/* Display: screen type, bezel colour and the session shader           */
+/* ------------------------------------------------------------------ */
+
+/* display.conf field (1 = screen type, 2 = HDMI lines) of a system; ""
+ * when the system or the field is missing. */
+static void display_field(const char *system, int field, char *out, size_t size)
+{
+	char line[128];
+	FILE *fp = fopen(DISPLAY_CONF, "r");
+
+	copy_text(out, size, "");
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp)) {
+		char *sep;
+
+		trim(line);
+		if (line[0] == '#' || !(sep = strchr(line, '|')))
+			continue;
+		*sep++ = '\0';
+		if (strcmp(line, system))
+			continue;
+		for (int i = 1; i < field && sep; i++)
+			if ((sep = strchr(sep, '|')))
+				sep++;
+		if (sep) {
+			char *end = strchr(sep, '|');
+
+			if (end)
+				*end = '\0';
+			copy_text(out, size, sep);
+		}
+		break;
+	}
+	fclose(fp);
+}
+
+/* display.conf screen type of a system: "crt", "lcd" or "monitor". */
+static void system_screen(const char *system, char *out, size_t size)
+{
+	display_field(system, 1, out, size);
+	if (!out[0])
+		copy_text(out, size, "monitor");
+}
+
+/* Render height of a game of the system on the current output: the system's
+ * HDMI lines while HDMI is the active output (the output policy turns the
+ * panel off then), else 0 = native. */
+static int game_render_height(const char *system)
+{
+	char value[16] = "";
+	FILE *fp = fopen(HDMI_ENABLED, "r");
+
+	if (!fp)
+		return 0;
+	if (!fgets(value, sizeof(value), fp))
+		value[0] = '\0';
+	fclose(fp);
+	trim(value);
+	if (strcmp(value, "enabled") != 0)
+		return 0;
+	display_field(system, 2, value, sizeof(value));
+	return value[0] ? atoi(value) : GAME_HDMI_LINES;
+}
+
+/* systems.conf colour (field 6, #rrggbb) as 0..1 components. */
+static void system_colour(const char *system, float rgb[3])
+{
+	char line[512];
+	FILE *fp = fopen(SYSTEMS_CONF, "r");
+
+	rgb[0] = 0.25f;
+	rgb[1] = 0.45f;
+	rgb[2] = 0.90f;
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp)) {
+		char *field[7] = { line };
+		int n = 1;
+		unsigned int r, g, b;
+
+		if (line[0] == '#')
+			continue;
+		for (char *p = line; *p && n < 7; p++)
+			if (*p == '|') {
+				*p = '\0';
+				field[n++] = p + 1;
+			}
+		if (n < 6 || strcmp(field[0], system))
+			continue;
+		if (sscanf(field[5], "#%02x%02x%02x", &r, &g, &b) == 3) {
+			rgb[0] = (float)r / 255.0f;
+			rgb[1] = (float)g / 255.0f;
+			rgb[2] = (float)b / 255.0f;
+		}
+		break;
+	}
+	fclose(fp);
+}
+
+/* Boot sequence: the core options that skip or show the console's own
+ * start-up (BIOS logo), set at every launch from the user's setting. */
+static const struct {
+	const char *key;
+	const char *on;
+	const char *off;
+} boot_options[] = {
+	{ "pcsx_rearmed_show_bios_bootlogo", "enabled", "disabled" },
+	{ "mgba_skip_bios", "OFF", "ON" },
+	{ "gambatte_gb_bootloader", "enabled", "disabled" },
+	{ "genesis_plus_gx_bios", "enabled", "disabled" },
+	{ "melonds_boot_directly", "disabled", "enabled" },
+};
+
+/* Rewrites the boot keys of the user's core options file. */
+static void apply_boot_options(const char *path, bool boot)
+{
+	char tmp[PATH_MAX + 8];
+	char line[1024];
+	bool done[sizeof(boot_options) / sizeof(boot_options[0])] = { false };
+	FILE *in = fopen(path, "r");
+	FILE *out;
+
+	if (!in)
+		return;
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	out = fopen(tmp, "w");
+	if (!out) {
+		fclose(in);
+		return;
+	}
+	while (fgets(line, sizeof(line), in)) {
+		char key[128];
+		size_t i;
+
+		for (i = 0; i < sizeof(boot_options) / sizeof(boot_options[0]); i++)
+			if (sscanf(line, " %127[^ =#] =", key) == 1 &&
+			    !strcmp(key, boot_options[i].key))
+				break;
+		if (i == sizeof(boot_options) / sizeof(boot_options[0])) {
+			fputs(line, out);
+			continue;
+		}
+		if (!done[i])
+			fprintf(out, "%s = \"%s\"\n", boot_options[i].key,
+				boot ? boot_options[i].on : boot_options[i].off);
+		done[i] = true;
+	}
+	for (size_t i = 0; i < sizeof(boot_options) / sizeof(boot_options[0]); i++)
+		if (!done[i])
+			fprintf(out, "%s = \"%s\"\n", boot_options[i].key,
+				boot ? boot_options[i].on : boot_options[i].off);
+	fclose(in);
+	if (fclose(out) != 0 || rename(tmp, path) != 0)
+		unlink(tmp);
+}
+
+/* ------------------------------------------------------------------ */
 /* RetroAchievements (EPIC-017)                                        */
 /* ------------------------------------------------------------------ */
 
@@ -1063,31 +1494,107 @@ static void restore_user_keys(void)
 	free_restore();
 }
 
-/* Per-game overrides and achievements, appended to the session config. */
-static void write_session_overrides(FILE *fp, const struct game_overrides *o,
-				    const struct achievements *a)
+/* Shader preset of the session: one pass, its parameters. */
+static int write_session_shader(const char *shader, const char *params)
 {
-	if (o->aspect[0]) {
-		int index = !strcmp(o->aspect, "4:3") ? 0
-			  : !strcmp(o->aspect, "16:9") ? 1
-			  : !strcmp(o->aspect, "full") ? 24
-			  : 22; /* core and integer: core-provided aspect */
+	char tmp[] = SESSION_SHADER ".tmp";
+	FILE *fp = fopen(tmp, "w");
+	int rc;
 
-		remember_key("aspect_ratio_index");
-		remember_key("video_scale_integer");
-		fprintf(fp, "aspect_ratio_index = \"%d\"\n", index);
-		fprintf(fp, "video_scale_integer = \"%s\"\n",
-			!strcmp(o->aspect, "integer") ? "true" : "false");
-	}
-	if (o->filter[0]) {
-		bool sharp = !strcmp(o->filter, "sharp");
+	if (!fp)
+		return -1;
+	fprintf(fp, "shaders = \"1\"\nshader0 = \"%s\"\nfilter_linear0 = \"false\"\n%s",
+		shader, params);
+	rc = ferror(fp) ? -1 : 0;
+	if (fclose(fp) != 0)
+		rc = -1;
+	if (rc == 0 && rename(tmp, SESSION_SHADER) != 0)
+		rc = -1;
+	return rc;
+}
 
-		remember_key("video_shader_enable");
-		remember_key("video_smooth");
-		fprintf(fp, "video_shader_enable = \"%s\"\n", sharp ? "true" : "false");
-		fprintf(fp, "video_smooth = \"%s\"\n",
-			!strcmp(o->filter, "smooth") ? "true" : "false");
+/*
+ * Picture presentation (A, B, I, L). Without a per-game override the game
+ * is pixel perfect: square pixels, integer scale (smart: a few overscan
+ * lines may be cropped; only content stuck at 1x with a large margin, such
+ * as PSP on 640x480, is scaled to fit instead, RetroArch patch 0003),
+ * centred horizontally and at the top of the screen. Bezels make the
+ * viewport the whole screen and bezel.glsl places the picture the same
+ * way; the CRT look applies to TV systems (display.conf) unless the game
+ * has its own filter. Returns the --set-shader argument ("" = none).
+ */
+static const char *write_presentation(FILE *fp, const struct game_overrides *o)
+{
+	static char shader[PATH_MAX];
+	static const char *const keys[] = {
+		"aspect_ratio_index", "video_scale_integer",
+		"video_scale_integer_scaling", "video_scale_integer_axis",
+		"video_viewport_bias_x", "video_viewport_bias_y",
+		"video_viewport_bias_portrait_x", "video_viewport_bias_portrait_y",
+		"video_shader_enable", "video_smooth", NULL,
+	};
+	char screen[16];
+	bool crt;
+	bool bezel = false;
+	bool integer = true;
+	int index = 21; /* square pixels */
+
+	for (int i = 0; keys[i]; i++)
+		remember_key(keys[i]);
+	system_screen(session.system, screen, sizeof(screen));
+	crt = session.settings.crt && !strcmp(screen, "crt") && !o->filter[0];
+	if (o->aspect[0] && strcmp(o->aspect, "integer")) {
+		index = !strcmp(o->aspect, "4:3") ? 0
+		      : !strcmp(o->aspect, "16:9") ? 1
+		      : !strcmp(o->aspect, "full") ? 24
+		      : 22; /* core */
+		integer = false;
+	} else if (!strcmp(o->aspect, "integer")) {
+		index = 22; /* integer scale of the core's aspect */
+	} else if (session.settings.bezels) {
+		index = 24;
+		integer = false;
+		bezel = true;
 	}
+	fprintf(fp,
+		"aspect_ratio_index = \"%d\"\n"
+		"video_scale_integer = \"%s\"\n"
+		"video_scale_integer_scaling = \"2\"\n"
+		"video_scale_integer_axis = \"0\"\n"
+		"video_viewport_bias_x = \"0.500000\"\n"
+		"video_viewport_bias_y = \"0.000000\"\n"
+		"video_viewport_bias_portrait_x = \"0.500000\"\n"
+		"video_viewport_bias_portrait_y = \"0.000000\"\n"
+		"video_smooth = \"%s\"\n",
+		index, integer ? "true" : "false",
+		!strcmp(o->filter, "smooth") ? "true" : "false");
+
+	shader[0] = '\0';
+	if (bezel) {
+		char params[512];
+		float rgb[3];
+
+		system_colour(session.system, rgb);
+		snprintf(params, sizeof(params),
+			 "parameters = \"BEZEL_R;BEZEL_G;BEZEL_B;BEZEL_STYLE;CRT\"\n"
+			 "BEZEL_R = \"%.3f\"\nBEZEL_G = \"%.3f\"\nBEZEL_B = \"%.3f\"\n"
+			 "BEZEL_STYLE = \"%d\"\nCRT = \"%d\"\n",
+			 rgb[0], rgb[1], rgb[2], !strcmp(screen, "lcd") ? 1 : 0, crt ? 1 : 0);
+		if (write_session_shader(SHADER_DIR "/bezel.glsl", params) == 0)
+			copy_text(shader, sizeof(shader), SESSION_SHADER);
+	} else if (!strcmp(o->filter, "sharp")) {
+		copy_text(shader, sizeof(shader), DEFAULT_SHADER_PRESET);
+	} else if (crt) {
+		if (write_session_shader(SHADER_DIR "/crt.glsl", "") == 0)
+			copy_text(shader, sizeof(shader), SESSION_SHADER);
+	}
+	fprintf(fp, "video_shader_enable = \"%s\"\n", shader[0] ? "true" : "false");
+	return shader;
+}
+
+/* Achievements, appended to the session config. */
+static void write_session_overrides(FILE *fp, const struct achievements *a)
+{
 	/* The token is written for every session of a logged-in user and
 	 * removed from the user's file afterwards: USERDATA is exFAT and has
 	 * no permissions, the token lives only in STATE. */
@@ -1135,14 +1642,80 @@ static void ra_command(const char *fmt, ...)
 		log_msg("emud: command to RetroArch failed: %s", strerror(errno));
 }
 
-static void state_file_name(int slot, char *out, size_t size)
+/* RetroArch's state file names: <base>.state, .stateN, .state.auto. */
+static void state_path(const char *base, int slot, char *out, size_t size)
 {
 	if (slot == AUTO_SLOT)
-		snprintf(out, size, "%s.state.auto", session.state_base);
+		snprintf(out, size, "%s.state.auto", base);
 	else if (slot == 0)
-		snprintf(out, size, "%s.state", session.state_base);
+		snprintf(out, size, "%s.state", base);
 	else
-		snprintf(out, size, "%s.state%d", session.state_base, slot);
+		snprintf(out, size, "%s.state%d", base, slot);
+}
+
+static void state_file_name(int slot, char *out, size_t size)
+{
+	state_path(session.state_base, slot, out, size);
+}
+
+/* Modification time of a state, -1 when there is none. */
+static long long state_mtime(const char *base, int slot)
+{
+	char path[PATH_MAX];
+	struct stat st;
+
+	state_path(base, slot, path, sizeof(path));
+	if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
+		return -1;
+	return (long long)st.st_mtime;
+}
+
+/* The most recent state (a slot or AUTO_SLOT), NO_STATE when none; the
+ * most recent numbered slot in *manual (0 when none). */
+#define NO_STATE -2
+static int newest_state(const char *base, int slots, int *manual)
+{
+	long long best = -1;
+	long long best_manual = -1;
+	int newest = NO_STATE;
+
+	*manual = 0;
+	for (int slot = AUTO_SLOT; slot < slots; slot++) {
+		long long t = state_mtime(base, slot);
+
+		if (t < 0)
+			continue;
+		if (t > best) {
+			best = t;
+			newest = slot;
+		}
+		if (slot != AUTO_SLOT && t > best_manual) {
+			best_manual = t;
+			*manual = slot;
+		}
+	}
+	return newest;
+}
+
+/* Where the next save goes: the selected slot, or with rotation the slot
+ * after it once it holds a state (wrapping to 0 after the last). */
+static int save_target(void)
+{
+	if (!session.settings.slot_rotation || state_mtime(session.state_base, session.slot) < 0)
+		return session.slot;
+	return (session.slot + 1) % session.settings.slots;
+}
+
+/* Saves into save_target() and selects that slot. */
+static bool begin_save(int slot, bool quiet);
+static bool save_next(void)
+{
+	int target = save_target();
+
+	if (!begin_save(target, false))
+		return false;
+	session.slot = target;
+	return true;
 }
 
 static void stop_watch(void)
@@ -1243,6 +1816,11 @@ static void handle_ra_reply(char *line)
 			finish_pending(strcmp(result, "OK") == 0);
 		return;
 	}
+	if (!strncmp(line, "GET_FPS ", 8)) {
+		session.fps = atof(line + 8);
+		notify_subscribers();
+		return;
+	}
 	if (sscanf(line, "SET_PAUSED %d", &slot) == 1) {
 		bool paused = slot != 0;
 
@@ -1301,7 +1879,8 @@ static void process_watch(void)
  * them over the user's configuration (--appendconfig). */
 static int write_session_cfg(const char *ra_dir, const char *saves,
 			     const char *states, const char *screenshots,
-			     const struct game_overrides *o, const struct achievements *a)
+			     const struct game_overrides *o, const struct achievements *a,
+			     bool auto_load, const char **shader)
 {
 	char tmp[] = SESSION_CFG ".tmp";
 	FILE *fp;
@@ -1365,7 +1944,21 @@ static int write_session_cfg(const char *ra_dir, const char *saves,
 			"input_player%d_device_reservation_type = \"2\"\n"
 			"input_player%d_reserved_device = \"0000:%04x\"\n",
 			player, player, player);
-	write_session_overrides(fp, o, a);
+	*shader = write_presentation(fp, o);
+	/* The performance overlay line is drawn into the frame with the OSD
+	 * font (RetroArch notifications use widgets, not this font). */
+	remember_key("video_font_enable");
+	remember_key("video_font_path");
+	remember_key("video_font_size");
+	fprintf(fp, "video_font_enable = \"true\"\nvideo_font_path = \"%s\"\n"
+		"video_font_size = \"32.000000\"\n", OSD_FONT);
+	/* Progress is kept when the game closes (.state.auto); auto_load
+	 * resumes from it when it is the most recent state. */
+	remember_key("savestate_auto_save");
+	remember_key("savestate_auto_load");
+	fprintf(fp, "savestate_auto_save = \"true\"\nsavestate_auto_load = \"%s\"\n",
+		auto_load ? "true" : "false");
+	write_session_overrides(fp, a);
 	rc = ferror(fp) ? -1 : 0;
 	if (fclose(fp) != 0)
 		rc = -1;
@@ -1450,7 +2043,12 @@ static void reset_session(void)
 	session.shot_fd = -1;
 }
 
-static const char *launch(const char *game)
+/*
+ * mode: "resume" (default) starts from the most recent state (a slot or the
+ * automatic state written when the game last closed), "new" from the
+ * beginning, "slot:N" from slot N ("slot:-1" = the automatic state).
+ */
+static const char *launch(const char *game, const char *mode)
 {
 	char answer[PATH_MAX + 128];
 	char command[64];
@@ -1466,9 +2064,19 @@ static const char *launch(const char *game)
 	pid_t pid;
 	struct game_overrides overrides;
 	struct achievements achievements;
+	const char *shader = "";
+	char entry_arg[16] = "";
+	bool auto_load = false;
+	int manual = 0;
+	int start = NO_STATE;
+	int render_height;
 
 	if (session.state != SESSION_IDLE)
 		return "busy";
+	if (!mode || !mode[0])
+		mode = "resume";
+	if (strcmp(mode, "resume") && strcmp(mode, "new") && strncmp(mode, "slot:", 5))
+		return "mode";
 	for (const char *p = game; *p; p++)
 		if (!isxdigit((unsigned char)*p))
 			return "game";
@@ -1476,6 +2084,7 @@ static const char *launch(const char *game)
 		return "game";
 	if (!read_active_user(session.user, sizeof(session.user)))
 		return "no-user";
+	load_settings(session.user, &session.settings);
 
 	snprintf(command, sizeof(command), "RESOLVE\t%s", game);
 	if (library_request(command, answer, sizeof(answer)) != 0)
@@ -1548,18 +2157,36 @@ static const char *launch(const char *game)
 	snprintf(path, sizeof(path), "%s/retroarch-core-options.cfg", ra_dir);
 	if (seed_file(DEFAULT_CORE_OPTIONS, path) == 0)
 		merge_missing_keys(DEFAULT_CORE_OPTIONS, path);
+	apply_boot_options(path, session.settings.boot_screens);
 	snprintf(path, sizeof(path), "%s/config/global.glslp", ra_dir);
 	(void)seed_file(DEFAULT_SHADER_PRESET, path);
-	if (write_session_cfg(ra_dir, saves, session.states_dir, screenshots,
-			      &overrides, &achievements) != 0)
-		return "storage";
 	content_base_name(session.content, path, sizeof(path));
 	snprintf(session.state_base, sizeof(session.state_base), "%s/%s",
 		 session.states_dir, path);
 
+	/* Starting point: RetroArch loads an entry slot (--entryslot) or the
+	 * automatic state (savestate_auto_load). */
+	if (!strcmp(mode, "resume")) {
+		start = newest_state(session.state_base, session.settings.slots, &manual);
+	} else if (!strncmp(mode, "slot:", 5)) {
+		start = atoi(mode + 5);
+		if (start < AUTO_SLOT || start >= session.settings.slots ||
+		    state_mtime(session.state_base, start) < 0)
+			return "state";
+		(void)newest_state(session.state_base, session.settings.slots, &manual);
+	}
+	if (start == AUTO_SLOT)
+		auto_load = true;
+	else if (start >= 0)
+		snprintf(entry_arg, sizeof(entry_arg), "%d", start);
+	if (write_session_cfg(ra_dir, saves, session.states_dir, screenshots,
+			      &overrides, &achievements, auto_load, &shader) != 0)
+		return "storage";
+
 	session.input_fd = input_gamepads_on();
 	if (session.input_fd < 0)
 		log_msg("emud: inputd game gamepads unavailable");
+	send_hotkeys();
 
 	if (pipe2(in_pipe, O_CLOEXEC) != 0)
 		return "spawn";
@@ -1569,6 +2196,7 @@ static const char *launch(const char *game)
 		return "spawn";
 	}
 
+	render_height = game_render_height(session.system);
 	pid = fork();
 	if (pid < 0) {
 		close(in_pipe[0]);
@@ -1579,11 +2207,22 @@ static const char *launch(const char *game)
 	}
 	if (pid == 0) {
 		char cfg[PATH_MAX];
-		char *argv[] = {
+		char *argv[16] = {
 			(char *)RETROARCH_BIN, (char *)"--config", cfg,
 			(char *)"--appendconfig", (char *)SESSION_CFG,
-			(char *)"-L", core_path, session.content, NULL,
+			/* "" disables RetroArch's automatic shader presets. */
+			(char *)"--set-shader", (char *)shader,
 		};
+		int argc = 7;
+
+		if (entry_arg[0]) {
+			argv[argc++] = (char *)"--entryslot";
+			argv[argc++] = entry_arg;
+		}
+		argv[argc++] = (char *)"-L";
+		argv[argc++] = core_path;
+		argv[argc++] = session.content;
+		argv[argc] = NULL;
 		int log_fd;
 		sigset_t none;
 
@@ -1609,6 +2248,12 @@ static const char *launch(const char *game)
 		setenv("WAYLAND_DISPLAY", "wayland-0", 1);
 		setenv("PIPEWIRE_RUNTIME_DIR", PIPEWIRE_RUNTIME, 1);
 		setenv("LANG", "C.UTF-8", 1);
+		if (render_height > 0) {
+			char lines[16];
+
+			snprintf(lines, sizeof(lines), "%d", render_height);
+			setenv("NUUBOS_RA_RENDER_HEIGHT", lines, 1);
+		}
 		execv(RETROARCH_BIN, argv);
 		_exit(127);
 	}
@@ -1621,13 +2266,17 @@ static const char *launch(const char *game)
 	(void)fcntl(session.stdin_fd, F_SETFL, O_NONBLOCK);
 	(void)fcntl(session.stdout_fd, F_SETFL, O_NONBLOCK);
 	session.state = SESSION_RUNNING;
-	session.slot = 0;
+	/* Load State and the slot shown follow the state the game started
+	 * from, else the most recent numbered slot. */
+	session.slot = start >= 0 ? start : manual;
 	session.paused = false;
+	session.fps = 0;
+	session.overlay_tick_ms = monotonic_ms() + OVERLAY_TICK_MS;
 	session.fast_forward = false;
 	session.started_ms = monotonic_ms();
-	log_msg("emud: launch game=%s system=%s core=%s pid=%d user=%s",
+	log_msg("emud: launch game=%s system=%s core=%s pid=%d user=%s start=%d shader=%s render=%d",
 		session.game, session.system, session.core, (int)pid,
-		session.user);
+		session.user, start, shader[0] ? shader : "none", render_height);
 	library_session("SESSION_BEGIN", session.game);
 	notify_subscribers();
 	return NULL;
@@ -1717,6 +2366,9 @@ static int session_timeout_ms(void)
 		deadline = session.quit_deadline_ms;
 	if (session.shot_fd > 0 && (deadline < 0 || session.shot_deadline_ms < deadline))
 		deadline = session.shot_deadline_ms;
+	if (session.state == SESSION_RUNNING && session.settings.overlay &&
+	    (deadline < 0 || session.overlay_tick_ms < deadline))
+		deadline = session.overlay_tick_ms;
 	if (deadline < 0)
 		return -1;
 	if (deadline <= now)
@@ -1730,6 +2382,15 @@ static void session_timers(void)
 
 	if (session.shot_fd > 0 && now >= session.shot_deadline_ms)
 		finish_screenshot(false);
+	/* Performance overlay: ask RetroArch for its frame rate; the reply
+	 * updates the snapshot the Quick Menu draws from. Not while paused
+	 * (the Quick Menu hides the overlay then). */
+	if (session.state == SESSION_RUNNING && session.settings.overlay &&
+	    now >= session.overlay_tick_ms) {
+		if (!session.paused)
+			ra_command("GET_FPS");
+		session.overlay_tick_ms = now + OVERLAY_TICK_MS;
+	}
 	if (session.pending != PENDING_NONE && now >= session.pending_deadline_ms) {
 		log_msg("emud: state operation slot %d timed out", session.pending_slot);
 		finish_pending(false);
@@ -1810,11 +2471,13 @@ static void process_shot_watch(void)
 
 static int step_slot(int slot, int delta)
 {
+	int last = session.settings.slots - 1;
+
 	slot += delta;
-	if (slot > MAX_SLOT)
+	if (slot > last)
 		return 0;
 	if (slot < 0)
-		return MAX_SLOT;
+		return last;
 	return slot;
 }
 
@@ -1827,7 +2490,10 @@ static void handle_hotkey(const char *action)
 		return;
 	log_msg("emud: hotkey %s", action);
 	if (!strcmp(action, "save_state")) {
-		(void)begin_save(session.slot, false);
+		if (save_next())
+			notify_subscribers();
+	} else if (!strcmp(action, "quit")) {
+		request_quit();
 	} else if (!strcmp(action, "load_state")) {
 		if (session.pending == PENDING_NONE)
 			begin_load(session.slot);
@@ -1856,6 +2522,7 @@ static void process_input_link(void)
 		close(session.input_fd);
 		session.input_used = 0;
 		session.input_fd = input_gamepads_on();
+		send_hotkeys();
 		return;
 	}
 	for (ssize_t i = 0; i < n; i++) {
@@ -1950,6 +2617,114 @@ static void handle_game_settings(struct client *c, const char *verb, char *arg)
 	reply(c, save_overrides(user, fields[0], &o) == 0 ? "OK\n" : "ERR storage\n");
 }
 
+/* SETTINGS (key, value NULL) lists the active user's settings; SET key
+ * value changes one. Hotkeys and the overlay follow at once in a running
+ * game of that user; the rest applies at the next launch. */
+static void handle_settings(struct client *c, const char *key, const char *value)
+{
+	char user[64];
+	char out[1100];
+	struct emu_settings e;
+	size_t len;
+
+	if (!read_active_user(user, sizeof(user))) {
+		reply(c, "ERR no-user\n");
+		return;
+	}
+	load_settings(user, &e);
+	if (!key) {
+		len = format_settings(&e, out, sizeof(out) - 8);
+		memcpy(out + len, "end=1\n", 7);
+		if (write_all(c->fd, out, len + 6) != 0)
+			close_client(c);
+		return;
+	}
+	if (!settings_set(&e, key, value)) {
+		reply(c, "ERR value\n");
+		return;
+	}
+	if (save_settings(user, &e) != 0) {
+		reply(c, "ERR storage\n");
+		return;
+	}
+	reply(c, "OK\n");
+	if (session.state != SESSION_RUNNING || strcmp(user, session.user))
+		return;
+	memcpy(session.settings.hotkey, e.hotkey, sizeof(e.hotkey));
+	session.settings.overlay = e.overlay;
+	copy_text(session.settings.overlay_items, sizeof(session.settings.overlay_items),
+		  e.overlay_items);
+	if (!strncmp(key, "hotkey_", 7))
+		send_hotkeys();
+	session.overlay_tick_ms = monotonic_ms();
+	notify_subscribers();
+}
+
+/* STATES [game]: the save states of the running game, or of a game before
+ * it starts (Home's start menu): "slots=N", then "state=<slot>\t<mtime>\t
+ * <HH:MM local>" for each existing state (slot -1 = the automatic state),
+ * "end=1". */
+static void handle_states(struct client *c, const char *game)
+{
+	char base[PATH_MAX];
+	char out[4096];
+	int slots;
+	size_t len;
+
+	if (game && game[0]) {
+		char user[64];
+		char command[64];
+		char answer[PATH_MAX + 128];
+		char name[NAME_MAX + 1];
+		char *tab;
+		struct emu_settings e;
+
+		if (!valid_game(game)) {
+			reply(c, "ERR game\n");
+			return;
+		}
+		if (!read_active_user(user, sizeof(user))) {
+			reply(c, "ERR no-user\n");
+			return;
+		}
+		snprintf(command, sizeof(command), "RESOLVE\t%s", game);
+		if (library_request(command, answer, sizeof(answer)) != 0 ||
+		    strncmp(answer, "OK ", 3) != 0 || !(tab = strchr(answer + 3, '\t'))) {
+			reply(c, "ERR game\n");
+			return;
+		}
+		*tab = '\0';
+		load_settings(user, &e);
+		slots = e.slots;
+		content_base_name(tab + 1, name, sizeof(name));
+		snprintf(base, sizeof(base), USERS_DIR "/%s/states/%s/%s", user, answer + 3, name);
+	} else if (session.state == SESSION_RUNNING) {
+		slots = session.settings.slots;
+		copy_text(base, sizeof(base), session.state_base);
+	} else {
+		reply(c, "ERR no-session\n");
+		return;
+	}
+	len = (size_t)snprintf(out, sizeof(out), "slots=%d\n", slots);
+	for (int slot = AUTO_SLOT; slot < slots && len + 48 < sizeof(out); slot++) {
+		long long t = state_mtime(base, slot);
+
+		time_t tt = (time_t)t;
+		struct tm tm;
+
+		if (t < 0)
+			continue;
+		/* Local time of the save, for display. */
+		if (!localtime_r(&tt, &tm))
+			memset(&tm, 0, sizeof(tm));
+		len += (size_t)snprintf(out + len, sizeof(out) - len, "state=%d\t%lld\t%02d:%02d\n",
+					slot, t, tm.tm_hour, tm.tm_min);
+	}
+	len += (size_t)snprintf(out + len, sizeof(out) - len, "end=1\n");
+	if (write_all(c->fd, out, len) != 0)
+		close_client(c);
+}
+
 static void handle_command(struct client *c, char *line)
 {
 	char *arg = strchr(line, '\t');
@@ -1971,7 +2746,12 @@ static void handle_command(struct client *c, char *line)
 		if (write_all(c->fd, status, len) != 0)
 			close_client(c);
 	} else if (!strcmp(line, "LAUNCH") && arg) {
-		const char *error = launch(arg);
+		char *mode = strchr(arg, '\t');
+		const char *error;
+
+		if (mode)
+			*mode++ = '\0';
+		error = launch(arg, mode);
 
 		if (error) {
 			char text[64];
@@ -1984,6 +2764,13 @@ static void handle_command(struct client *c, char *line)
 		} else {
 			reply(c, "OK\n");
 		}
+	} else if (!strcmp(line, "OVERLAY_TEXT")) {
+		/* The performance overlay line built by the Quick Menu, drawn by
+		 * RetroArch into the frame ("" hides it). */
+		if (!running(c))
+			return;
+		ra_command("OSD_TEXT %s", arg ? arg : "");
+		reply(c, "OK\n");
 	} else if (!strcmp(line, "PAUSE") || !strcmp(line, "RESUME")) {
 		if (!running(c))
 			return;
@@ -1992,7 +2779,12 @@ static void handle_command(struct client *c, char *line)
 	} else if (!strcmp(line, "SAVE_STATE")) {
 		if (!running(c))
 			return;
-		reply(c, begin_save(session.slot, false) ? "OK\n" : "ERR busy\n");
+		if (!save_next()) {
+			reply(c, "ERR busy\n");
+			return;
+		}
+		reply(c, "OK\n");
+		notify_subscribers();
 	} else if (!strcmp(line, "LOAD_STATE")) {
 		if (!running(c))
 			return;
@@ -2011,7 +2803,7 @@ static void handle_command(struct client *c, char *line)
 			slot = step_slot(slot, 1);
 		else if (!strcmp(arg, "-1"))
 			slot = step_slot(slot, -1);
-		else if (isdigit((unsigned char)arg[0]) && atoi(arg) <= MAX_SLOT)
+		else if (isdigit((unsigned char)arg[0]) && atoi(arg) < session.settings.slots)
 			slot = atoi(arg);
 		else {
 			reply(c, "ERR slot\n");
@@ -2051,6 +2843,16 @@ static void handle_command(struct client *c, char *line)
 	} else if ((!strcmp(line, "GAME_SETTINGS") || !strcmp(line, "GAME_SET") ||
 		    !strcmp(line, "GAME_RESET")) && arg) {
 		handle_game_settings(c, line, arg);
+	} else if (!strcmp(line, "SETTINGS")) {
+		handle_settings(c, NULL, NULL);
+	} else if (!strcmp(line, "SET") && arg) {
+		char *value = strchr(arg, '\t');
+
+		if (value)
+			*value++ = '\0';
+		handle_settings(c, arg, value ? value : "");
+	} else if (!strcmp(line, "STATES")) {
+		handle_states(c, arg);
 	} else if (!strcmp(line, "PRE_POWER") && arg) {
 		if (strcmp(arg, "sleep") && strcmp(arg, "restart") &&
 		    strcmp(arg, "poweroff")) {

@@ -3,4 +3,5 @@ config BR2_PACKAGE_NUUBOS_LIGHTING
 	depends on BR2_PACKAGE_DBUS
 	select BR2_PACKAGE_NUUBOS_RGB
 	help
-	  User-scoped RGB baseline modes and temporary system effects.
+	  Per-user RGB lighting effects and system signals (renders every
+	  frame; nuubos-rgbd is the hardware backend).

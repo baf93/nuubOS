@@ -95,7 +95,7 @@ struct session {
 static volatile sig_atomic_t stop_requested;
 static int sigchld_pipe[2] = { -1, -1 };
 static struct client clients[MAX_CLIENTS];
-static struct session s = { .ipc = -1, .pid = -1, .power_client = -1 };
+static struct session s = { .ipc = -1, .pid = -1, .power_client = -1, .deadline_ms = -1 };
 static char last_item[PATH_MAX];
 static double last_position = -1;
 
@@ -555,7 +555,9 @@ static void child_exited(int status)
 
 static void timers(void)
 {
-	if (s.deadline_ms < 0 || now_ms() < s.deadline_ms || s.pid <= 0)
+	if (s.pid <= 0)
+		s.deadline_ms = -1;
+	if (s.deadline_ms < 0 || now_ms() < s.deadline_ms)
 		return;
 	if (s.state == STOPPING && !s.term_sent && s.ipc >= 0 && last_position < 0) {
 		/* Position never came: ask mpv to quit normally. */

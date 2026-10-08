@@ -1,0 +1,31 @@
+--- a/drivers/gpu/drm/panfrost/panfrost_device.c
++++ b/drivers/gpu/drm/panfrost/panfrost_device.c
+@@ -3,6 +3,7 @@
+ /* Copyright 2019 Linaro, Ltd, Rob Herring <robh@kernel.org> */
+ 
+ #include <linux/clk.h>
++#include <linux/iopoll.h>
+ #include <linux/reset.h>
+ #include <linux/platform_device.h>
+ #include <linux/pm_domain.h>
+@@ -541,8 +542,20 @@
+ static int panfrost_device_suspend(struct device *dev)
+ {
+ 	struct panfrost_device *pfdev = dev_get_drvdata(dev);
++	int idle;
+ 	int ret;
+ 
++	/*
++	 * User space is frozen, but jobs it queued just before may still be
++	 * on the hardware: a continuously rendering client (a game) almost
++	 * always has one. The runtime suspend callback refuses a busy GPU
++	 * with -EBUSY, which aborts the whole system suspend. Let the queued
++	 * jobs finish first; nothing can submit new ones now.
++	 */
++	if (read_poll_timeout(panfrost_jm_is_idle, idle, idle, 1000, 1000000,
++			      false, pfdev))
++		dev_warn(dev, "jobs still running at suspend\n");
++
+ 	ret = pm_runtime_force_suspend(dev);
+ 	if (ret)
+ 		return ret;

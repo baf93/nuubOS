@@ -378,7 +378,7 @@ fn request_cover(ui: &HomeWindow, path: &str, small: bool) -> Option<(Image, f32
             Some(CoverState::Loading) | Some(CoverState::Failed) => None,
             None => {
                 st.covers.insert(key, CoverState::Loading);
-                let radius = (6.0 * scale).max(target as f32 * 0.045);
+                let radius = (12.0 * scale).max(target as f32 * 0.06);
                 if let Some(q) = COVER_QUEUE.get() {
                     let _ = q.lock().unwrap().send((path.to_owned(), target, radius));
                 }
@@ -563,13 +563,16 @@ fn build_home(ui: &HomeWindow) {
     ui.set_home_recent_index(ui.get_home_recent_index().clamp(0, (counts[0] - 1).max(0)));
     ui.set_home_shelf_index(ui.get_home_shelf_index().clamp(0, (counts[1] - 1).max(0)));
     ui.set_home_apps_index(ui.get_home_apps_index().clamp(0, (counts[2] - 1).max(0)));
-    let row = ui.get_home_row();
-    if counts[row.clamp(0, 2) as usize] == 0 {
-        if let Some(r) = (0..3).find(|r| counts[*r as usize] > 0) {
-            ui.set_home_row(r);
-        }
-    }
     ui.set_library_scanning(snap.scanning);
+}
+
+/* A new playful message for empty sections, per user session. */
+fn pick_empty_variant(ui: &HomeWindow) {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    ui.set_home_empty_variant((nanos % 12) as i32);
 }
 
 /* Grid rows whose covers should be decoded now. */
@@ -682,12 +685,14 @@ fn apply_snapshot(ui: &HomeWindow, snap: LibSnapshot) {
         changed
     });
     if user_changed {
-        /* Another user's Home starts at the top. */
+        /* Another user's Home starts at the top, on Recently Played
+         * even while it is empty (user request 2026-10-08). */
         ui.set_home_row(0);
         ui.set_home_recent_index(0);
         ui.set_home_shelf_index(0);
         ui.set_home_apps_index(0);
         close_grid(ui);
+        pick_empty_variant(ui);
     }
     build_home(ui);
     let scope = STATE.with(|st| st.borrow().grid_scope.clone());
@@ -723,8 +728,46 @@ fn launch_game(ui: &HomeWindow, card: &HomeCard) {
     launch_by_id(ui, card.key.as_str(), card.available);
 }
 
+/* Confirm held on a game card: Start Game (states, fresh start) after
+ * LONG_PRESS_MS; released before, the game resumes (EPIC-019). */
+const LONG_PRESS_MS: u64 = 600;
+
+thread_local! {
+    static GAME_PRESS: RefCell<Option<(slint::Timer, HomeCard)>> = RefCell::new(None);
+}
+
+fn press_game(ui: &HomeWindow, card: &HomeCard) {
+    let timer = slint::Timer::default();
+    let weak = ui.as_weak();
+    let held = card.clone();
+    timer.start(slint::TimerMode::SingleShot, Duration::from_millis(LONG_PRESS_MS), move || {
+        GAME_PRESS.with(|p| p.borrow_mut().take());
+        let Some(ui) = weak.upgrade() else { return };
+        if !held.available {
+            show_notice(&ui, tr(&ui, 434, "This game is not available"));
+            return;
+        }
+        play_ui_sound("menu_confirm");
+        let cover = held.has_cover.then(|| held.cover.clone());
+        crate::gameui::open_launch_menu(&ui, held.key.as_str(), held.title.as_str(), cover);
+    });
+    GAME_PRESS.with(|p| *p.borrow_mut() = Some((timer, card.clone())));
+}
+
+pub fn release_confirm(ui: &HomeWindow) {
+    if let Some((timer, card)) = GAME_PRESS.with(|p| p.borrow_mut().take()) {
+        timer.stop();
+        launch_game(ui, &card);
+    }
+}
+
 /* Also Play in Game Details. */
 pub fn launch_by_id(ui: &HomeWindow, id: &str, available: bool) {
+    launch_with_mode(ui, id, available, "resume");
+}
+
+/* mode: resume | new | slot:N (nuubos-emud LAUNCH). */
+pub fn launch_with_mode(ui: &HomeWindow, id: &str, available: bool, mode: &str) {
     if !available {
         show_notice(ui, tr(ui, 434, "This game is not available"));
         return;
@@ -732,7 +775,7 @@ pub fn launch_by_id(ui: &HomeWindow, id: &str, available: bool) {
     if GAME_RUNNING.load(Ordering::SeqCst) {
         return;
     }
-    let command = format!("LAUNCH\t{}", id);
+    let command = format!("LAUNCH\t{}\t{}", id, mode);
     let weak = ui.as_weak();
     thread::spawn(move || {
         let reason = match emulation_command(&command) {
@@ -890,6 +933,12 @@ fn close_grid(ui: &HomeWindow) {
 /* Input                                                            */
 /* ---------------------------------------------------------------- */
 
+/* Systems with at least one available game for the active user (the
+ * libraryd snapshot), e.g. for the BIOS Files sections. */
+pub fn system_ids() -> Vec<String> {
+    STATE.with(|st| st.borrow().snap.systems.iter().filter(|s| s.count > 0).map(|s| s.id.clone()).collect())
+}
+
 /* Home notice for other modules (e.g. after Delete Game). */
 pub fn notice(ui: &HomeWindow, text: String) {
     show_notice(ui, text);
@@ -940,23 +989,14 @@ fn toggle_favorite(ui: &HomeWindow, card: &HomeCard) {
     });
 }
 
+/* Every section is reachable, empty ones included (empty-state card). */
 fn move_row(ui: &HomeWindow, delta: i32) -> bool {
-    let counts = [
-        ui.get_home_recent().row_count(),
-        ui.get_home_shelf().row_count(),
-        ui.get_home_apps().row_count(),
-    ];
-    let mut row = ui.get_home_row();
-    loop {
-        row += delta;
-        if !(0..3).contains(&row) {
-            return false;
-        }
-        if counts[row as usize] > 0 {
-            ui.set_home_row(row);
-            return true;
-        }
+    let row = ui.get_home_row() + delta;
+    if !(0..3).contains(&row) {
+        return false;
     }
+    ui.set_home_row(row);
+    true
 }
 
 fn move_column(ui: &HomeWindow, delta: i32) -> bool {
@@ -1014,7 +1054,7 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
             play_ui_sound(action);
             match card.kind {
                 KIND_FAVORITES | KIND_COLLECTION | KIND_SYSTEM => open_grid(ui, &card),
-                KIND_GAME => launch_game(ui, &card),
+                KIND_GAME => press_game(ui, &card),
                 /* Built-in nuubUI applications (EPIC-025, EPIC-026). */
                 _ if card.key.as_str() == "moonlight" => crate::moonlight::open(ui),
                 _ if card.key.as_str() == "steamlink" => crate::steamlink::open(ui),

@@ -1,0 +1,148 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] nuubOS performance overlay drawn into the frame
+
+OSD_TEXT <line> sets one line of text that the video driver draws into
+every frame with the OSD font, through the statistics path. The nuubOS
+performance overlay used a compositor layer surface before: any layer
+over the game makes labwc composite every frame, which cost about 10 %
+speed on GPU-bound games.
+
+gl2 draws the statistics text with the pixel unpack state reset and
+restores it afterwards: GLideN64's threaded renderer leaves its own
+behind, and the font atlas upload then crashed Mesa (panfrost) at the
+next flush.
+
+Upstream-Status: Inappropriate [nuubOS specific]
+---
+--- a/gfx/video_driver.c
++++ b/gfx/video_driver.c
+@@ -478,6 +478,15 @@
+    return VIDEO_DRIVER_GET_HW_CONTEXT_INTERNAL(video_st);
+ }
+ 
++/* nuubOS performance overlay: one line drawn into every frame with the
++ * OSD font (no compositor layer, so the game stays on direct scan-out). */
++static char nuubos_osd_text[256];
++
++void video_driver_set_nuubos_osd(const char *text)
++{
++   strlcpy(nuubos_osd_text, text ? text : "", sizeof(nuubos_osd_text));
++}
++
+ video_driver_state_t *video_state_get_ptr(void)
+ {
+    return &video_driver_st;
+@@ -4336,6 +4345,29 @@
+       }
+    }
+ 
++   /* nuubOS performance overlay: white text with a dark shadow at the top
++    * left, about 15 px high on a 480-line screen (scaled with the output),
++    * through the statistics path (RetroArch's own statistics win). */
++   if (     render_frame
++         && !video_info.statistics_show
++         && nuubos_osd_text[0])
++   {
++      video_info.osd_stat_params.x           = 0.012f;
++      video_info.osd_stat_params.y           = 1.0f - 20.0f / 480.0f;
++      video_info.osd_stat_params.text_align  = TEXT_ALIGN_LEFT;
++      video_info.osd_stat_params.scale       = ((float)video_info.height / 480.0f)
++            * (15.0f / video_info.font_size);
++      video_info.osd_stat_params.full_screen = true;
++      video_info.osd_stat_params.drop_x      = 1;
++      video_info.osd_stat_params.drop_y      = -1;
++      video_info.osd_stat_params.drop_mod    = 0.0f;
++      video_info.osd_stat_params.drop_alpha  = 1.0f;
++      video_info.osd_stat_params.color       = COLOR_ABGR(255, 255, 255, 255);
++      strlcpy(video_info.stat_text, nuubos_osd_text,
++            sizeof(video_info.stat_text));
++      video_info.statistics_show             = true;
++   }
++
+    if (render_frame
+          && video_st->current_video
+          && video_st->current_video->frame)
+--- a/gfx/video_driver.h
++++ b/gfx/video_driver.h
+@@ -981,6 +981,9 @@
+ 
+ video_driver_state_t *video_state_get_ptr(void);
+ 
++/* nuubOS performance overlay line ("" hides it). */
++void video_driver_set_nuubos_osd(const char *text);
++
+ bool video_driver_set_rotation(unsigned rotation);
+ 
+ bool video_driver_set_video_mode(unsigned width,
+--- a/gfx/drivers/gl2.c
++++ b/gfx/drivers/gl2.c
+@@ -3612,8 +3612,34 @@
+    else if (statistics_show)
+    {
+       if (osd_params)
++      {
++         /* nuubOS: a threaded core renderer (GLideN64) can leave pixel
++          * unpack state behind; the font atlas upload must read its own
++          * client memory, not a bound buffer with a stale row length.
++          * The core's state is restored afterwards. */
++         GLint unpack[5] = { 0, 0, 0, 0, 4 };
++#if defined(HAVE_OPENGLES3) || !defined(HAVE_OPENGLES)
++         glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack[0]);
++         glGetIntegerv(GL_UNPACK_ROW_LENGTH, &unpack[1]);
++         glGetIntegerv(GL_UNPACK_SKIP_ROWS, &unpack[2]);
++         glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &unpack[3]);
++         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
++         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
++         glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
++         glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
++#endif
++         glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpack[4]);
++         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+          font_driver_render_msg(gl, stat_text,
+                (const struct font_params*)osd_params, NULL);
++         glPixelStorei(GL_UNPACK_ALIGNMENT, unpack[4]);
++#if defined(HAVE_OPENGLES3) || !defined(HAVE_OPENGLES)
++         glPixelStorei(GL_UNPACK_SKIP_PIXELS, unpack[3]);
++         glPixelStorei(GL_UNPACK_SKIP_ROWS, unpack[2]);
++         glPixelStorei(GL_UNPACK_ROW_LENGTH, unpack[1]);
++         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, (GLuint)unpack[0]);
++#endif
++      }
+    }
+ #endif
+ 
+--- a/command.c
++++ b/command.c
+@@ -829,6 +829,14 @@
+    return true;
+ }
+ 
++/* OSD_TEXT <line>: the nuubOS performance overlay line drawn into the
++ * frame; an empty line hides it. No reply. */
++bool command_osd_text(command_t *cmd, const char *arg)
++{
++   video_driver_set_nuubos_osd(arg);
++   return true;
++}
++
+ bool command_play_replay_slot(command_t *cmd, const char *arg)
+ {
+ #ifdef HAVE_BSV_MOVIE
+--- a/command.h
++++ b/command.h
+@@ -430,6 +430,7 @@
+ bool command_save_state_slot(command_t *cmd, const char* arg);
+ bool command_set_paused(command_t *cmd, const char* arg);
+ bool command_get_fps(command_t *cmd, const char* arg);
++bool command_osd_text(command_t *cmd, const char* arg);
+ bool command_play_replay_slot(command_t *cmd, const char* arg);
+ bool command_seek_replay(command_t *cmd, const char *arg);
+ bool command_save_savefiles(command_t *cmd, const char* arg);
+@@ -463,6 +464,7 @@
+    { "SAVE_STATE_SLOT",command_save_state_slot, "<slot number>"},
+    { "SET_PAUSED",     command_set_paused,      "<0|1>"},
+    { "GET_FPS",        command_get_fps,         "No argument"},
++   { "OSD_TEXT",       command_osd_text,        "<text>"},
+    { "PLAY_REPLAY_SLOT",command_play_replay_slot, "<slot number>"},
+    { "SEEK_REPLAY",command_seek_replay, "<frame number>"},
+ 

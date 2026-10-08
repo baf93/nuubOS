@@ -21,6 +21,7 @@ the game does not start.
 | Game Boy / Color | Gambatte | GPL-2.0 | |
 | Game Boy Advance | mGBA | MPL-2.0 | |
 | Nintendo 64 | Mupen64Plus-Next (GLES3, 320x240) | GPL-2.0 | partial; homebrew built with libdragon's open-source IPL3 (2023+) does not boot (the ARM64 dynarec exits on it) |
+| Nintendo 64 (alternative, per game) | ParaLLEl N64 (GLES3 Glide64/gln64/Rice, 320x240; no GLideN64, no Vulkan) | GPL-2.0 | lighter renderers, less accurate; Glide64 is the shipped renderer |
 | Nintendo DS | melonDS (ARM64 JIT, touch on right stick) | GPL-3.0 | partial |
 | Virtual Boy | Beetle VB | GPL-2.0 | |
 | Pokémon Mini | PokeMini | GPL-3.0 | free BIOS built in |
@@ -29,7 +30,7 @@ the game does not start.
 | Saturn | YabaSanshiro (A53/GLES3 profile) | GPL-2.0 | partial; BIOS `saturn_bios.bin` (the core refuses to start without one, even with HLE forced) |
 | Dreamcast, NAOMI, Atomiswave | Flycast (A53/GLES profile) | GPL-2.0 | partial; NAOMI/Atomiswave: BIOS |
 | PlayStation | PCSX ReARMed | GPL-2.0 | HLE BIOS |
-| PSP | PPSSPP | GPL-2.0+ | partial; assets shipped |
+| PSP | PPSSPP | GPL-2.0+ | partial; assets shipped; patched to avoid GPU waits on Panfrost (docs/dev/emulation.md) |
 | PC Engine / CD | Beetle PCE Fast | GPL-2.0 | CD: BIOS `syscard3.pce` |
 | Arcade, FBNeo, CPS-1/2/3, Neo Geo | FinalBurn Neo | **non-commercial** | Neo Geo: `neogeo.zip` |
 | Neo Geo (Geolith) | Geolith | BSD-3-Clause | BIOS |

@@ -75,6 +75,10 @@ ck "live data untouched after refusal" '[ "$(cat "$R/userdata/users/$ID/saves/sn
 mkdir "$T/evil" && echo x > "$T/evil/MANIFEST" && (cd "$T/evil" && tar -cf "$T/evil.tar" MANIFEST ../evil/MANIFEST 2>/dev/null)
 ck "dotdot archive refused" 'B restore "$T/evil.tar" $ID | grep -q "ERR"'
 ck "no staging left" '! ls -a "$R/userdata/users/$ID" | grep -q nuubos-restore'
+echo x > "$R/backups/notes.tar"
+ck "delete refuses a non-backup" 'B delete "$R/backups/notes.tar" | grep -q "ERR" && [ -f "$R/backups/notes.tar" ]'
+ck "delete refuses an invalid archive" 'cp "$T/evil.tar" "$R/backups/nuubos-backup-x-1.tar" && B delete "$R/backups/nuubos-backup-x-1.tar" | grep -q "ERR"'
+ck "delete" 'B delete "$FILE" | grep -q "^OK" && [ ! -f "$FILE" ] && ! B list "$R/backups" | grep -q "^backup=$FILE"'
 
 # Shares input validation (no mount on the host)
 SH() { NUUBOS_ROOT="$R" sh "$SRC/nuubos-sharesctl" "$@"; }

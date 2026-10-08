@@ -1,0 +1,116 @@
+From: nuubOS <noreply@nuubos.invalid>
+Subject: [PATCH] nuubOS pixel perfect viewport and GET_FPS command
+
+Smart integer scaling fell back to non-integer scaling when underscaling
+left more than 12% of the screen empty; nuubOS keeps the picture pixel
+perfect on every screen. An overscaled picture now crops its overscan
+evenly instead of following the viewport bias (nuubOS places smaller
+pictures at the top of the screen with a bias of 0).
+
+GET_FPS replies with the frames presented per second since the previous
+GET_FPS, for the nuubOS performance overlay.
+
+Upstream-Status: Inappropriate [nuubOS specific]
+---
+--- a/gfx/video_driver.c
++++ b/gfx/video_driver.c
+@@ -2709,13 +2709,22 @@
+              * noticeable jumps in margin size would be needed to capture a
+              * relatively small number of additional use cases.
+              * TODO: Make this threshold configurable. */
+-            float width_utilization  = (float)(width  - padding_x) / width;
+-            float height_utilization = (float)(height - padding_y) / height;
+-            if (MAX(height_utilization, width_utilization) < 0.88)
+-            {
+-               video_viewport_get_scaled_aspect(vp, width, height, y_down);
+-               return;
+-            }
++            /* nuubOS: the picture stays pixel perfect whenever it can
++             * be scaled up at all. Only content that would stay at 1x
++             * with a large margin (PSP 480x272 or NDS on 640x480) is
++             * scaled to fit instead: unscaled it is just too small. */
++            if (     padding_x >= 0 && padding_y >= 0
++                  && max_scale_w + (half_w * 0.5f) <= 1.0f
++                  && max_scale_h + (half_h * 0.5f) <= 1.0f)
++            {
++               float width_utilization  = (float)(width  - padding_x) / width;
++               float height_utilization = (float)(height - padding_y) / height;
++               if (MAX(height_utilization, width_utilization) < 0.88)
++               {
++                  video_viewport_get_scaled_aspect(vp, width, height, y_down);
++                  return;
++               }
++            }
+          }
+ 
+          /* Use regular scaling if overscale is unreasonable */
+@@ -2737,6 +2746,12 @@
+       height -= padding_y;
+    }
+ 
++   /* nuubOS: an overscaled picture crops its overscan evenly; the bias
++    * only places a picture smaller than the screen. */
++   if (padding_x < 0)
++      vp_bias_x = 0.5f;
++   if (padding_y < 0)
++      vp_bias_y = 0.5f;
+    x          += padding_x * vp_bias_x;
+    y          += padding_y * vp_bias_y;
+ 
+--- a/command.c
++++ b/command.c
+@@ -56,6 +56,8 @@
+ #endif
+ #include "autosave.h"
+ #include "command.h"
++#include "gfx/video_driver.h"
++#include <features/features_cpu.h>
+ #include "core_info.h"
+ #include "cheat_manager.h"
+ #include "content.h"
+@@ -805,6 +807,27 @@
+    cmd->replier(cmd, reply, _len);
+    return true;
+ }
++
++/* Frames presented per second since the previous GET_FPS (nuubOS
++ * performance overlay, asked about once a second). */
++bool command_get_fps(command_t *cmd, const char *arg)
++{
++   static uint64_t last_count;
++   static retro_time_t last_time;
++   char reply[64];
++   size_t _len;
++   uint64_t count       = video_state_get_ptr()->frame_count;
++   retro_time_t now     = cpu_features_get_time_usec();
++   double fps           = 0.0;
++
++   if (last_time > 0 && now > last_time && count >= last_count)
++      fps = (double)(count - last_count) * 1000000.0 / (double)(now - last_time);
++   last_count = count;
++   last_time  = now;
++   _len = snprintf(reply, sizeof(reply), "GET_FPS %.1f\n", fps);
++   cmd->replier(cmd, reply, _len);
++   return true;
++}
+ 
+ bool command_play_replay_slot(command_t *cmd, const char *arg)
+ {
+--- a/command.h
++++ b/command.h
+@@ -429,6 +429,7 @@
+ bool command_load_state_slot(command_t *cmd, const char* arg);
+ bool command_save_state_slot(command_t *cmd, const char* arg);
+ bool command_set_paused(command_t *cmd, const char* arg);
++bool command_get_fps(command_t *cmd, const char* arg);
+ bool command_play_replay_slot(command_t *cmd, const char* arg);
+ bool command_seek_replay(command_t *cmd, const char *arg);
+ bool command_save_savefiles(command_t *cmd, const char* arg);
+@@ -461,6 +462,7 @@
+    { "LOAD_STATE_SLOT",command_load_state_slot, "<slot number>"},
+    { "SAVE_STATE_SLOT",command_save_state_slot, "<slot number>"},
+    { "SET_PAUSED",     command_set_paused,      "<0|1>"},
++   { "GET_FPS",        command_get_fps,         "No argument"},
+    { "PLAY_REPLAY_SLOT",command_play_replay_slot, "<slot number>"},
+    { "SEEK_REPLAY",command_seek_replay, "<frame number>"},
+ 

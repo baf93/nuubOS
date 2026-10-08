@@ -16,6 +16,11 @@
 #   file=<id> <path> <required 0|1> <ok|missing|invalid|unverified> <description>
 #   end=1
 # "optional": the core runs without firmware (HLE) but can use it.
+#
+# A fixed number of processes whatever the number of systems (H700 forks
+# are slow): one awk builds the requirements, the shell tests which files
+# exist, one md5sum hashes the present files that have a reference, one awk
+# derives the states.
 
 R="${NUUBOS_ROOT:-}"
 CORES_CONF="$R/usr/share/nuubos/emulation/cores.conf"
@@ -29,149 +34,160 @@ ONLY="${2:-}"
 
 [ "${1:-}" = status ] || { echo "Usage: nuubos-biosctl status [SYSTEM]" >&2; exit 2; }
 
-system_name()
-{
-    awk -F'|' -v id="$1" '$1 == id { print $2; exit }' "$SYSTEMS_CONF" 2>/dev/null
-}
-
-effective_core()
-{
-    # $1: comma separated cores in preference order
-    for root in "$BUNDLED" "$DOWNLOADED"; do
-        for c in $(printf '%s' "$1" | tr ',' ' '); do
-            if [ -f "$root/${c}_libretro.so" ]; then
-                echo "$c"
-                return 0
-            fi
-        done
-    done
-    return 1
-}
-
-# Lines "<path>\t<opt>\t<md5>\t<desc>" from a core-info file.
-firmware_of()
-{
-    info="$INFO_DIR/$1_libretro.info"
-    [ -f "$info" ] || return 0
-    awk '
-        function val(s) { sub(/^[^=]*=[ \t]*"?/, "", s); sub(/"[ \t]*$/, "", s); return s }
-        /^firmware[0-9]+_path/ { n = $0; sub(/^firmware/, "", n); sub(/_.*/, "", n); path[n] = val($0) }
-        /^firmware[0-9]+_opt/  { n = $0; sub(/^firmware/, "", n); sub(/_.*/, "", n); opt[n] = val($0) }
-        /^firmware[0-9]+_desc/ { n = $0; sub(/^firmware/, "", n); sub(/_.*/, "", n); desc[n] = val($0) }
-        /^notes/ {
-            s = val($0); k = split(s, part, "|")
-            for (i = 1; i <= k; i++)
-                if (match(part[i], /\(md5\): [0-9a-fA-F]+/)) {
-                    f = part[i]; sub(/^\(!\) */, "", f); sub(/ \(md5\).*/, "", f)
-                    h = substr(part[i], RSTART + 7, RLENGTH - 7)
-                    md5[f] = tolower(h)
-                }
-        }
-        END {
-            for (n in path) {
-                p = path[n]; b = p; sub(/.*\//, "", b)
-                m = (p in md5) ? md5[p] : ((b in md5) ? md5[b] : "")
-                printf "%s\t%s\t%s\t%s\n", p, (opt[n] == "true" ? 1 : 0), m, desc[n]
-            }
-        }' "$info" | sort
-}
-
-file_state()
-{
-    # $1 path, $2 expected md5 (may be empty)
-    f="$BIOS_DIR/$1"
-    if [ ! -f "$f" ]; then
-        echo missing
-    elif [ -z "$2" ]; then
-        echo unverified
-    elif [ "$(md5sum "$f" 2>/dev/null | cut -d' ' -f1)" = "$2" ]; then
-        echo ok
-    else
-        echo invalid
-    fi
-}
-
+# Field separator that, unlike a tab, keeps empty fields in `read`.
 US="$(printf '\037')"
 
-# Curated "<mode>|<files>" of a system, empty when not curated.
-curated()
-{
-    awk -F'|' -v id="$1" '$1 == id { print $2 "|" $3; exit }' "$BIOS_CONF" 2>/dev/null
-}
+# Installed cores: " B:<core>" bundled, " D:<core>" downloaded.
+avail=""
+for f in "$BUNDLED"/*_libretro.so; do
+    [ -f "$f" ] || continue
+    f="${f##*/}"
+    avail="$avail B:${f%_libretro.so}"
+done
+for f in "$DOWNLOADED"/*_libretro.so; do
+    [ -f "$f" ] || continue
+    f="${f##*/}"
+    avail="$avail D:${f%_libretro.so}"
+done
 
-# Entries "<path>US<required>US<md5>US<desc>" for a system.
-entries_for()
-{
-    # $1 system, $2 core, $3 mode, $4 files, $5 machine
-    if [ -n "$5" ]; then
-        printf 'mame/bios/%s.zip%s1%s%s%s ROM set\n' "$5" "$US" "$US" "$US" "$5"
-        return
-    fi
-    firmware_of "$2" | awk -F'\t' -v us="$US" -v mode="$3" -v files="$4" '
-        BEGIN { n = split(files, want, ","); for (i = 1; i <= n; i++) listed[want[i]] = 1 }
-        {
-            if (mode != "" && !($1 in listed)) next
-            req = mode == "required" || mode == "any" ? 1 : mode == "optional" ? 0 : ($2 == 1 ? 0 : 1)
-            seen[$1] = 1
-            printf "%s%s%d%s%s%s%s\n", $1, us, req, us, $3, us, $4
+# Requirements, per system in cores.conf order:
+#   S<US><id><US><name><US><core><US><mode>
+#   F<US><id><US><path><US><required><US><md5><US><description>  (by path)
+plan="$(grep -v '^[[:space:]]*#' "$CORES_CONF" 2>/dev/null | awk -F'|' \
+    -v only="$ONLY" -v avail="$avail" -v info="$INFO_DIR" -v us="$US" \
+    -v sysconf="$SYSTEMS_CONF" -v biosconf="$BIOS_CONF" '
+    function val(s) { sub(/^[^=]*=[ \t]*"?/, "", s); sub(/"[ \t]*$/, "", s); return s }
+    function num(s) { sub(/^firmware/, "", s); sub(/_.*/, "", s); return s }
+
+    # First of the comma separated cores that is bundled, else downloaded.
+    function effective(list,    k, i, c, r) {
+        k = split(list, c, ",")
+        for (r = 1; r <= 2; r++)
+            for (i = 1; i <= k; i++)
+                if (((r == 1 ? "B:" : "D:") c[i]) in have)
+                    return c[i]
+        return ""
+    }
+
+    function add(path, req, md5, desc) { ent[++n] = path us req us md5 us desc }
+
+    # Firmware entries of the core-info file, filtered and completed by
+    # the curated mode and file list of the system (bios.conf).
+    function entries(core, mode, files,    f, l, k, i, part, p, b, m, w, want, listed, seen, req) {
+        split("", path); split("", opt); split("", desc); split("", md5)
+        f = info "/" core "_libretro.info"
+        while ((getline l < f) > 0) {
+            if (l ~ /^firmware[0-9]+_path/) path[num(l)] = val(l)
+            else if (l ~ /^firmware[0-9]+_opt/) opt[num(l)] = val(l)
+            else if (l ~ /^firmware[0-9]+_desc/) desc[num(l)] = val(l)
+            else if (l ~ /^notes/) {
+                k = split(val(l), part, "|")
+                for (i = 1; i <= k; i++)
+                    if (match(part[i], /\(md5\): [0-9a-fA-F]+/)) {
+                        p = part[i]; sub(/^\(!\) */, "", p); sub(/ \(md5\).*/, "", p)
+                        md5[p] = tolower(substr(part[i], RSTART + 7, RLENGTH - 7))
+                    }
+            }
         }
-        END {
-            for (i = 1; i <= n; i++)
-                if (mode != "" && !(want[i] in seen))
-                    printf "%s%s%d%s%s%s%s\n", want[i], us,
-                        (mode == "optional" ? 0 : 1), us, "", us, want[i]
-        }' | sort
-}
+        close(f)
+        w = split(files, want, ",")
+        for (i = 1; i <= w; i++) listed[want[i]] = 1
+        for (i in path) {
+            p = path[i]; b = p; sub(/.*\//, "", b)
+            if (mode != "" && !(p in listed)) continue
+            m = (p in md5) ? md5[p] : ((b in md5) ? md5[b] : "")
+            req = mode == "required" || mode == "any" ? 1 : mode == "optional" ? 0 : (opt[i] == "true" ? 0 : 1)
+            seen[p] = 1
+            add(p, req, m, desc[i])
+        }
+        for (i = 1; i <= w; i++)
+            if (mode != "" && !(want[i] in seen))
+                add(want[i], mode == "optional" ? 0 : 1, "", want[i])
+    }
 
-grep -v '^[[:space:]]*#' "$CORES_CONF" 2>/dev/null | while IFS='|' read -r sys cores machine media; do
-    [ -n "$sys" ] || continue
-    [ -z "$ONLY" ] || [ "$ONLY" = "$sys" ] || continue
-    core="$(effective_core "$cores")" || continue
-    cur="$(curated "$sys")"
-    mode="${cur%%|*}"
-    files="${cur#*|}"
-    [ "$mode" = none ] && continue
-    [ -n "$machine" ] && mode=required
-    name="$(system_name "$sys")"
-    [ -n "$name" ] || name="$sys"
+    BEGIN {
+        k = split(avail, a, " ")
+        for (i = 1; i <= k; i++) have[a[i]] = 1
+        while ((getline l < sysconf) > 0) {
+            split(l, f, "|")
+            if (f[1] != "" && !(f[1] in name)) name[f[1]] = f[2]
+        }
+        while ((getline l < biosconf) > 0) {
+            split(l, f, "|")
+            if (f[1] != "" && !(f[1] in cmode)) { cmode[f[1]] = f[2]; cfiles[f[1]] = f[3] }
+        }
+    }
 
-    entries="$(entries_for "$sys" "$core" "$mode" "$files" "$machine")"
-    [ -n "$entries" ] || continue
+    {
+        sys = $1
+        if (sys == "" || (only != "" && only != sys)) next
+        core = effective($2)
+        if (core == "") next
+        mode = cmode[sys]; files = cfiles[sys]
+        if (mode == "none") next
+        if ($3 != "") mode = "required"
+        n = 0
+        if ($3 != "") add("mame/bios/" $3 ".zip", 1, "", $3 " ROM set")
+        else entries(core, mode, files)
+        if (n == 0) next
+        for (i = 2; i <= n; i++) {
+            v = ent[i]
+            for (j = i - 1; j >= 1 && ent[j] > v; j--) ent[j + 1] = ent[j]
+            ent[j + 1] = v
+        }
+        print "S" us sys us (name[sys] != "" ? name[sys] : sys) us core us mode
+        for (i = 1; i <= n; i++) print "F" us sys us ent[i]
+    }')"
 
-    total=0; present=0; req_total=0; req_ok=0; bad=0; opt_present=0
-    out=""
-    while IFS="$US" read -r path req md5 desc; do
-        [ -n "$path" ] || continue
-        st="$(file_state "$path" "$md5")"
-        total=$((total + 1))
-        [ "$req" = 1 ] && req_total=$((req_total + 1))
-        case "$st" in
-            ok|unverified)
-                present=$((present + 1))
-                if [ "$req" = 1 ]; then req_ok=$((req_ok + 1)); else opt_present=$((opt_present + 1)); fi ;;
-            invalid) bad=$((bad + 1)) ;;
-        esac
-        out="${out}file=${sys}	${path}	${req}	${st}	${desc}
+# Which files exist (shell builtins only); the ones with an MD5 reference
+# are hashed together below.
+present=""
+set --
+while IFS="$US" read -r kind sys path req md5 desc; do
+    [ "$kind" = F ] && [ -f "$BIOS_DIR/$path" ] || continue
+    present="${present}P$US$path
 "
-    done <<EOT
-$entries
+    [ -n "$md5" ] && set -- "$@" "$path"
+done <<EOT
+$plan
 EOT
 
-    if [ "$mode" = any ]; then
-        # Variants: one valid file is enough.
-        if [ "$req_ok" -gt 0 ]; then state=ready
-        elif [ "$bad" -gt 0 ]; then state=invalid
-        else state=missing; fi
-    elif [ "$req_total" -gt 0 ]; then
-        if [ "$req_ok" -eq "$req_total" ]; then state=ready
-        elif [ "$bad" -gt 0 ]; then state=invalid
-        else state=missing; fi
-    elif [ "$opt_present" -gt 0 ]; then
-        state=ready
-    else
-        state=optional
-    fi
-    printf 'system=%s\t%s\t%s\t%s\t%s\t%s\n' "$sys" "$name" "$core" "$state" "$present" "$total"
-    printf '%s' "$out"
-done
-echo "end=1"
+{
+    printf '%s' "$present"
+    [ "$#" -gt 0 ] && (cd "$BIOS_DIR" && md5sum "$@" 2>/dev/null)
+    printf '%s\n' "$plan"
+} | awk -F"$US" '
+    function flush(    state, i) {
+        if (sys == "") return
+        if (mode == "any") {
+            # Variants: one valid file is enough.
+            state = req_ok > 0 ? "ready" : bad > 0 ? "invalid" : "missing"
+        } else if (req_total > 0) {
+            state = req_ok == req_total ? "ready" : bad > 0 ? "invalid" : "missing"
+        } else {
+            state = opt_present > 0 ? "ready" : "optional"
+        }
+        printf "system=%s\t%s\t%s\t%s\t%d\t%d\n", sys, name, core, state, have, total
+        for (i = 1; i <= nf; i++) print out[i]
+    }
+    $1 == "P" { present[$2] = 1; next }
+    /^[0-9a-f]+  / { i = index($0, "  "); sum[substr($0, i + 2)] = substr($0, 1, i - 1); next }
+    $1 == "S" {
+        flush()
+        sys = $2; name = $3; core = $4; mode = $5
+        nf = total = have = req_total = req_ok = bad = opt_present = 0
+        next
+    }
+    $1 == "F" && $3 != "" {
+        st = !($3 in present) ? "missing" : $5 == "" ? "unverified" : sum[$3] == $5 ? "ok" : "invalid"
+        total++
+        if ($4 == 1) req_total++
+        if (st == "ok" || st == "unverified") {
+            have++
+            if ($4 == 1) req_ok++; else opt_present++
+        } else if (st == "invalid") {
+            bad++
+        }
+        out[++nf] = "file=" sys "\t" $3 "\t" $4 "\t" st "\t" $6
+    }
+    END { flush(); print "end=1" }'

@@ -10,8 +10,8 @@
  *     content is added, missing content becomes UNAVAILABLE, nothing is
  *     deleted;
  *   - the active user's library state under /userdata/users/<id>/library:
- *     play history (Last Played, Time Played, sessions), favorites, hidden
- *     games and custom collections;
+ *     play history (Last Played, Time Played, sessions), favorites and
+ *     custom collections;
  *   - safe Delete Game (EPIC-011/012): the ROM and the files its .m3u/.cue
  *     owns, never content another game references, never user saves;
  *   - the Game Details view (EPIC-016), aggregating the catalog, the user's
@@ -174,8 +174,6 @@ static size_t history_count;
 static size_t history_cap;
 static char (*favorites)[17];
 static size_t favorite_count;
-static char (*hidden)[17];
-static size_t hidden_count;
 static struct collection *collections;
 static size_t collection_count;
 
@@ -1263,9 +1261,6 @@ static void clear_user_state(void)
 	free(favorites);
 	favorites = NULL;
 	favorite_count = 0;
-	free(hidden);
-	hidden = NULL;
-	hidden_count = 0;
 	for (size_t i = 0; i < collection_count; i++)
 		free(collections[i].games);
 	free(collections);
@@ -1364,16 +1359,6 @@ static void load_user_state(void)
 		fclose(fp);
 	}
 
-	user_file("hidden.txt", path, sizeof(path));
-	if ((fp = fopen(path, "r")) != NULL) {
-		while (fgets(line, sizeof(line), fp)) {
-			trim(line);
-			if (valid_game_id(line) && !id_list_has(hidden, hidden_count, line))
-				id_list_add(&hidden, &hidden_count, line);
-		}
-		fclose(fp);
-	}
-
 	user_file("collections.tsv", path, sizeof(path));
 	if ((fp = fopen(path, "r")) != NULL) {
 		while (fgets(line, sizeof(line), fp)) {
@@ -1441,20 +1426,6 @@ static int save_favorites(void)
 	for (size_t i = 0; i < favorite_count; i++)
 		sb_append(&b, "%s\n", favorites[i]);
 	return save_user_file("favorites.txt", &b);
-}
-
-static int save_hidden(void)
-{
-	struct strbuf b = { 0 };
-
-	for (size_t i = 0; i < hidden_count; i++)
-		sb_append(&b, "%s\n", hidden[i]);
-	return save_user_file("hidden.txt", &b);
-}
-
-static bool is_hidden(const char *id)
-{
-	return id_list_has(hidden, hidden_count, id);
 }
 
 static int save_collections(void)
@@ -1538,7 +1509,7 @@ static void append_recent(struct strbuf *b, const char *key, size_t limit)
 	for (size_t i = 0; i < n && (!limit || shown < limit); i++) {
 		long idx = find_game(order[i]->id);
 
-		if (idx < 0 || is_hidden(order[i]->id))
+		if (idx < 0)
 			continue;
 		append_game(b, key, &games[idx]);
 		shown++;
@@ -1552,7 +1523,7 @@ static void build_status(struct strbuf *b)
 	int per_system[MAX_SYSTEMS] = { 0 };
 
 	for (size_t i = 0; i < game_count; i++) {
-		if (!games[i].available || is_hidden(games[i].id))
+		if (!games[i].available)
 			continue;
 		available++;
 		per_system[games[i].sys]++;
@@ -1601,32 +1572,25 @@ static const struct game **sorted_games(bool (*keep)(const struct game *, const 
 	return list;
 }
 
-/* Hidden games leave every browsing scope except "hidden" (EPIC-011). */
 static bool keep_system(const struct game *g, const void *arg)
 {
-	return g->sys == *(const int *)arg && !is_hidden(g->id);
+	return g->sys == *(const int *)arg;
 }
 
 static bool keep_favorite(const struct game *g, const void *arg)
 {
 	(void)arg;
-	return is_favorite(g->id) && !is_hidden(g->id);
+	return is_favorite(g->id);
 }
 
 static bool keep_collection(const struct game *g, const void *arg)
 {
 	const struct collection *c = arg;
 
-	return id_list_has(c->games, c->count, g->id) && !is_hidden(g->id);
+	return id_list_has(c->games, c->count, g->id);
 }
 
-static bool keep_hidden(const struct game *g, const void *arg)
-{
-	(void)arg;
-	return is_hidden(g->id);
-}
-
-/* GAMES <scope>: system:<id> | favorites | collection:<id> | recent | hidden */
+/* GAMES <scope>: system:<id> | favorites | collection:<id> | recent */
 static bool build_games(struct strbuf *b, const char *scope)
 {
 	const struct game **list = NULL;
@@ -1646,8 +1610,6 @@ static bool build_games(struct strbuf *b, const char *scope)
 		if (!c)
 			return false;
 		list = sorted_games(keep_collection, c, &n);
-	} else if (!strcmp(scope, "hidden")) {
-		list = sorted_games(keep_hidden, NULL, &n);
 	} else if (!strcmp(scope, "recent")) {
 		append_recent(b, "game", 0);
 		sb_append(b, "end=1\n");
@@ -1714,9 +1676,8 @@ static void build_details(struct strbuf *b, const struct game *g)
 	const struct history_entry *h = history_for(g->id, false);
 
 	append_game(b, "game", g);
-	sb_append(b, "system_name=%s\nsessions=%d\npath=%s\nsize=%lld\nadded=%lld\nhidden=%d\n",
-		  systems[g->sys].name, h ? h->sessions : 0, g->rel, g->size, g->added,
-		  is_hidden(g->id) ? 1 : 0);
+	sb_append(b, "system_name=%s\nsessions=%d\npath=%s\nsize=%lld\nadded=%lld\n",
+		  systems[g->sys].name, h ? h->sessions : 0, g->rel, g->size, g->added);
 	for (size_t i = 0; i < collection_count; i++)
 		sb_append(b, "member=%s\t%s\t%d\n", collections[i].id, collections[i].name,
 			  id_list_has(collections[i].games, collections[i].count, g->id) ? 1 : 0);
@@ -1917,7 +1878,7 @@ static void handle_command(struct client *c, char *line)
 		free(b.data);
 	} else if (!active_user[0] &&
 		   (!strncmp(line, "SESSION_", 8) || !strncmp(line, "FAVORITE", 8) ||
-		    !strncmp(line, "COLLECTION_", 11) || !strcmp(line, "HIDE") ||
+		    !strncmp(line, "COLLECTION_", 11) ||
 		    !strcmp(line, "STATS_RESET") || !strcmp(line, "DETAILS"))) {
 		reply(c, "ERR no active user\n");
 	} else if (!strcmp(line, "DETAILS") && arg) {
@@ -1931,19 +1892,6 @@ static void handle_command(struct client *c, char *line)
 		build_details(&b, &games[idx]);
 		send_text(c, b.data, b.len);
 		free(b.data);
-	} else if (!strcmp(line, "HIDE") && arg && arg2) {
-		bool on = !strcmp(arg2, "1");
-
-		if (!known_game(arg) || (!on && strcmp(arg2, "0"))) {
-			reply(c, "ERR args\n");
-			return;
-		}
-		if (on && !is_hidden(arg))
-			id_list_add(&hidden, &hidden_count, arg);
-		else if (!on)
-			id_list_remove(hidden, &hidden_count, arg);
-		reply(c, save_hidden() ? "ERR persistence\n" : "OK\n");
-		notify_all();
 	} else if (!strcmp(line, "STATS_RESET") && arg) {
 		/* One game, or "all" of the active user's statistics (EPIC-020). */
 		if (!strcmp(arg, "all")) {

@@ -1,4 +1,23 @@
 /* SPDX-License-Identifier: MIT */
+/*
+ * nuubos-rgbd — H700 RGB hardware backend.
+ *
+ * A frame sink with no product policy: it powers the RGB MCU and the LED
+ * rail, maps logical frames onto the physical LED order of the detected
+ * topology and writes them to the MCU UART. Effects, brightness and
+ * preferences belong to nuubos-lightingd (the only product client).
+ *
+ * Protocol (/run/nuubos/rgbd.sock, persistent connections, one command per
+ * line, one reply line each):
+ *   STATUS           supported=1 device= leds= zones= backend=active|off
+ *                    zone<N>=<name>:<type>:<count> ...
+ *   FRAME R G B ...  leds*3 values 0..255 in logical order: every zone in
+ *                    topology order, each zone from its first position
+ *                    around the ring. Powers the hardware on when needed.
+ *   OFF              LEDs dark and MCU/LED rail powered off.
+ *
+ * Idle: poll() without timeout; nothing runs between commands.
+ */
 
 #include "rgb_common.h"
 
@@ -26,15 +45,8 @@
 #define H700_LED_PWR     263 /* PI7 */
 #define H700_UART_NODE   "serial@5001400"
 
-#define FRAME_INTERVAL_MS 33
-
-enum rgb_mode {
-	RGB_MODE_OFF,
-	RGB_MODE_STATIC,
-	RGB_MODE_BREATHE,
-	RGB_MODE_RAINBOW,
-	RGB_MODE_FRAME,
-};
+#define MAX_CLIENTS 4
+#define LINE_MAX_LEN 1024
 
 struct h700_backend {
 	int gpio_fd;
@@ -42,17 +54,17 @@ struct h700_backend {
 	int active;
 };
 
-struct rgb_state {
-	const struct nuubos_rgb_topology *topology;
-	struct h700_backend hw;
-	enum rgb_mode mode;
-	unsigned int brightness;
-	uint8_t color[3];
-	uint8_t frame[NUUBOS_RGB_MAX_LEDS * 3];
-	unsigned int phase;
-	int dirty;
+struct client {
+	int fd;
+	size_t used;
+	char buf[LINE_MAX_LEN];
 };
 
+static const struct nuubos_rgb_topology *topology;
+static struct h700_backend hw = { .gpio_fd = -1, .uart_fd = -1 };
+static uint8_t last_frame[NUUBOS_RGB_MAX_LEDS * 3];
+static int last_valid;
+static struct client clients[MAX_CLIENTS];
 static volatile sig_atomic_t stopping;
 
 static void signal_handler(int sig)
@@ -80,6 +92,10 @@ static int write_all(int fd, const void *buf, size_t len)
 
 	return 0;
 }
+
+/* ------------------------------------------------------------------ */
+/* H700 hardware                                                       */
+/* ------------------------------------------------------------------ */
 
 static int find_gpiochip(char *out, size_t out_size)
 {
@@ -212,7 +228,7 @@ static int open_rgb_uart(void)
 	if (find_rgb_uart(path, sizeof(path)) < 0)
 		return -1;
 
-	fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK);
+	fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
 	if (fd < 0)
 		return -1;
 
@@ -250,13 +266,13 @@ static int send_init_frame(int fd)
 	return tcdrain(fd);
 }
 
-static int backend_open(struct h700_backend *hw)
+static int backend_open(void)
 {
-	if (hw->active)
+	if (hw.active)
 		return 0;
 
-	hw->gpio_fd = request_power_lines();
-	if (hw->gpio_fd < 0)
+	hw.gpio_fd = request_power_lines();
+	if (hw.gpio_fd < 0)
 		return -1;
 
 	/*
@@ -264,34 +280,33 @@ static int backend_open(struct h700_backend *hw)
 	 *   PE5 -> RGB MCU
 	 *   PI7 -> LED rail
 	 */
-	if (set_power(hw->gpio_fd, 1, 0) < 0 ||
-	    set_power(hw->gpio_fd, 1, 1) < 0)
+	if (set_power(hw.gpio_fd, 1, 0) < 0 ||
+	    set_power(hw.gpio_fd, 1, 1) < 0)
 		goto fail_gpio;
 
-	hw->uart_fd = open_rgb_uart();
-	if (hw->uart_fd < 0)
+	hw.uart_fd = open_rgb_uart();
+	if (hw.uart_fd < 0)
 		goto fail_power;
 
-	if (send_init_frame(hw->uart_fd) < 0)
+	if (send_init_frame(hw.uart_fd) < 0)
 		goto fail_uart;
 
-	hw->active = 1;
+	hw.active = 1;
 	return 0;
 
 fail_uart:
-	close(hw->uart_fd);
-	hw->uart_fd = -1;
+	close(hw.uart_fd);
+	hw.uart_fd = -1;
 fail_power:
-	set_power(hw->gpio_fd, 0, 0);
+	set_power(hw.gpio_fd, 0, 0);
 fail_gpio:
-	close(hw->gpio_fd);
-	hw->gpio_fd = -1;
+	close(hw.gpio_fd);
+	hw.gpio_fd = -1;
 	return -1;
 }
 
-static int backend_write(struct h700_backend *hw,
-			 const uint8_t *rgb,
-			 unsigned int led_count)
+/* rgb is in physical LED order. */
+static int backend_write(const uint8_t *rgb, unsigned int led_count)
 {
 	uint8_t packet[2 + NUUBOS_RGB_MAX_LEDS * 3 + 1];
 	unsigned int i;
@@ -309,167 +324,38 @@ static int backend_write(struct h700_backend *hw,
 
 	packet[len - 1] = (uint8_t)(sum & 0xff);
 
-	if (write_all(hw->uart_fd, packet, len) < 0)
+	if (write_all(hw.uart_fd, packet, len) < 0)
 		return -1;
 
-	return tcdrain(hw->uart_fd);
+	return tcdrain(hw.uart_fd);
 }
 
-static void backend_close(struct h700_backend *hw, unsigned int led_count)
+static void backend_close(void)
 {
-	if (!hw->active)
+	if (!hw.active)
 		return;
 
-	if (hw->uart_fd >= 0) {
+	if (hw.uart_fd >= 0) {
 		uint8_t off[NUUBOS_RGB_MAX_LEDS * 3] = { 0 };
 
-		backend_write(hw, off, led_count);
-		close(hw->uart_fd);
+		backend_write(off, topology->led_count);
+		close(hw.uart_fd);
 	}
 
-	if (hw->gpio_fd >= 0) {
-		set_power(hw->gpio_fd, 0, 0);
-		close(hw->gpio_fd);
+	if (hw.gpio_fd >= 0) {
+		set_power(hw.gpio_fd, 0, 0);
+		close(hw.gpio_fd);
 	}
 
-	hw->gpio_fd = -1;
-	hw->uart_fd = -1;
-	hw->active = 0;
+	hw.gpio_fd = -1;
+	hw.uart_fd = -1;
+	hw.active = 0;
+	last_valid = 0;
 }
 
-static const char *mode_name(enum rgb_mode mode)
-{
-	switch (mode) {
-	case RGB_MODE_OFF:
-		return "off";
-	case RGB_MODE_STATIC:
-		return "static";
-	case RGB_MODE_BREATHE:
-		return "breathe";
-	case RGB_MODE_RAINBOW:
-		return "rainbow";
-	case RGB_MODE_FRAME:
-		return "frame";
-	default:
-		return "unknown";
-	}
-}
-
-static int mode_is_animated(enum rgb_mode mode)
-{
-	return mode == RGB_MODE_BREATHE ||
-	       mode == RGB_MODE_RAINBOW;
-}
-
-static uint8_t scale8(uint8_t value, unsigned int scale)
-{
-	return (uint8_t)(((unsigned int)value * scale) / 100);
-}
-
-static unsigned int breathe_level(unsigned int phase)
-{
-	unsigned int x;
-	unsigned int t;
-	unsigned int smooth;
-
-	phase %= 120;
-
-	x = phase <= 60 ? phase : 120 - phase;
-	t = (x * 1000) / 60;
-
-	/* integer smoothstep: 3t^2 - 2t^3 */
-	smooth = (t * t * (3000 - 2 * t)) / 1000000;
-
-	return smooth / 10;
-}
-
-static void rainbow_pixel(unsigned int pos,
-			  uint8_t *r, uint8_t *g, uint8_t *b)
-{
-	pos &= 0xff;
-
-	if (pos < 85) {
-		*r = (uint8_t)(255 - pos * 3);
-		*g = (uint8_t)(pos * 3);
-		*b = 0;
-	} else if (pos < 170) {
-		pos -= 85;
-		*r = 0;
-		*g = (uint8_t)(255 - pos * 3);
-		*b = (uint8_t)(pos * 3);
-	} else {
-		pos -= 170;
-		*r = (uint8_t)(pos * 3);
-		*g = 0;
-		*b = (uint8_t)(255 - pos * 3);
-	}
-}
-
-static int render(struct rgb_state *s)
-{
-	uint8_t out[NUUBOS_RGB_MAX_LEDS * 3] = { 0 };
-	unsigned int i;
-
-	if (s->mode == RGB_MODE_OFF) {
-		backend_close(&s->hw, s->topology->led_count);
-		s->dirty = 0;
-		return 0;
-	}
-
-	if (backend_open(&s->hw) < 0)
-		return -1;
-
-	switch (s->mode) {
-	case RGB_MODE_STATIC:
-		for (i = 0; i < s->topology->led_count; i++) {
-			out[i * 3 + 0] = s->color[0];
-			out[i * 3 + 1] = s->color[1];
-			out[i * 3 + 2] = s->color[2];
-		}
-		break;
-
-	case RGB_MODE_BREATHE: {
-		unsigned int level = breathe_level(s->phase++);
-
-		for (i = 0; i < s->topology->led_count; i++) {
-			out[i * 3 + 0] = scale8(s->color[0], level);
-			out[i * 3 + 1] = scale8(s->color[1], level);
-			out[i * 3 + 2] = scale8(s->color[2], level);
-		}
-		break;
-	}
-
-	case RGB_MODE_RAINBOW:
-		for (i = 0; i < s->topology->led_count; i++) {
-			unsigned int pos =
-				(s->phase * 2 +
-				 (i * 256 / s->topology->led_count)) & 0xff;
-
-			rainbow_pixel(pos,
-				      &out[i * 3 + 0],
-				      &out[i * 3 + 1],
-				      &out[i * 3 + 2]);
-		}
-		s->phase++;
-		break;
-
-	case RGB_MODE_FRAME:
-		memcpy(out, s->frame, s->topology->led_count * 3);
-		break;
-
-	default:
-		break;
-	}
-
-	for (i = 0; i < s->topology->led_count * 3; i++)
-		out[i] = scale8(out[i], s->brightness);
-
-	if (backend_write(&s->hw, out, s->topology->led_count) < 0)
-		return -1;
-
-	s->dirty = 0;
-	return 0;
-}
+/* ------------------------------------------------------------------ */
+/* Commands                                                            */
+/* ------------------------------------------------------------------ */
 
 static int parse_byte(const char *text, uint8_t *value)
 {
@@ -486,24 +372,60 @@ static int parse_byte(const char *text, uint8_t *value)
 	return 0;
 }
 
-static void status_response(const struct rgb_state *s,
-			    char *reply, size_t reply_size)
+/* Logical order (zones, then positions around each ring) to physical. */
+static void map_frame(const uint8_t *logical, uint8_t *physical)
+{
+	unsigned int z, i, j = 0;
+
+	memset(physical, 0, NUUBOS_RGB_MAX_LEDS * 3);
+	for (z = 0; z < topology->zone_count; z++) {
+		const struct nuubos_rgb_zone *zone = &topology->zones[z];
+
+		for (i = 0; i < zone->led_count; i++, j++) {
+			unsigned int p = zone->led_indexes[i];
+
+			if (p >= topology->led_count)
+				continue;
+			memcpy(physical + p * 3, logical + j * 3, 3);
+		}
+	}
+}
+
+static int show_frame(const uint8_t *logical)
+{
+	uint8_t physical[NUUBOS_RGB_MAX_LEDS * 3];
+
+	if (backend_open() < 0)
+		return -1;
+
+	map_frame(logical, physical);
+	if (last_valid &&
+	    memcmp(physical, last_frame, topology->led_count * 3) == 0)
+		return 0;
+
+	if (backend_write(physical, topology->led_count) < 0)
+		return -1;
+
+	memcpy(last_frame, physical, topology->led_count * 3);
+	last_valid = 1;
+	return 0;
+}
+
+static void status_response(char *reply, size_t reply_size)
 {
 	size_t used;
 	unsigned int i;
 
 	used = (size_t)snprintf(
 		reply, reply_size,
-		"supported=1 device=%s leds=%u zones=%u mode=%s brightness=%u backend=%s",
-		s->topology->device_id,
-		s->topology->led_count,
-		s->topology->zone_count,
-		mode_name(s->mode),
-		s->brightness,
-		s->hw.active ? "active" : "off");
+		"supported=1 device=%s leds=%u zones=%u backend=%s",
+		topology->device_id,
+		topology->led_count,
+		topology->zone_count,
+		hw.active ? "active" : "off");
 
-	for (i = 0; i < s->topology->zone_count && used < reply_size; i++) {
-		const struct nuubos_rgb_zone *z = &s->topology->zones[i];
+	for (i = 0; i < topology->zone_count && used < reply_size; i++) {
+		const struct nuubos_rgb_zone *z = &topology->zones[i];
 		int n = snprintf(reply + used, reply_size - used,
 				 " zone%u=%s:%s:%u",
 				 i, z->name,
@@ -522,90 +444,31 @@ static void status_response(const struct rgb_state *s,
 	}
 }
 
-static void handle_command(struct rgb_state *s,
-			   const char *command,
-			   char *reply, size_t reply_size)
+static void handle_command(char *command, char *reply, size_t reply_size)
 {
-	unsigned int value;
-
 	if (strcmp(command, "STATUS") == 0) {
-		status_response(s, reply, reply_size);
+		status_response(reply, reply_size);
 		return;
 	}
 
 	if (strcmp(command, "OFF") == 0) {
-		s->mode = RGB_MODE_OFF;
-		s->dirty = 1;
-		snprintf(reply, reply_size, "OK\n");
-		return;
-	}
-
-	if (sscanf(command, "BRIGHTNESS %u", &value) == 1) {
-		if (value > 100) {
-			snprintf(reply, reply_size, "ERR brightness must be 0..100\n");
-			return;
-		}
-
-		s->brightness = value;
-		s->dirty = 1;
-		snprintf(reply, reply_size, "OK\n");
-		return;
-	}
-
-	if (strncmp(command, "COLOR ", 6) == 0) {
-		unsigned int r, g, b;
-
-		if (sscanf(command + 6, "%u %u %u", &r, &g, &b) != 3 ||
-		    r > 255 || g > 255 || b > 255) {
-			snprintf(reply, reply_size, "ERR color requires R G B in 0..255\n");
-			return;
-		}
-
-		s->color[0] = (uint8_t)r;
-		s->color[1] = (uint8_t)g;
-		s->color[2] = (uint8_t)b;
-		s->mode = RGB_MODE_STATIC;
-		s->phase = 0;
-		s->dirty = 1;
-
-		snprintf(reply, reply_size, "OK\n");
-		return;
-	}
-
-	if (strncmp(command, "MODE ", 5) == 0) {
-		const char *mode = command + 5;
-
-		if (strcmp(mode, "static") == 0)
-			s->mode = RGB_MODE_STATIC;
-		else if (strcmp(mode, "breathe") == 0)
-			s->mode = RGB_MODE_BREATHE;
-		else if (strcmp(mode, "rainbow") == 0)
-			s->mode = RGB_MODE_RAINBOW;
-		else {
-			snprintf(reply, reply_size, "ERR unknown mode\n");
-			return;
-		}
-
-		s->phase = 0;
-		s->dirty = 1;
+		backend_close();
 		snprintf(reply, reply_size, "OK\n");
 		return;
 	}
 
 	if (strncmp(command, "FRAME ", 6) == 0) {
-		char copy[1024];
+		uint8_t frame[NUUBOS_RGB_MAX_LEDS * 3];
 		char *save = NULL;
 		char *tok;
 		unsigned int count = 0;
-		unsigned int expected = s->topology->led_count * 3;
+		unsigned int expected = topology->led_count * 3;
 
-		snprintf(copy, sizeof(copy), "%s", command + 6);
-
-		for (tok = strtok_r(copy, " ", &save);
+		for (tok = strtok_r(command + 6, " ", &save);
 		     tok;
 		     tok = strtok_r(NULL, " ", &save)) {
 			if (count >= expected ||
-			    parse_byte(tok, &s->frame[count]) < 0) {
+			    parse_byte(tok, &frame[count]) < 0) {
 				snprintf(reply, reply_size, "ERR invalid frame\n");
 				return;
 			}
@@ -619,9 +482,13 @@ static void handle_command(struct rgb_state *s,
 			return;
 		}
 
-		s->mode = RGB_MODE_FRAME;
-		s->phase = 0;
-		s->dirty = 1;
+		if (show_frame(frame) < 0) {
+			fprintf(stderr, "nuubos-rgbd: hardware write failed: %s\n",
+				strerror(errno));
+			backend_close();
+			snprintf(reply, reply_size, "ERR hardware\n");
+			return;
+		}
 
 		snprintf(reply, reply_size, "OK\n");
 		return;
@@ -629,6 +496,10 @@ static void handle_command(struct rgb_state *s,
 
 	snprintf(reply, reply_size, "ERR unknown command\n");
 }
+
+/* ------------------------------------------------------------------ */
+/* Socket                                                              */
+/* ------------------------------------------------------------------ */
 
 static int create_server_socket(void)
 {
@@ -640,7 +511,7 @@ static int create_server_socket(void)
 
 	unlink(RGB_SOCKET_PATH);
 
-	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	if (fd < 0)
 		return -1;
 
@@ -658,32 +529,56 @@ static int create_server_socket(void)
 	return fd;
 }
 
-static void serve_client(int client, struct rgb_state *state)
+static void close_client(struct client *c)
 {
-	char command[1024];
-	char reply[1024];
+	if (c->fd >= 0)
+		close(c->fd);
+	c->fd = -1;
+	c->used = 0;
+}
+
+static void service_client(struct client *c)
+{
 	ssize_t n;
+	char *nl;
 
-	n = read(client, command, sizeof(command) - 1);
-	if (n <= 0)
+	n = read(c->fd, c->buf + c->used, sizeof(c->buf) - 1 - c->used);
+	if (n <= 0) {
+		if (n < 0 && (errno == EINTR || errno == EAGAIN))
+			return;
+		close_client(c);
 		return;
+	}
+	c->used += (size_t)n;
+	c->buf[c->used] = '\0';
 
-	command[n] = '\0';
+	while (c->fd >= 0 && (nl = memchr(c->buf, '\n', c->used)) != NULL) {
+		char line[LINE_MAX_LEN];
+		char reply[1024];
+		size_t len = (size_t)(nl - c->buf);
 
-	while (n > 0 &&
-	       (command[n - 1] == '\n' || command[n - 1] == '\r'))
-		command[--n] = '\0';
+		memcpy(line, c->buf, len);
+		line[len] = '\0';
+		if (len > 0 && line[len - 1] == '\r')
+			line[len - 1] = '\0';
+		memmove(c->buf, nl + 1, c->used - len - 1);
+		c->used -= len + 1;
 
-	handle_command(state, command, reply, sizeof(reply));
-	write_all(client, reply, strlen(reply));
+		handle_command(line, reply, sizeof(reply));
+		if (write_all(c->fd, reply, strlen(reply)) < 0)
+			close_client(c);
+	}
+
+	/* A line longer than the buffer is a protocol violation. */
+	if (c->fd >= 0 && c->used >= sizeof(c->buf) - 1)
+		close_client(c);
 }
 
 int main(int argc, char **argv)
 {
-	const struct nuubos_rgb_topology *topology;
-	struct rgb_state state;
-	struct pollfd pfd;
+	struct sigaction sa;
 	int server;
+	int i;
 
 	topology = nuubos_rgb_detect_topology();
 
@@ -693,19 +588,14 @@ int main(int argc, char **argv)
 	if (!topology)
 		return 0;
 
-	memset(&state, 0, sizeof(state));
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = signal_handler;
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
+	signal(SIGPIPE, SIG_IGN);
 
-	state.topology = topology;
-	state.hw.gpio_fd = -1;
-	state.hw.uart_fd = -1;
-	state.mode = RGB_MODE_OFF;
-	state.brightness = 50;
-	state.color[0] = 255;
-	state.color[1] = 255;
-	state.color[2] = 255;
-
-	signal(SIGINT, signal_handler);
-	signal(SIGTERM, signal_handler);
+	for (i = 0; i < MAX_CLIENTS; i++)
+		clients[i].fd = -1;
 
 	server = create_server_socket();
 	if (server < 0) {
@@ -713,43 +603,53 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	pfd.fd = server;
-	pfd.events = POLLIN;
-
 	while (!stopping) {
-		int timeout = mode_is_animated(state.mode) ?
-			      FRAME_INTERVAL_MS : -1;
-		int ret = poll(&pfd, 1, timeout);
+		struct pollfd pfd[1 + MAX_CLIENTS];
+		int idx[1 + MAX_CLIENTS];
+		nfds_t count = 0;
+		nfds_t k;
 
-		if (ret < 0) {
+		pfd[count].fd = server;
+		pfd[count].events = POLLIN;
+		idx[count++] = -1;
+		for (i = 0; i < MAX_CLIENTS; i++) {
+			if (clients[i].fd < 0)
+				continue;
+			pfd[count].fd = clients[i].fd;
+			pfd[count].events = POLLIN;
+			idx[count++] = i;
+		}
+
+		if (poll(pfd, count, -1) < 0) {
 			if (errno == EINTR)
 				continue;
 			break;
 		}
 
-		if (ret > 0 && (pfd.revents & POLLIN)) {
-			int client = accept(server, NULL, NULL);
+		for (k = 1; k < count; k++)
+			if (pfd[k].revents)
+				service_client(&clients[idx[k]]);
 
-			if (client >= 0) {
-				serve_client(client, &state);
-				close(client);
-			}
-		}
+		if (pfd[0].revents & POLLIN) {
+			int fd = accept4(server, NULL, NULL, SOCK_CLOEXEC);
 
-		if (state.dirty || mode_is_animated(state.mode)) {
-			if (render(&state) < 0) {
-				fprintf(stderr,
-					"nuubos-rgbd: hardware render failed: %s\n",
-					strerror(errno));
-				state.mode = RGB_MODE_OFF;
-				backend_close(&state.hw,
-					      state.topology->led_count);
+			if (fd >= 0) {
+				for (i = 0; i < MAX_CLIENTS; i++)
+					if (clients[i].fd < 0)
+						break;
+				if (i == MAX_CLIENTS) {
+					close(fd);
+				} else {
+					clients[i].fd = fd;
+					clients[i].used = 0;
+				}
 			}
 		}
 	}
 
-	backend_close(&state.hw, state.topology->led_count);
-
+	backend_close();
+	for (i = 0; i < MAX_CLIENTS; i++)
+		close_client(&clients[i]);
 	close(server);
 	unlink(RGB_SOCKET_PATH);
 

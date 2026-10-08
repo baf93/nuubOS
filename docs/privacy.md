@@ -5,7 +5,10 @@ settings, Files and every hardware function work without Internet and
 without any account. nuubOS collects no analytics or telemetry.
 
 The device talks to the network only for features you turn on or start.
-**Settings → System → Online Services** lists them with their state.
+The **Services** section of **Settings → Connectivity** shows Remote Services
+and Syncthing with their state and switches; Software Update is in
+**Settings → System**, Game Metadata (ScreenScraper) and RetroAchievements are
+in **Settings → Gaming**.
 
 | Feature | When it uses the network | What leaves the device | Stored on the device |
 |---|---|---|---|

@@ -1,6 +1,7 @@
 mod filesui;
 mod gameui;
 mod library;
+mod lighting;
 mod mediaui;
 mod moonlight;
 mod splash;
@@ -47,6 +48,8 @@ static SYSTEM_INFO_GATE: OnceLock<Arc<(Mutex<bool>, Condvar)>> = OnceLock::new()
 /* Initial setup (OOB) is running: controller navigation belongs to it. The
  * state itself is owned by nuubos-usersd (setup_complete). */
 static OOB_ACTIVE: AtomicBool = AtomicBool::new(false);
+/* The full-screen safe mode screen owns the input (EPIC-050). */
+static SAFE_SCREEN: AtomicBool = AtomicBool::new(false);
 
 fn set_system_info_live(active: bool) {
     if let Some(gate) = SYSTEM_INFO_GATE.get() {
@@ -516,14 +519,9 @@ fn apply_regional(ui:&HomeWindow,s:&RSnap){ui.set_timezone(s.timezone.clone().in
 fn refresh_regional(ui:&HomeWindow){if let Ok(r)=regional_command("STATUS"){apply_regional(ui,&parse_regional(&r));}}
 fn start_regional_listener(ui:&HomeWindow){let weak=ui.as_weak();thread::spawn(move||loop{match UnixStream::connect(REGIONAL_SOCKET){Ok(mut x)=>{if x.write_all(b"SUBSCRIBE\n").is_err(){thread::sleep(Duration::from_millis(500));continue;}let mut b=String::new();for l in BufReader::new(x).lines(){let Ok(l)=l else{break};b.push_str(&l);b.push('\n');if l.starts_with("clock_valid="){let q=parse_regional(&b);b.clear();let w=weak.clone();let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){apply_regional(&ui,&q);});}}}Err(_)=>thread::sleep(Duration::from_millis(500))}});}
 fn update_general_scroll(ui:&HomeWindow){
-    /* General has 12 rows split in USER/DEVICE sections; the sectioned
-     * capacity reserves the inline section header. */
-    const COUNT:i32=12;
-    let index=ui.get_general_index().clamp(0,COUNT-1);
-    let rows=ui.get_settings_sectioned_visible_rows().max(1);
-    ui.set_general_scroll_offset(guarded_scroll_offset(
-        index,COUNT,rows,ui.get_general_scroll_offset().clamp(0,COUNT-1)
-    ));
+    /* General has 12 rows in four sections (PROFILE, USERS, DATE & TIME,
+     * KEYBOARD). */
+    ui.set_general_scroll_offset(sectioned_scroll(ui,ui.get_general_index(),12,ui.get_general_scroll_offset(),(3,6,11)));
 }
 fn update_user_scroll(ui:&HomeWindow){ui.set_user_list_scroll(guarded_scroll_offset(ui.get_user_list_index(),ui.get_user_count()+1,ui.get_settings_list_visible_rows(),ui.get_user_list_scroll()));}fn update_avatar_scroll(ui:&HomeWindow){let cols=ui.get_avatar_picker_columns().max(1);let n=ui.get_avatar_choices().row_count() as i32;ui.set_avatar_picker_scroll(guarded_scroll_offset(ui.get_avatar_picker_index()/cols,(n+cols-1)/cols,ui.get_avatar_picker_rows().max(1),ui.get_avatar_picker_scroll()));}
 /* Grid move: left/right by one, up/down by a row (down from a partial last
@@ -933,6 +931,11 @@ fn apply_wifi_product_state(ui: &HomeWindow, state: WifiProductState) {
             && !selected_ssid.is_empty()
             && selected_ssid == state.ssid
     );
+    /* Connect, disconnect and DHCP lease changes (the snapshot carries the
+     * IPv4 address) update the open network page live. */
+    if ui.get_settings_view() == 4 && !selected_ssid.is_empty() {
+        fetch_wifi_ip_configuration(ui, selected_ssid, true);
+    }
 }
 
 fn apply_bluetooth_product_state(ui: &HomeWindow, state: BluetoothProductState) {
@@ -1000,15 +1003,6 @@ fn rumble_proxy(connection: &zbus::blocking::Connection) -> zbus::Result<zbus::b
         "org.nuubOS.Rumble",
         "/org/nuubOS/Rumble",
         "org.nuubOS.Rumble1",
-    )
-}
-
-fn lighting_proxy(connection: &zbus::blocking::Connection) -> zbus::Result<zbus::blocking::Proxy<'_>> {
-    zbus::blocking::Proxy::new(
-        connection,
-        "org.nuubOS.Lighting",
-        "/org/nuubOS/Lighting",
-        "org.nuubOS.Lighting1",
     )
 }
 
@@ -1474,7 +1468,7 @@ fn refresh_controllers(ui: &HomeWindow) {
 }
 
 /// Localized name of a logical controller control (Controllers service ids).
-fn control_label(ui: &HomeWindow, control: &str) -> String {
+pub(crate) fn control_label(ui: &HomeWindow, control: &str) -> String {
     let (index, fallback) = match control {
         "menu_confirm" => (337, "Face South"),
         "menu_back" => (338, "Face East"),
@@ -1577,20 +1571,6 @@ fn source_label(ui: &HomeWindow, source: &str, axis_control: bool) -> String {
         "+" if !axis_control => format!("{axis} +"),
         "-" => format!("{axis} −"),
         _ => axis,
-    }
-}
-
-fn lighting_color_name(r: i32, g: i32, b: i32) -> String {
-    match (r, g, b) {
-        (58, 134, 255) => "Blue".to_owned(),
-        (171, 71, 188) => "Purple".to_owned(),
-        (76, 175, 80) => "Green".to_owned(),
-        (255, 152, 0) => "Orange".to_owned(),
-        (244, 67, 54) => "Red".to_owned(),
-        (0, 188, 212) => "Cyan".to_owned(),
-        (255, 255, 255) => "White".to_owned(),
-        (255, 193, 7) => "Amber".to_owned(),
-        _ => "Custom".to_owned(),
     }
 }
 
@@ -1830,6 +1810,26 @@ fn guarded_scroll_offset(index: i32, count: i32, visible: i32, current: i32) -> 
     offset.clamp(0, max_offset)
 }
 
+/// Scroll offset for a sectioned category page (home.slint `sec-row-y`):
+/// `a`, `b`, `c` are the first rows of the later sections (0 = none). Like
+/// `guarded_scroll_offset`, it keeps one row of context above and below the
+/// focused row, but the inline section headers decide what fits.
+pub(crate) fn sectioned_scroll(ui: &HomeWindow, index: i32, count: i32, current: i32, (a, b, c): (i32, i32, i32)) -> i32 {
+    if count <= 0 {
+        return 0;
+    }
+    let index = index.clamp(0, count - 1);
+    let mut offset = current.clamp(0, index);
+    if index > 0 && index - 1 < offset {
+        offset = index - 1;
+    }
+    let below = (index + 1).min(count - 1);
+    while offset < index && !ui.invoke_sec_row_visible(below, offset, a, b, c) {
+        offset += 1;
+    }
+    offset
+}
+
 fn update_controller_list_scroll(ui: &HomeWindow) {
     let count = ui.get_controllers().row_count() as i32;
     ui.set_controller_list_scroll_offset(guarded_scroll_offset(
@@ -1934,56 +1934,6 @@ fn open_player_assignment_dropdown(ui: &HomeWindow) {
         &format!("Player {}", assignment.player),
         options,
         assignment.controller_id.as_str(),
-    );
-}
-
-fn open_lighting_mode_dropdown(ui: &HomeWindow) {
-    let values = vec![
-        ("off".to_owned(), tr(ui, 54, "Off")),
-        ("static".to_owned(), tr(ui, 114, "Static")),
-        ("breathe".to_owned(), tr(ui, 115, "Breathe")),
-        ("pulse".to_owned(), tr(ui, 117, "Pulse")),
-        ("chase".to_owned(), tr(ui, 118, "Chase")),
-        ("wave".to_owned(), tr(ui, 119, "Wave")),
-        ("rainbow".to_owned(), tr(ui, 116, "Rainbow")),
-        ("sparkle".to_owned(), tr(ui, 120, "Sparkle")),
-        ("screen".to_owned(), tr(ui, 121, "Screen Reactive")),
-    ];
-    open_settings_choice(
-        ui,
-        "lighting-mode",
-        "RGB Mode",
-        values,
-        ui.get_lighting_mode().as_str(),
-    );
-}
-
-fn open_lighting_color_dropdown(ui: &HomeWindow) {
-    let values = [
-        ("58,134,255", "Blue"),
-        ("171,71,188", "Purple"),
-        ("76,175,80", "Green"),
-        ("255,152,0", "Orange"),
-        ("244,67,54", "Red"),
-        ("0,188,212", "Cyan"),
-        ("255,255,255", "White"),
-        ("255,193,7", "Amber"),
-    ];
-    let current = format!(
-        "{},{},{}",
-        ui.get_lighting_red(),
-        ui.get_lighting_green(),
-        ui.get_lighting_blue()
-    );
-    open_settings_choice(
-        ui,
-        "lighting-color",
-        "RGB Color",
-        values
-            .iter()
-            .map(|(value, label)| (value.to_string(), label.to_string()))
-            .collect(),
-        &current,
     );
 }
 
@@ -2376,7 +2326,7 @@ fn open_storage_backup_policy_dropdown(ui: &HomeWindow) {
     open_settings_choice(
         ui,
         "system-storage-backup-policy",
-        &tr(ui, 69, "Backup Policy"),
+        &tr(ui, 69, "Automatic Backup"),
         vec![
             ("OFF".to_owned(), tr(ui, 54, "Off")),
             ("DAILY".to_owned(), tr(ui, 70, "Daily")),
@@ -2512,12 +2462,15 @@ fn refresh_display_state(ui: &HomeWindow) {
             if let Some(ui) = weak.upgrade() {
                 ui.set_display_brightness(brightness);
                 ui.set_display_brightness_available(!hdmi_connected);
+                /* Color Temperature is Display & Audio row 1: keep the focus
+                 * on the same function when it appears or disappears. */
+                let was = ui.get_display_color_temperature_available();
+                let index = ui.get_display_audio_index();
+                if was != temp_available && index >= 1 {
+                    ui.set_display_audio_index(if temp_available { index + 1 } else { index - 1 });
+                }
                 ui.set_display_color_temperature_available(temp_available);
                 ui.set_display_color_temperature(temperature);
-                /* Color Temperature is the last Display & Audio row (9). */
-                if !temp_available && ui.get_display_audio_index() == 9 {
-                    ui.set_display_audio_index(8);
-                }
             }
         });
     });
@@ -2589,7 +2542,7 @@ fn apply_settings_choice(ui: &HomeWindow) {
     match context.as_str() {
         c if c.starts_with("moonlight-") => moonlight::apply_choice(c, &value),
         "theme" => themes::select(ui, value),
-        c if c.starts_with("game-") => gameui::apply_choice(ui, c, value),
+        c if c.starts_with("game-") || c.starts_with("emu-") => gameui::apply_choice(ui, c, value),
         c if c.starts_with("files-") || c.starts_with("share-") || c.starts_with("backup-") => filesui::apply_choice(ui, c, value),
         "player-assignment" => {
             let player_index = ui.get_player_assignment_index().max(0) as usize;
@@ -2628,18 +2581,7 @@ fn apply_settings_choice(ui: &HomeWindow) {
                 });
             });
         }
-        "lighting-mode" => {
-            lighting_call(ui, "SetMode", LightingArgs::Mode(value));
-        }
-        "lighting-color" => {
-            let parts: Vec<i32> = value
-                .split(',')
-                .filter_map(|part| part.parse::<i32>().ok())
-                .collect();
-            if parts.len() == 3 {
-                lighting_call(ui, "SetColor", LightingArgs::Color(parts[0], parts[1], parts[2]));
-            }
-        }
+        c if c.starts_with("lighting-") => lighting::apply_choice(c, value),
         "audio-output" => {
             audio_set_output(ui, value);
         }
@@ -2794,107 +2736,6 @@ fn rumble_test() {
             }
         }
     });
-}
-
-fn apply_lighting_state(
-    ui: &HomeWindow,
-    state: (bool, String, i32, i32, i32, i32, bool, String),
-) {
-    let (supported, mode, brightness, red, green, blue, system_effects, active_effect) = state;
-    ui.set_lighting_supported(supported);
-    ui.set_lighting_mode(mode.into());
-    ui.set_lighting_brightness(brightness);
-    ui.set_lighting_red(red);
-    ui.set_lighting_green(green);
-    ui.set_lighting_blue(blue);
-    ui.set_lighting_color_name(lighting_color_name(red, green, blue).into());
-    ui.set_lighting_system_effects(system_effects);
-    ui.set_lighting_active_effect(active_effect.into());
-}
-
-fn refresh_lighting(ui: &HomeWindow) {
-    let weak = ui.as_weak();
-    thread::spawn(move || {
-        let result = (|| -> zbus::Result<(bool, String, i32, i32, i32, i32, bool, String)> {
-            let connection = zbus::blocking::Connection::system()?;
-            let proxy = lighting_proxy(&connection)?;
-            proxy.call("GetState", &())
-        })();
-        if let Ok(state) = result {
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = weak.upgrade() {
-                    apply_lighting_state(&ui, state);
-                }
-            });
-        }
-    });
-}
-
-fn lighting_call(ui: &HomeWindow, method: &'static str, args: LightingArgs) {
-    let weak = ui.as_weak();
-    thread::spawn(move || {
-        let result = (|| -> zbus::Result<()> {
-            let connection = zbus::blocking::Connection::system()?;
-            let proxy = lighting_proxy(&connection)?;
-            match args {
-                LightingArgs::Mode(value) => proxy.call(method, &(value.as_str(),)),
-                LightingArgs::Brightness(value) => proxy.call(method, &(value,)),
-                LightingArgs::Color(r, g, b) => proxy.call(method, &(r, g, b)),
-                LightingArgs::Toggle(value) => proxy.call(method, &(value,)),
-                LightingArgs::Effect(effect, context) => {
-                    proxy.call(method, &(effect.as_str(), context.as_str()))
-                }
-            }
-        })();
-        if let Err(error) = result {
-            eprintln!("home: lighting {method} failed={error}");
-        }
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = weak.upgrade() {
-                refresh_lighting(&ui);
-            }
-        });
-    });
-}
-
-enum LightingArgs {
-    Mode(String),
-    Brightness(i32),
-    Color(i32, i32, i32),
-    Toggle(bool),
-    Effect(String, String),
-}
-
-fn lighting_stop_effect(ui: &HomeWindow) {
-    let weak = ui.as_weak();
-    thread::spawn(move || {
-        if let Ok(connection) = zbus::blocking::Connection::system() {
-            if let Ok(proxy) = lighting_proxy(&connection) {
-                let _: zbus::Result<()> = proxy.call("StopEffect", &());
-            }
-        }
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = weak.upgrade() {
-                refresh_lighting(&ui);
-            }
-        });
-    });
-}
-
-fn preview_lighting_effect(ui: &HomeWindow) {
-    let index = ui.get_lighting_preview_index().rem_euclid(5);
-    let (effect, context) = match index {
-        0 => ("low-battery", ""),
-        1 => ("controller-connected", ""),
-        2 => ("wifi-search", ""),
-        3 => ("boot", ""),
-        _ => ("system", "preview-system"),
-    };
-    lighting_call(
-        ui,
-        "PlayEffect",
-        LightingArgs::Effect(effect.to_owned(), context.to_owned()),
-    );
 }
 
 fn start_controller_signal_listener(ui: &HomeWindow, signal_name: &'static str) {
@@ -3073,36 +2914,6 @@ fn start_rumble_listener(ui: &HomeWindow) {
     });
 }
 
-fn start_lighting_listener(ui: &HomeWindow) {
-    refresh_lighting(ui);
-    let weak = ui.as_weak();
-    thread::spawn(move || {
-        let Ok(connection) = zbus::blocking::Connection::system() else {
-            return;
-        };
-        let Ok(proxy) = lighting_proxy(&connection) else {
-            return;
-        };
-        let Ok(mut signals) = proxy.receive_signal("StateChanged") else {
-            return;
-        };
-
-        for message in &mut signals {
-            if let Ok(state) = message
-                .body()
-                .deserialize::<(bool, String, i32, i32, i32, i32, bool, String)>()
-            {
-                let weak = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = weak.upgrade() {
-                        apply_lighting_state(&ui, state);
-                    }
-                });
-            }
-        }
-    });
-}
-
 fn update_bluetooth_scroll(ui: &HomeWindow, known: bool) {
     let index = if known { ui.get_bluetooth_known_index() } else { ui.get_bluetooth_device_index() };
     let count = if known {
@@ -3204,13 +3015,13 @@ fn navigate_settings_view(ui: &HomeWindow, next_view: i32) {
     if previous_view == 14 && next_view != 14 {
         set_controller_tester(ui, false);
     }
+    /* Backup & Restore's Delete hint (filesui). */
+    if previous_view == 62 && next_view != 62 {
+        ui.set_settings_north_hint("".into());
+    }
     if previous_view == 15 && next_view != 15 {
         cancel_controller_remap(ui);
         ui.set_controller_mapping_reset_armed(false);
-    }
-    if previous_view == 17 && next_view != 17 && ui.get_lighting_preview_open() {
-        ui.set_lighting_preview_open(false);
-        lighting_stop_effect(ui);
     }
     if previous_view == 23 && next_view == 0 {
         /* Returning to the rail previews General from the top again. */
@@ -3224,6 +3035,9 @@ fn navigate_settings_view(ui: &HomeWindow, next_view: i32) {
     }
     if ui.get_settings_choice_open() {
         ui.set_settings_choice_open(false);
+        if ui.get_settings_choice_context().starts_with("lighting-") {
+            lighting::end_preview();
+        }
     }
 
     ui.set_settings_view(next_view);
@@ -3264,7 +3078,7 @@ fn navigate_settings_view(ui: &HomeWindow, next_view: i32) {
     if next_view == 10 {
         refresh_controllers(ui);
         refresh_rumble(ui);
-        refresh_lighting(ui);
+        lighting::refresh(ui);
     }
     if next_view == 11 || next_view == 12 {
         refresh_controllers(ui);
@@ -3279,7 +3093,7 @@ fn navigate_settings_view(ui: &HomeWindow, next_view: i32) {
         refresh_rumble(ui);
     }
     if next_view == 17 {
-        refresh_lighting(ui);
+        lighting::refresh(ui);
     }
     if next_view == 18 {
         refresh_display_state(ui);
@@ -3411,7 +3225,9 @@ fn wifi_forget(ui: &HomeWindow, ssid: String) {
     });
 }
 
-fn fetch_wifi_ip_configuration(ui: &HomeWindow, ssid: String) {
+/* runtime_only: refresh only the live lease values (address, mask, gateway,
+ * DNS) and keep the configuration being edited and the focused row. */
+fn fetch_wifi_ip_configuration(ui: &HomeWindow, ssid: String, runtime_only: bool) {
     let weak = ui.as_weak();
     thread::spawn(move || {
         let result = (|| -> zbus::Result<(String, String, u32, String, String, String, String, u32, String, String, String)> {
@@ -3425,17 +3241,20 @@ fn fetch_wifi_ip_configuration(ui: &HomeWindow, ssid: String) {
                     Ok((mode, address, prefix, netmask, gateway, dns,
                         runtime_address, runtime_prefix, runtime_netmask,
                         runtime_gateway, runtime_dns)) => {
+                        ui.set_wifi_runtime_address(runtime_address.into());
+                        ui.set_wifi_runtime_prefix(runtime_prefix as i32);
+                        ui.set_wifi_runtime_netmask(runtime_netmask.into());
+                        ui.set_wifi_runtime_gateway(runtime_gateway.into());
+                        ui.set_wifi_runtime_dns(runtime_dns.into());
+                        if runtime_only {
+                            return;
+                        }
                         ui.set_wifi_ip_mode(mode.into());
                         ui.set_wifi_ip_address(address.into());
                         ui.set_wifi_ip_prefix(prefix as i32);
                         ui.set_wifi_ip_netmask(netmask.into());
                         ui.set_wifi_ip_gateway(gateway.into());
                         ui.set_wifi_ip_dns(dns.into());
-                        ui.set_wifi_runtime_address(runtime_address.into());
-                        ui.set_wifi_runtime_prefix(runtime_prefix as i32);
-                        ui.set_wifi_runtime_netmask(runtime_netmask.into());
-                        ui.set_wifi_runtime_gateway(runtime_gateway.into());
-                        ui.set_wifi_runtime_dns(runtime_dns.into());
                         ui.set_wifi_ip_index(0);
                         wifi_notice(&ui, "");
                     }
@@ -3611,7 +3430,7 @@ fn finish_system_keyboard(ui: &HomeWindow) {
             ui.set_wifi_selected_saved(false);
             ui.set_wifi_selected_current(false);
             ui.set_wifi_pending_hidden(true);
-            open_system_keyboard(ui, &format!("Password • {value}"), 0, 2, "password", "");
+            open_system_keyboard(ui, &format!("{} • {value}", tr(ui, 172, "Password")), 0, 2, "password", "");
         }
         2 => {
             if !valid_ipv4(&value, false) {
@@ -3775,7 +3594,7 @@ fn open_network_detail(ui: &HomeWindow, network: WifiNetworkEntry, return_view: 
     ui.set_wifi_detail_return_view(return_view);
     navigate_settings_view(&ui, 4);
     wifi_notice(ui, "");
-    fetch_wifi_ip_configuration(ui, ssid);
+    fetch_wifi_ip_configuration(ui, ssid, false);
 }
 
 fn move_model_selection(current: i32, count: i32, delta: i32) -> i32 {
@@ -3948,7 +3767,7 @@ fn start_wifi_aux_signal_listener(ui: &HomeWindow, signal_name: &'static str) {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = weak.upgrade() {
                                 if ui.get_settings_view() == 4 && ui.get_wifi_selected_ssid().as_str() == ssid {
-                                    fetch_wifi_ip_configuration(&ui, ssid);
+                                    fetch_wifi_ip_configuration(&ui, ssid, false);
                                 }
                             }
                         });
@@ -4341,12 +4160,26 @@ fn refresh_hint_mapping(ui: &HomeWindow) {
 }
 
 fn update_display_audio_scroll(ui: &HomeWindow, count: i32) {
-    ui.set_display_audio_scroll_offset(guarded_scroll_offset(
+    ui.set_display_audio_scroll_offset(sectioned_scroll(
+        ui,
         ui.get_display_audio_index(),
         count,
-        ui.get_settings_list_visible_rows(),
         ui.get_display_audio_scroll_offset(),
+        (ui.get_da_audio_start(), ui.get_da_sounds_start(), 0),
     ));
+}
+
+/// Display & Audio rows by function. Color Temperature (row 1) exists only
+/// when the panel supports it; the rows below it move up when it does not.
+#[derive(Clone, Copy, PartialEq)]
+enum DaRow { Brightness, ColorTemperature, Output, Volume, Applications, HomeMusic, TestSound, SystemSounds, NavigationSounds, PowerSounds }
+
+fn display_audio_row(ui: &HomeWindow) -> DaRow {
+    const ROWS: [DaRow; 10] = [DaRow::Brightness, DaRow::ColorTemperature, DaRow::Output, DaRow::Volume, DaRow::Applications,
+        DaRow::HomeMusic, DaRow::TestSound, DaRow::SystemSounds, DaRow::NavigationSounds, DaRow::PowerSounds];
+    let index = ui.get_display_audio_index().clamp(0, 9 - 1 + ui.get_da_temp());
+    let logical = if ui.get_da_temp() == 0 && index >= 1 { index + 1 } else { index };
+    ROWS[logical as usize]
 }
 
 /// Diagnostics (EPIC-052): the redacted support bundle is a nuubos-jobd job
@@ -4465,14 +4298,7 @@ fn handle_recovery_action(ui: &HomeWindow, action: &str) {
                         recovery_run(ui, args, 0, "");
                     }
                 }
-                4 if ui.get_safe_mode() => {
-                    thread::spawn(|| {
-                        let _ = std::process::Command::new("/usr/sbin/nuubos-recoveryctl")
-                            .args(["safe-mode", "clear"])
-                            .output();
-                        let _ = system_command("ACTION RESTART");
-                    });
-                }
+                4 if ui.get_safe_mode() => exit_safe_mode(),
                 _ => {}
             }
         }
@@ -4480,13 +4306,108 @@ fn handle_recovery_action(ui: &HomeWindow, action: &str) {
     }
 }
 
+/// Leaves safe mode: clears the flag and restarts through the central
+/// lifecycle path.
+fn exit_safe_mode() {
+    thread::spawn(|| {
+        let _ = std::process::Command::new("/usr/sbin/nuubos-recoveryctl")
+            .args(["safe-mode", "clear"])
+            .output();
+        let _ = system_command("ACTION RESTART");
+    });
+}
+
+fn show_safe_screen(ui: &HomeWindow) {
+    SAFE_SCREEN.store(true, Ordering::SeqCst);
+    ui.set_safe_index(0);
+    ui.set_recovery_armed(-1);
+    ui.set_recovery_stage(0);
+    ui.set_recovery_notice("".into());
+    ui.set_settings_open(false);
+    ui.set_safe_screen_open(true);
+    write_ui_context("safe-mode");
+}
+
+/// Safe mode screen (EPIC-050). Rows: 0 Exit Safe Mode, then two columns
+/// 1 Repair | 2 Support Bundle, 3 Reset User Profile | 4 Settings,
+/// 5 Factory Reset | 6 Factory Reset and Erase User Data. Rows 3, 5 and 6
+/// arm on the first press and run on the next; 6 needs one more press, as on
+/// the Recovery page. Any navigation disarms.
+fn handle_safe_action(ui: &HomeWindow, action: &str, settings_active: &Arc<AtomicBool>) {
+    play_ui_sound(action);
+    let index = ui.get_safe_index();
+    let next = match action {
+        "menu_up" => if index <= 2 { 0 } else { index - 2 },
+        "menu_down" => if index == 0 { 1 } else if index + 2 <= 6 { index + 2 } else { index },
+        "menu_left" if index > 0 && index % 2 == 0 => index - 1,
+        "menu_right" if index % 2 == 1 => index + 1,
+        "menu_confirm" => {
+            safe_confirm(ui, index, settings_active);
+            return;
+        }
+        _ => return,
+    };
+    if next != index {
+        ui.set_safe_index(next);
+        ui.set_recovery_armed(-1);
+        ui.set_recovery_stage(0);
+        if !ui.get_diag_busy() {
+            ui.set_recovery_notice("".into());
+        }
+    }
+}
+
+fn safe_confirm(ui: &HomeWindow, row: i32, settings_active: &Arc<AtomicBool>) {
+    match row {
+        0 => exit_safe_mode(),
+        1 => recovery_run(ui, vec!["repair".into()], 506, "Configuration checked"),
+        2 if !ui.get_diag_busy() => create_support_bundle(ui),
+        4 => {
+            /* Wi-Fi and Remote Services for remote assistance; Back from the
+             * categories returns here. */
+            SAFE_SCREEN.store(false, Ordering::SeqCst);
+            ui.set_safe_screen_open(false);
+            settings_active.store(true, Ordering::SeqCst);
+            ui.set_settings_selected_index(0);
+            navigate_settings_view(ui, 0);
+            ui.set_settings_open(true);
+        }
+        3 | 5 | 6 => {
+            let user = ui.get_active_user_id().to_string();
+            if row == 3 && user.is_empty() {
+                return;
+            }
+            if ui.get_recovery_armed() != row {
+                ui.set_recovery_notice("".into());
+                ui.set_recovery_armed(row);
+                ui.set_recovery_stage(0);
+                return;
+            }
+            if row == 6 && ui.get_recovery_stage() == 0 {
+                ui.set_recovery_stage(1);
+                return;
+            }
+            ui.set_recovery_armed(-1);
+            ui.set_recovery_stage(0);
+            match row {
+                3 => recovery_run(ui, vec!["reset-user".into(), user], 509, "Profile reset"),
+                5 => recovery_run(ui, vec!["factory-reset".into(), "settings".into()], 0, ""),
+                _ => recovery_run(ui, vec!["factory-reset".into(), "userdata".into()], 0, ""),
+            }
+        }
+        _ => {}
+    }
+}
+
+const SYSTEM_ROWS: i32 = 11;
+
 fn update_system_scroll(ui: &HomeWindow) {
-    const COUNT: i32 = 13;
-    ui.set_system_scroll_offset(guarded_scroll_offset(
+    ui.set_system_scroll_offset(sectioned_scroll(
+        ui,
         ui.get_system_index(),
-        COUNT,
-        ui.get_settings_list_visible_rows(),
+        SYSTEM_ROWS,
         ui.get_system_scroll_offset(),
+        (ui.get_system_storage_start(), ui.get_system_support_start(), 0),
     ));
 }
 
@@ -4520,12 +4441,17 @@ fn handle_settings_action(
     if ui.get_avatar_picker_open(){if action=="menu_back"{ui.set_avatar_picker_open(false);return;}let n=ui.get_avatar_choices().row_count() as i32;match action{"menu_up"|"menu_down"|"menu_left"|"menu_right"=>move_avatar_selection(ui,action),"menu_confirm" if n>0=>{if let Some(a)=ui.get_avatar_choices().row_data(ui.get_avatar_picker_index().max(0) as usize){let id=ui.get_profile_edit_user_id().to_string();let spec=a.spec.to_string();ui.set_avatar_picker_open(false);thread::spawn(move||{let _=users_command(&format!("SET_AVATAR	{}	{}",id,spec));});}},_=>{}}return;}
 
     if ui.get_settings_choice_open() {
-        let theme_choice = ui.get_settings_choice_context().as_str() == "theme";
+        let context = ui.get_settings_choice_context().to_string();
+        let theme_choice = context == "theme";
+        let lighting_choice = context.starts_with("lighting-");
         if action == "menu_back" {
             ui.set_settings_choice_open(false);
             if theme_choice {
                 /* Preview ended without a choice. */
                 themes::apply_active(ui);
+            }
+            if lighting_choice {
+                lighting::end_preview();
             }
             return;
         }
@@ -4547,16 +4473,15 @@ fn handle_settings_action(
             "menu_confirm" if count > 0 => apply_settings_choice(ui),
             _ => {}
         }
-        if theme_choice && matches!(action, "menu_up" | "menu_down") {
+        if (theme_choice || lighting_choice) && matches!(action, "menu_up" | "menu_down") {
             if let Some(e) = ui.get_settings_choice_options().row_data(ui.get_settings_choice_index().max(0) as usize) {
-                themes::preview(ui, e.value.as_str());
+                if theme_choice {
+                    themes::preview(ui, e.value.as_str());
+                } else {
+                    lighting::preview_choice(ui, &context, e.value.as_str());
+                }
             }
         }
-        return;
-    }
-    if action == "menu_back" && view == 17 && ui.get_lighting_preview_open() {
-        ui.set_lighting_preview_open(false);
-        lighting_stop_effect(ui);
         return;
     }
     if (52..=66).contains(&view) {
@@ -4568,6 +4493,10 @@ fn handle_settings_action(
         match view {
             0 => {
                 settings_active.store(false, Ordering::SeqCst);
+                if ui.get_safe_mode() {
+                    show_safe_screen(ui);
+                    return;
+                }
                 ui.set_settings_open(false);
                 write_ui_context("home");
             }
@@ -4606,7 +4535,11 @@ fn handle_settings_action(
                 let current = ui.get_settings_selected_index();
                 let next = if current <= 0 { 5 } else { current - 1 };
                 ui.set_settings_selected_index(next);
-                if next == 4 {
+                if next == 1 {
+                    gameui::reset_services(ui);
+                } else if next == 3 {
+                    gameui::refresh_gaming(ui);
+                } else if next == 4 {
                     /* The category rail already renders the real Display & Audio
                      * page, so refresh the exact model shown when focus moves here. */
                     ui.set_display_audio_scroll_offset(0);
@@ -4622,7 +4555,11 @@ fn handle_settings_action(
                 let current = ui.get_settings_selected_index();
                 let next = if current >= 5 { 0 } else { current + 1 };
                 ui.set_settings_selected_index(next);
-                if next == 4 {
+                if next == 1 {
+                    gameui::reset_services(ui);
+                } else if next == 3 {
+                    gameui::refresh_gaming(ui);
+                } else if next == 4 {
                     ui.set_display_audio_scroll_offset(0);
                     refresh_display_state(ui);
                     refresh_audio(ui);
@@ -4639,15 +4576,18 @@ fn handle_settings_action(
                     navigate_settings_view(ui, 23);
                 } else if ui.get_settings_selected_index() == 1 {
                     ui.set_connectivity_selected_index(0);
+                    ui.set_connectivity_scroll(0);
                     navigate_settings_view(ui, 1);
                     wifi_notice(ui, "");
                     refresh_wifi_networks(ui, true);
+                    gameui::reset_services(ui);
                 } else if ui.get_settings_selected_index() == 2 {
                     ui.set_controllers_menu_index(0);
                     navigate_settings_view(ui, 10);
                 } else if ui.get_settings_selected_index() == 3 {
                     ui.set_gaming_index(0);
                     navigate_settings_view(ui, gameui::GAMING_VIEW);
+                    gameui::refresh_gaming(ui);
                 } else if ui.get_settings_selected_index() == 4 {
                     ui.set_display_audio_index(0);
                     ui.set_display_audio_scroll_offset(0);
@@ -4665,13 +4605,13 @@ fn handle_settings_action(
             _ => {}
         },
         1 => match action {
-            "menu_up" => {
+            "menu_up" | "menu_down" => {
+                let count = gameui::SERVICES_FIRST + gameui::service_count();
                 let current = ui.get_connectivity_selected_index();
-                ui.set_connectivity_selected_index((current + 5).rem_euclid(6));
-            }
-            "menu_down" => {
-                let current = ui.get_connectivity_selected_index();
-                ui.set_connectivity_selected_index((current + 1).rem_euclid(6));
+                let next = (current + if action == "menu_up" { count - 1 } else { 1 }).rem_euclid(count);
+                ui.set_connectivity_selected_index(next);
+                ui.set_connectivity_scroll(sectioned_scroll(ui, next, count, ui.get_connectivity_scroll(), (3, 6, 0)));
+                gameui::services_disarm(ui);
             }
             "menu_confirm" => match ui.get_connectivity_selected_index() {
                 0 => wifi_set_enabled(ui, !ui.get_wifi_enabled()),
@@ -4694,6 +4634,7 @@ fn handle_settings_action(
                     refresh_bluetooth_devices(ui);
                     navigate_settings_view(ui, 8);
                 }
+                n if n >= gameui::SERVICES_FIRST => gameui::services_confirm(ui, n),
                 _ => {}
             },
             _ => {}
@@ -4714,7 +4655,7 @@ fn handle_settings_action(
                     let index = ui.get_wifi_network_index();
                     if index == 0 {
                         ui.set_wifi_pending_hidden(true);
-                        open_system_keyboard(ui, "Hidden Network SSID", 1, 2, "text", "");
+                        open_system_keyboard(ui, &tr(ui, 739, "Network name (SSID)"), 1, 2, "text", "");
                     } else if let Some(network) = ui.get_wifi_networks().row_data((index - 1) as usize) {
                         open_network_detail(ui, network, 2);
                     }
@@ -4778,7 +4719,7 @@ fn handle_settings_action(
                 }
                 0 => {
                     let ssid = ui.get_wifi_selected_ssid().to_string();
-                    open_system_keyboard(ui, &format!("Password • {ssid}"), 0, 4, "password", "");
+                    open_system_keyboard(ui, &format!("{} • {ssid}", tr(ui, 172, "Password")), 0, 4, "password", "");
                 }
                 1 if ui.get_wifi_wps_active() => wifi_cancel_wps(),
                 1 if !ui.get_wifi_selected_current()
@@ -4788,7 +4729,7 @@ fn handle_settings_action(
                 }
                 2 if ui.get_wifi_selected_security().as_str() != "Open" => {
                     let ssid = ui.get_wifi_selected_ssid().to_string();
-                    open_system_keyboard(ui, &format!("Password • {ssid}"), 0, 4, "password", "");
+                    open_system_keyboard(ui, &format!("{} • {ssid}", tr(ui, 172, "Password")), 0, 4, "password", "");
                 }
                 3 => {
                     let manual = ui.get_wifi_ip_mode().as_str() != "manual";
@@ -4806,16 +4747,16 @@ fn handle_settings_action(
                     }
                 }
                 4 if ui.get_wifi_ip_mode().as_str() == "manual" => {
-                    open_system_keyboard(ui, "IPv4 Address", 2, 4, "ipv4", &ui.get_wifi_ip_address());
+                    open_system_keyboard(ui, &tr(ui, 177, "Address"), 2, 4, "ipv4", &ui.get_wifi_ip_address());
                 }
                 5 if ui.get_wifi_ip_mode().as_str() == "manual" => {
-                    open_system_keyboard(ui, "Subnet Mask", 6, 4, "ipv4", &ui.get_wifi_ip_netmask());
+                    open_system_keyboard(ui, &tr(ui, 178, "Subnet Mask"), 6, 4, "ipv4", &ui.get_wifi_ip_netmask());
                 }
                 6 if ui.get_wifi_ip_mode().as_str() == "manual" => {
-                    open_system_keyboard(ui, "Gateway (optional)", 4, 4, "ipv4", &ui.get_wifi_ip_gateway());
+                    open_system_keyboard(ui, &tr(ui, 179, "Gateway"), 4, 4, "ipv4", &ui.get_wifi_ip_gateway());
                 }
                 7 if ui.get_wifi_ip_mode().as_str() == "manual" => {
-                    open_system_keyboard(ui, "DNS", 5, 4, "dns", &ui.get_wifi_ip_dns());
+                    open_system_keyboard(ui, &tr(ui, 180, "DNS"), 5, 4, "dns", &ui.get_wifi_ip_dns());
                 }
                 8 => save_wifi_ip_configuration(ui),
                 9 if ui.get_wifi_selected_saved() => {
@@ -4897,7 +4838,7 @@ fn handle_settings_action(
                     } else if !ui.get_bluetooth_selected_paired() {
                         open_system_keyboard(
                             ui,
-                            &format!("PIN / Passkey • {}", ui.get_bluetooth_selected_name()),
+                            &format!("{} • {}", tr(ui, 474, "PIN"), ui.get_bluetooth_selected_name()),
                             7,
                             9,
                             "password",
@@ -4933,7 +4874,7 @@ fn handle_settings_action(
                     navigate_settings_view(ui, 16);
                 }
                 3 if ui.get_lighting_supported() => {
-                    ui.set_lighting_index(0);
+                    lighting::reset_page(ui);
                     navigate_settings_view(ui, 17);
                 }
                 _ => {}
@@ -5050,91 +4991,24 @@ fn handle_settings_action(
             "menu_confirm" if ui.get_rumble_index() == 1 => rumble_test(),
             _ => {}
         },
-        17 => {
-            if ui.get_lighting_preview_open() {
-                match action {
-                    "menu_left" => {
-                        ui.set_lighting_preview_index(
-                            (ui.get_lighting_preview_index() + 4).rem_euclid(5)
-                        );
-                        preview_lighting_effect(ui);
-                    }
-                    "menu_right" | "menu_confirm" => {
-                        ui.set_lighting_preview_index(
-                            (ui.get_lighting_preview_index() + 1).rem_euclid(5)
-                        );
-                        preview_lighting_effect(ui);
-                    }
-                    _ => {}
-                }
-            } else {
-                let fixed_color = matches!(
-                    ui.get_lighting_mode().as_str(),
-                    "static" | "breathe" | "pulse" | "chase" | "wave"
-                );
-                match action {
-                    "menu_up" => ui.set_lighting_index(
-                        move_model_selection(ui.get_lighting_index(), 5, -1)
-                    ),
-                    "menu_down" => ui.set_lighting_index(
-                        move_model_selection(ui.get_lighting_index(), 5, 1)
-                    ),
-                    "menu_confirm" if ui.get_lighting_index() == 0 => {
-                        open_lighting_mode_dropdown(ui);
-                    }
-                    "menu_left" if ui.get_lighting_index() == 1 => {
-                        let value = (ui.get_lighting_brightness() - 10).max(0);
-                        lighting_call(ui, "SetBrightness", LightingArgs::Brightness(value));
-                    }
-                    "menu_right" | "menu_confirm" if ui.get_lighting_index() == 1 => {
-                        let value = (ui.get_lighting_brightness() + 10).min(100);
-                        lighting_call(ui, "SetBrightness", LightingArgs::Brightness(value));
-                    }
-                    "menu_confirm" if ui.get_lighting_index() == 2 && fixed_color => {
-                        open_lighting_color_dropdown(ui);
-                    }
-                    "menu_left" | "menu_right" | "menu_confirm" if ui.get_lighting_index() == 3 => {
-                        lighting_call(
-                            ui,
-                            "SetSystemEffects",
-                            LightingArgs::Toggle(!ui.get_lighting_system_effects()),
-                        );
-                    }
-                    "menu_confirm" if ui.get_lighting_index() == 4 => {
-                        ui.set_lighting_preview_index(0);
-                        ui.set_lighting_preview_open(true);
-                        preview_lighting_effect(ui);
-                    }
-                    _ => {}
-                }
-            }
-        },
+        17 => lighting::handle_page(ui, action),
         23 => match action {"menu_up"=>{ui.set_general_index(move_model_selection(ui.get_general_index(),12,-1));update_general_scroll(ui);},"menu_down"=>{ui.set_general_index(move_model_selection(ui.get_general_index(),12,1));update_general_scroll(ui);},_ if (6..=9).contains(&ui.get_general_index())=>date_time_row_action(ui,ui.get_general_index()-6,action),"menu_confirm"=>match ui.get_general_index(){0=>open_active_user(ui),1=>open_language_dropdown(ui),2=>themes::open_choice(ui),3=>{ui.set_user_list_index(0);ui.set_user_list_scroll(0);navigate_settings_view(ui,25);},4 if ui.get_user_count()>1=>open_startup(ui),5 if ui.get_user_count()>1&&ui.get_user_login_mode().as_str()=="default"=>open_default_user(ui),10 if ui.get_automatic_time()=>{ui.set_regional_notice(tr(ui,323,"Syncing…").into());let w=ui.as_weak();thread::spawn(move||{let ok=regional_sync_command().map(|r|r.starts_with("OK")).unwrap_or(false);let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){ui.set_regional_notice(if ok{tr(&ui,299,"Time synchronized").into()}else{tr(&ui,300,"Time synchronization failed").into()});});});},11=>open_keyboard_choice(ui),_=>{}},_=>{}},
-        24 => match action {"menu_up"|"menu_down"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),4,if action=="menu_up"{-1}else{1}));ui.set_profile_scroll(guarded_scroll_offset(ui.get_profile_index(),4,ui.get_settings_list_visible_rows(),ui.get_profile_scroll()));},"menu_confirm" if ui.get_profile_index()==3=>gameui::open_sync(ui),"menu_confirm" if ui.get_profile_index()==2=>filesui::open_backup(ui),"menu_confirm" if ui.get_profile_index()==0=>open_system_keyboard(ui,&tr(ui,285,"Username"),8,24,"text",ui.get_profile_edit_name().as_str()),"menu_confirm" if ui.get_profile_index()==1=>open_avatar_picker(ui),_=>{}},
+        24 => match action {"menu_up"|"menu_down"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),3,if action=="menu_up"{-1}else{1}));ui.set_profile_scroll(guarded_scroll_offset(ui.get_profile_index(),3,ui.get_settings_list_visible_rows(),ui.get_profile_scroll()));},"menu_confirm" if ui.get_profile_index()==2=>filesui::open_backup(ui),"menu_confirm" if ui.get_profile_index()==0=>open_system_keyboard(ui,&tr(ui,285,"Username"),8,24,"text",ui.get_profile_edit_name().as_str()),"menu_confirm" if ui.get_profile_index()==1=>open_avatar_picker(ui),_=>{}},
         25 => {let n=ui.get_user_count()+1;match action{"menu_up"=>{ui.set_user_list_index(move_model_selection(ui.get_user_list_index(),n,-1));update_user_scroll(ui);},"menu_down"=>{ui.set_user_list_index(move_model_selection(ui.get_user_list_index(),n,1));update_user_scroll(ui);},"menu_confirm" if ui.get_user_list_index()==ui.get_user_count()=>open_system_keyboard(ui,&tr(ui,296,"Enter username"),9,25,"text",""),"menu_confirm"=>open_selected_user(ui),_=>{}}},
         26 => match action {"menu_up"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),3,-1));ui.set_user_delete_confirm(false);},"menu_down"=>{ui.set_profile_index(move_model_selection(ui.get_profile_index(),3,1));ui.set_user_delete_confirm(false);},"menu_confirm" if ui.get_profile_index()==0=>open_system_keyboard(ui,&tr(ui,285,"Username"),8,26,"text",ui.get_profile_edit_name().as_str()),"menu_confirm" if ui.get_profile_index()==1=>open_avatar_picker(ui),"menu_confirm" if ui.get_profile_index()==2&&ui.get_profile_edit_user_id()!=ui.get_active_user_id()&&ui.get_user_count()>1=>{if ui.get_user_delete_confirm(){let id=ui.get_profile_edit_user_id().to_string();ui.set_user_delete_confirm(false);navigate_settings_view(ui,users_page_view(ui));thread::spawn(move||{let _=users_command(&format!("DELETE	{}	CONFIRM",id));});}else{ui.set_user_delete_confirm(true);}},_=>{}},
-        gameui::GAMING_VIEW => match action {
-            "menu_up" | "menu_down" => ui.set_gaming_index(move_model_selection(
-                ui.get_gaming_index(), 4, if action == "menu_up" { -1 } else { 1 })),
-            "menu_confirm" => match ui.get_gaming_index() {
-                0 => gameui::open_achievements(ui),
-                1 => gameui::open_hidden(ui),
-                2 => gameui::open_metadata(ui),
-                3 => gameui::open_bios(ui),
-                _ => {}
-            },
-            _ => {}
-        },
+        gameui::GAMING_VIEW => gameui::handle_gaming(ui, action),
         19 => {
             match action {
                 "menu_up" => {
-                    ui.set_system_index(move_model_selection(ui.get_system_index(), 13, -1));
+                    ui.set_system_index(move_model_selection(ui.get_system_index(), SYSTEM_ROWS, -1));
                     update_system_scroll(ui);
                 }
                 "menu_down" => {
-                    ui.set_system_index(move_model_selection(ui.get_system_index(), 13, 1));
+                    ui.set_system_index(move_model_selection(ui.get_system_index(), SYSTEM_ROWS, 1));
                     update_system_scroll(ui);
                 }
+                /* POWER 0-4, STORAGE & SOFTWARE 5-7, TROUBLESHOOTING 8-10
+                 * (home.slint system-storage-start/system-support-start). */
                 "menu_confirm" => match ui.get_system_index() {
                     0 => open_system_profile_dropdown(ui),
                     1 => open_auto_battery_dropdown(ui),
@@ -5148,20 +5022,18 @@ fn handle_settings_action(
                         navigate_settings_view(ui, 20);
                         refresh_system(ui);
                     },
-                    6 => {
+                    6 => gameui::open_update(ui),
+                    7 => {
                         ui.set_system_info_index(0);
                         ui.set_system_info_scroll_offset(0);
                         navigate_settings_view(ui, 21);
                     },
-                    7 => {
+                    8 => navigate_settings_view(ui, 27),
+                    9 => navigate_settings_view(ui, 28),
+                    10 => {
                         ui.set_system_reset_confirm(false);
                         navigate_settings_view(ui, 22);
                     }
-                    8 => navigate_settings_view(ui, 27),
-                    9 => navigate_settings_view(ui, 28),
-                    10 => gameui::open_remote(ui),
-                    11 => gameui::open_update(ui),
-                    12 => gameui::open_online(ui),
                     _ => {}
                 },
                 _ => {}
@@ -5260,42 +5132,34 @@ fn handle_settings_action(
         },
         28 => handle_recovery_action(ui, action),
         18 => {
-            let count = if ui.get_display_color_temperature_available() { 10 } else { 9 };
+            let count = 9 + ui.get_da_temp();
+            let row = display_audio_row(ui);
+            let step = match action { "menu_left" => -1, "menu_right" => 1, _ => 0 };
             match action {
-                "menu_up" => {
+                "menu_up" | "menu_down" => {
                     ui.set_display_audio_index(
-                        move_model_selection(ui.get_display_audio_index(), count, -1)
+                        move_model_selection(ui.get_display_audio_index(), count, if action == "menu_up" { -1 } else { 1 })
                     );
                     update_display_audio_scroll(ui, count);
                 }
-                "menu_down" => {
-                    ui.set_display_audio_index(
-                        move_model_selection(ui.get_display_audio_index(), count, 1)
-                    );
-                    update_display_audio_scroll(ui, count);
-                }
-                "menu_left" if ui.get_display_audio_index() == 0 => adjust_display_brightness(ui, -1),
-                "menu_right" if ui.get_display_audio_index() == 0 => adjust_display_brightness(ui, 1),
-                "menu_confirm" if ui.get_display_audio_index() == 1 => open_audio_output_dropdown(ui),
-                "menu_left" if ui.get_display_audio_index() == 2 => audio_adjust_volume(ui, -1),
-                "menu_right" if ui.get_display_audio_index() == 2 => audio_adjust_volume(ui, 1),
-                "menu_left" if ui.get_display_audio_index() == 3 => adjust_applications_volume(ui, -1),
-                "menu_right" if ui.get_display_audio_index() == 3 => adjust_applications_volume(ui, 1),
-                "menu_left" if ui.get_display_audio_index() == 4 => adjust_system_sounds_volume(ui, -1),
-                "menu_right" if ui.get_display_audio_index() == 4 => adjust_system_sounds_volume(ui, 1),
-                "menu_left" | "menu_right" | "menu_confirm" if ui.get_display_audio_index() == 5 => {
-                    set_navigation_sounds_enabled(ui, !ui.get_navigation_sounds_enabled());
-                }
-                "menu_left" | "menu_right" | "menu_confirm" if ui.get_display_audio_index() == 6 => {
-                    set_power_sounds_enabled(ui, !ui.get_power_sounds_enabled());
-                }
-                "menu_left" if ui.get_display_audio_index() == 7 => adjust_home_music_volume(ui, -1),
-                "menu_right" if ui.get_display_audio_index() == 7 => adjust_home_music_volume(ui, 1),
-                "menu_confirm" if ui.get_display_audio_index() == 8 => audio_toggle_test_tone(ui),
-                "menu_left" if ui.get_display_audio_index() == 9
-                    && ui.get_display_color_temperature_available() => adjust_display_color_temperature(ui, -250),
-                "menu_right" if ui.get_display_audio_index() == 9
-                    && ui.get_display_color_temperature_available() => adjust_display_color_temperature(ui, 250),
+                "menu_left" | "menu_right" => match row {
+                    DaRow::Brightness => adjust_display_brightness(ui, step),
+                    DaRow::ColorTemperature => adjust_display_color_temperature(ui, 250 * step),
+                    DaRow::Volume => audio_adjust_volume(ui, step),
+                    DaRow::Applications => adjust_applications_volume(ui, step),
+                    DaRow::HomeMusic => adjust_home_music_volume(ui, step),
+                    DaRow::SystemSounds => adjust_system_sounds_volume(ui, step),
+                    DaRow::NavigationSounds => set_navigation_sounds_enabled(ui, !ui.get_navigation_sounds_enabled()),
+                    DaRow::PowerSounds => set_power_sounds_enabled(ui, !ui.get_power_sounds_enabled()),
+                    _ => {}
+                },
+                "menu_confirm" => match row {
+                    DaRow::Output => open_audio_output_dropdown(ui),
+                    DaRow::TestSound => audio_toggle_test_tone(ui),
+                    DaRow::NavigationSounds => set_navigation_sounds_enabled(ui, !ui.get_navigation_sounds_enabled()),
+                    DaRow::PowerSounds => set_power_sounds_enabled(ui, !ui.get_power_sounds_enabled()),
+                    _ => {}
+                },
                 _ => {}
             }
         },
@@ -5311,75 +5175,13 @@ fn handle_settings_action(
     }
 }
 
-fn close_power_menu(ui: &HomeWindow, power_active: &Arc<AtomicBool>)
-{
-    power_active.store(false, Ordering::SeqCst);
-    ui.set_power_menu_open(false);
-    ui.set_power_menu_confirm(false);
-}
-
-fn invoke_power_action(ui: &HomeWindow, action: &'static str, power_active: &Arc<AtomicBool>)
-{
-    close_power_menu(ui, power_active);
-    let command = match action {
-        "sleep" => "ACTION SLEEP",
-        "restart" => "ACTION RESTART",
-        "poweroff" => "ACTION POWEROFF",
-        _ => return,
-    }.to_owned();
-    thread::spawn(move || {
-        if let Err(error) = system_command(&command) {
-            eprintln!("home: lifecycle command {:?} failed={error}", command);
-        }
-    });
-}
-
-fn handle_power_action(ui: &HomeWindow, action: &str, power_active: &Arc<AtomicBool>)
-{
-    play_ui_sound(action);
-    let current = ui.get_power_menu_index();
-    match action {
-        "menu_back" => close_power_menu(ui, power_active),
-        "menu_up" => {
-            ui.set_power_menu_index(0);
-            ui.set_power_menu_confirm(false);
-        }
-        "menu_down" if current == 0 => {
-            ui.set_power_menu_index(1);
-            ui.set_power_menu_confirm(false);
-        }
-        "menu_left" if current > 0 => {
-            ui.set_power_menu_index(1);
-            ui.set_power_menu_confirm(false);
-        }
-        "menu_right" if current > 0 => {
-            ui.set_power_menu_index(2);
-            ui.set_power_menu_confirm(false);
-        }
-        "menu_confirm" if current == 0 => invoke_power_action(ui, "sleep", power_active),
-        "menu_confirm" if current == 1 || current == 2 => {
-            if ui.get_power_menu_confirm() {
-                invoke_power_action(
-                    ui,
-                    if current == 1 { "restart" } else { "poweroff" },
-                    power_active,
-                );
-            } else {
-                ui.set_power_menu_confirm(true);
-            }
-        }
-        _ => {}
-    }
-}
-
 /* One logical action (inputd, or the physical keyboard) routed to the
- * screen that owns input: user picker, power menu, setup, Files/Details/
+ * screen that owns input: user picker, setup, Files/Details/
  * Moonlight/Steam Link shells, Settings or Home. */
 fn route_input_action(
     action: &str,
     weak: &slint::Weak<HomeWindow>,
     settings_active: &Arc<AtomicBool>,
-    power_active: &Arc<AtomicBool>,
     user_picker_active: &Arc<AtomicBool>,
 ) {
     /* Playing media (EPIC-028): the player window covers nuubUI and the
@@ -5388,47 +5190,34 @@ fn route_input_action(
         mediaui::handle_player(action);
         return;
     }
+    /* The Power OSD belongs to the Quick Menu (it opens over every
+     * context, games included); Home ignores the power key. */
+    if action == "power" {
+        return;
+    }
+    if SAFE_SCREEN.load(Ordering::SeqCst) {
+        if matches!(
+            action,
+            "menu_up" | "menu_down" | "menu_left" | "menu_right" | "menu_confirm"
+        ) {
+            let action = action.to_owned();
+            let weak = weak.clone();
+            let settings_active = settings_active.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    handle_safe_action(&ui, &action, &settings_active);
+                }
+            });
+        }
+        /* Start (Settings) and Home are not reachable from here. */
+        return;
+    }
     if user_picker_active.load(Ordering::SeqCst) && matches!(action,"menu_left"|"menu_right"|"menu_up"|"menu_down"|"menu_confirm"|"menu_back"){let a=action.to_owned();let w=weak.clone();let p=user_picker_active.clone();let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){handle_user_picker(&ui,&a,&p);});return;}
-    /* Over a game the Quick Menu shows the power actions;
-     * Home is hidden underneath. */
+    /* Over a game Home is hidden underneath. */
     if library::GAME_RUNNING.load(Ordering::SeqCst)
         || moonlight::STREAM_RUNNING.load(Ordering::SeqCst)
         || webui::RUNNING.load(Ordering::SeqCst)
     {
-        return;
-    }
-
-    if matches!(action, "power" | "power_menu" | "power_button" | "sleep") {
-        let open = !power_active.swap(true, Ordering::SeqCst);
-        let weak = weak.clone();
-        let power_active = power_active.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = weak.upgrade() {
-                if open {
-                    ui.set_power_menu_index(0);
-                    ui.set_power_menu_confirm(false);
-                    ui.set_power_menu_open(true);
-                } else {
-                    close_power_menu(&ui, &power_active);
-                }
-            }
-        });
-        return;
-    }
-
-    if power_active.load(Ordering::SeqCst) && matches!(
-        action,
-        "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-        "menu_confirm" | "menu_back"
-    ) {
-        let action = action.to_owned();
-        let weak = weak.clone();
-        let power_active = power_active.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = weak.upgrade() {
-                handle_power_action(&ui, &action, &power_active);
-            }
-        });
         return;
     }
 
@@ -5582,13 +5371,17 @@ fn route_input_action(
     if settings_active.load(Ordering::SeqCst) && matches!(
         action,
         "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-        "menu_confirm" | "menu_back"
+        "menu_confirm" | "menu_back" | "face_north"
     ) {
         let action = action.to_owned();
         let weak = weak.clone();
         let settings_active = settings_active.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
+                /* North is a row action only where the page shows its hint. */
+                if action == "face_north" && ui.get_settings_north_hint().is_empty() {
+                    return;
+                }
                 handle_settings_action(&ui, &action, &settings_active);
             }
         });
@@ -5598,7 +5391,6 @@ fn route_input_action(
     /* Home carousels / library grid. */
     if !settings_active.load(Ordering::SeqCst) &&
         !user_picker_active.load(Ordering::SeqCst) &&
-        !power_active.load(Ordering::SeqCst) &&
         matches!(
             action,
             "menu_up" | "menu_down" | "menu_left" | "menu_right" |
@@ -5618,7 +5410,6 @@ fn route_input_action(
 fn start_input_listener(
     ui: &HomeWindow,
     settings_active: Arc<AtomicBool>,
-    power_active: Arc<AtomicBool>,
     user_picker_active: Arc<AtomicBool>,
     screensaver_gate: Arc<(Mutex<bool>, Condvar)>,
 ) {
@@ -5644,6 +5435,19 @@ fn start_input_listener(
                         Ok(0) => break,
                         Ok(_) => {
                             let fields: Vec<&str> = line.split_whitespace().collect();
+                            /* Releasing Confirm on a game card launches it;
+                             * holding it opens Start Game (library.rs). */
+                            if fields.len() == 4 && fields[0] == "EVENT" && fields[1] == "1"
+                                && fields[2] == "menu_confirm" && fields[3] == "released"
+                            {
+                                let weak = weak.clone();
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(ui) = weak.upgrade() {
+                                        library::release_confirm(&ui);
+                                    }
+                                });
+                                continue;
+                            }
                             if fields.len() != 4 ||
                                 fields[0] != "EVENT" ||
                                 fields[1] != "1" ||
@@ -5672,7 +5476,6 @@ fn start_input_listener(
                                 fields[2],
                                 &weak,
                                 &settings_active,
-                                &power_active,
                                 &user_picker_active,
                             );
                         }
@@ -6073,7 +5876,7 @@ fn main() -> Result<(), slint::PlatformError> {
     start_bluetooth_product_listener(&ui);
     start_controllers_product_listener(&ui);
     start_rumble_listener(&ui);
-    start_lighting_listener(&ui);
+    lighting::start_listener(&ui);
     start_audio_product_listener(&ui);
     library::start_cover_loader(&ui);
     library::start_library_listener(&ui);
@@ -6106,33 +5909,26 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let settings_active = Arc::new(AtomicBool::new(false));
-    let power_active = Arc::new(AtomicBool::new(false));
     {
         let weak = ui.as_weak();
         let settings_active = settings_active.clone();
-        let power_active = power_active.clone();
         let user_picker_active = user_picker_active.clone();
         ui.on_keyboard_action(move |action| {
-            route_input_action(action.as_str(), &weak, &settings_active, &power_active, &user_picker_active);
+            route_input_action(action.as_str(), &weak, &settings_active, &user_picker_active);
         });
     }
     start_input_listener(
         &ui,
         settings_active.clone(),
-        power_active.clone(),
         user_picker_active.clone(),
         screensaver_gate.clone(),
     );
 
     if std::env::var("NUUBOS_SAFE_MODE").as_deref() == Ok("1") {
         /* Safe mode (EPIC-050): the supervisor restarted nuubUI after a crash
-         * loop. Open the Recovery page directly; Back still reaches Settings. */
+         * loop. The full-screen safe mode screen comes first. */
         ui.set_safe_mode(true);
-        settings_active.store(true, Ordering::SeqCst);
-        ui.set_settings_selected_index(5);
-        navigate_settings_view(&ui, 28);
-        ui.set_settings_open(true);
-        write_ui_context("settings");
+        show_safe_screen(&ui);
         thread::spawn(|| set_ui_capture(true));
     } else if !OOB_ACTIVE.load(Ordering::SeqCst) {
         write_ui_context("home");

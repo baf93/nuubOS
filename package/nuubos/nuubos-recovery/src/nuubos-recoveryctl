@@ -242,7 +242,7 @@ safe_mode()
                 echo "safe-mode=0"
             fi ;;
         clear)
-            rm -f "${RECOVERY:?}/safe-mode" "${RECOVERY:?}/ui-crashes" "$R/run/nuubos/ui-failed"
+            rm -f "${RECOVERY:?}/safe-mode" "${RECOVERY:?}/ui-crashes" "$R/run/nuubos/ui-crashes" "$R/run/nuubos/ui-failed"
             sync; event "safe-mode cleared"; echo OK ;;
         *) echo "ERR usage: safe-mode status|clear"; return 1 ;;
     esac

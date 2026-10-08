@@ -6,6 +6,6 @@ Copyright 2024 Fonticons, Inc.
 https://fontawesome.com/
 
 The original icon geometry is preserved. nuubOS applies fixed colors for predictable
-Slint rendering; the charging bolt additionally uses the same path as a dark outline
-underlay so the border follows the bolt silhouette exactly.
+Slint rendering; the charging bolt is split into a fill (bolt.svg) and the same path as an outline
+underlay (bolt-outline.svg), both recoloured from the theme at runtime.
 See LICENSE.txt in the icon directory for the complete Font Awesome Free license.

@@ -24,6 +24,7 @@ fn gen(rows: &[(&str, &str, &str, bool, i32)]) -> ModelRc<GenRow> {
             toggle: *tg >= 0,
             toggle_on: *tg == 1,
             enabled: true,
+            armed: false,
         })
         .collect();
     ModelRc::from(Rc::new(VecModel::from(v)))
@@ -69,6 +70,9 @@ fn quick_menu(win: &Rc<MinimalSoftwareWindow>) {
     qm.set_lifecycle_active(false);
     qm.set_battery_percent(78);
     qm.set_battery_label("78%".into());
+    qm.set_clock_label("14:32".into());
+    /* Battery Saver active: the glyph takes the warning colour. */
+    qm.set_battery_saver(true);
     qm.set_audio_output_label("Speaker • 64%".into());
     qm.set_audio_volume_fraction(0.64);
     qm.set_brightness_visible(true);
@@ -90,20 +94,57 @@ fn quick_menu(win: &Rc<MinimalSoftwareWindow>) {
         }
     }
 
+    /* Power OSD (power key, every context): Sleep, then Restart and Power
+     * Off armed. */
+    qm.set_power_osd_open(true);
+    qm.set_menu_panel_visible(false);
+    for (name, index, confirm) in [("power_menu", 0, false), ("power_armed", 2, true)] {
+        qm.set_power_osd_index(index);
+        qm.set_power_osd_confirm(confirm);
+        for (w, h) in sizes {
+            shot(win, w, h, name);
+        }
+    }
+    qm.set_power_osd_open(false);
+    qm.set_menu_panel_visible(true);
+
     /* Over a running game: GAME section first (Resume selected), the
-     * State Slot row (adjustable) and Quit waiting for its second press. */
+     * State Slot row (dropdown), the Performance Overlay switch and Quit
+     * waiting for its second press. */
     qm.set_audio_output_dropdown_open(false);
     qm.set_home_music_playing(false);
     qm.set_switch_user_visible(false);
     qm.set_game_section_visible(true);
     qm.set_game_slot_label("Slot 3".into());
-    for (name, sel, confirm) in [("qm_game", 8, -1), ("qm_game_slot", 11, -1), ("qm_game_quit", 14, 14)] {
+    qm.set_game_overlay_on(true);
+    for (name, sel, confirm) in [("qm_game", 8, -1), ("qm_game_slot", 11, -1), ("qm_game_overlay", 28, -1), ("qm_game_quit", 14, 14)] {
         qm.set_selected_index(sel);
         qm.set_game_confirm_index(confirm);
         for (w, h) in sizes {
             shot(win, w, h, name);
         }
     }
+    /* State Slot dropdown (every slot, save time or Empty). */
+    qm.set_selected_index(11);
+    let slot_options: Vec<slint::SharedString> = (0..10)
+        .map(|n| if n < 3 { format!("Slot {n} • today 21:0{n}") } else { format!("Slot {n} • Empty") }.into())
+        .collect();
+    qm.set_game_slot_options(ModelRc::from(Rc::new(VecModel::from(slot_options))));
+    qm.set_game_slot_dropdown_index(2);
+    qm.set_game_slot_dropdown_scroll(0);
+    qm.set_game_slot_dropdown_open(true);
+    for (w, h) in sizes {
+        shot(win, w, h, "qm_game_slot_dropdown");
+    }
+    qm.set_game_slot_dropdown_open(false);
+    /* Audio output dropdown over a game: the row is near the bottom, the
+     * dropdown opens above it. */
+    qm.set_selected_index(3);
+    qm.set_audio_output_dropdown_open(true);
+    for (w, h) in sizes {
+        shot(win, w, h, "qm_game_audio_dropdown");
+    }
+    qm.set_audio_output_dropdown_open(false);
     qm.set_game_section_visible(false);
     qm.set_game_confirm_index(-1);
     /* PC stream (EPIC-025): STREAM section with the sampled statistics. */
@@ -129,7 +170,7 @@ fn quick_menu(win: &Rc<MinimalSoftwareWindow>) {
     qm.set_stream_section_visible(false);
     qm.set_game_confirm_index(-1);
     /* Web Mode (EPIC-030): WEB section (Zoom adjustable), then the
-     * keyboard bottom sheet surface (236 logical px high). */
+     * keyboard bottom sheet surface (270 logical px high). */
     qm.set_web_section_visible(true);
     qm.set_web_zoom_label("110%".into());
     qm.set_web_ime_active(false);
@@ -151,7 +192,7 @@ fn quick_menu(win: &Rc<MinimalSoftwareWindow>) {
     qm.set_kb_mode_label("QWERTY".into());
     qm.set_kb_index(14);
     for w in [640u32, 720, 1280] {
-        shot(win, w, 236, "qm_keyboard");
+        shot(win, w, 270, "qm_keyboard");
     }
     qm.set_surface_mode(0);
     qm.set_menu_panel_visible(true);
@@ -259,13 +300,89 @@ fn main() {
         ("general_profile", Box::new(|ui| { ui.set_settings_view(24); ui.set_profile_index(0); })),
         ("general_users", Box::new(|ui| { ui.set_settings_view(25); ui.set_user_list_index(0); })),
         ("connectivity", Box::new(|ui| { ui.set_settings_selected_index(1); ui.set_settings_view(1); ui.set_connectivity_selected_index(4); })),
+        ("connectivity_services", Box::new(|ui| {
+            ui.set_connectivity_services(gen(&[(&s(ui, 600), "", "root@192.168.5.36", false, 1), (&s(ui, 602), "", "\\\\192.168.5.36\\nuubOS", false, 0),
+                (&s(ui, 603), "", "http://192.168.5.36", false, 0), (&s(ui, 172), "••••-••••-••••", &s(ui, 608), false, -1),
+                (&s(ui, 606), "", &s(ui, 607), false, -1), (&s(ui, 669), &s(ui, 54), &s(ui, 670), true, -1)]));
+            ui.set_settings_selected_index(1); ui.set_settings_view(1); ui.set_connectivity_selected_index(9); ui.set_connectivity_scroll(6);
+        })),
         ("wifi_list", Box::new(|ui| { ui.set_settings_view(2); ui.set_wifi_network_index(2); ui.set_wifi_network_scroll_offset(0); })),
-        ("display_audio", Box::new(|ui| { ui.set_settings_selected_index(4); ui.set_settings_view(18); ui.set_display_audio_index(5); ui.set_display_audio_scroll_offset(1); })),
-        ("system", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_settings_view(19); ui.set_system_index(4); ui.set_system_scroll_offset(0); })),
+        ("keyboard", Box::new(|ui| {
+            /* System keyboard bottom sheet (settings-view 6) entering a Wi-Fi password. */
+            let row = |keys: &[&str]| -> ModelRc<SharedString> {
+                ModelRc::from(Rc::new(VecModel::from(keys.iter().map(|k| SharedString::from(*k)).collect::<Vec<_>>())))
+            };
+            ui.set_keyboard_return_view(2);
+            ui.set_keyboard_row_zero(row(&["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]));
+            ui.set_keyboard_row_one(row(&["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]));
+            ui.set_keyboard_row_two(row(&["a", "s", "d", "f", "g", "h", "j", "k", "l", "⌫"]));
+            ui.set_keyboard_row_three(row(&["⇧", "z", "x", "c", "v", "b", "n", "m", "Space", "Done"]));
+            ui.set_keyboard_title(format!("{} • CasaBaf-5G", s(ui, 172)).into());
+            ui.set_keyboard_value("nuubos handheld".into());
+            ui.set_keyboard_index(14);
+            ui.set_settings_view(6);
+        })),
+        ("display_audio", Box::new(|ui| { ui.set_settings_selected_index(4); ui.set_settings_view(18); ui.set_display_audio_index(2); ui.set_display_audio_scroll_offset(0); })),
+        ("display_audio_sounds", Box::new(|ui| { ui.set_display_color_temperature_available(true); ui.set_display_audio_index(9); ui.set_display_audio_scroll_offset(5); })),
+        ("system", Box::new(|ui| { ui.set_display_color_temperature_available(false); ui.set_settings_selected_index(5); ui.set_settings_view(19); ui.set_system_index(4); ui.set_system_scroll_offset(0); })),
+        ("system_support", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_settings_view(19); ui.set_system_index(10); ui.set_system_scroll_offset(6); })),
         ("controllers", Box::new(|ui| { ui.set_settings_selected_index(2); ui.set_settings_view(0); })),
-        ("gaming_preview", Box::new(|ui| { ui.set_settings_selected_index(3); ui.set_settings_view(0); })),
+        ("lighting", Box::new(|ui| {
+            ui.set_lighting_supported(true); ui.set_lighting_effect("orbit".into()); ui.set_lighting_color("theme".into());
+            ui.set_lighting_brightness(60); ui.set_lighting_speed("normal".into()); ui.set_lighting_signals(0b10111);
+            ui.set_settings_selected_index(2); ui.set_settings_view(17); ui.set_lighting_index(1); ui.set_lighting_scroll(0);
+        })),
+        ("lighting_signals", Box::new(|ui| {
+            ui.set_lighting_effect("spectrum".into()); ui.set_lighting_index(7); ui.set_lighting_scroll(4);
+        })),
+        ("gaming_preview", Box::new(|ui| {
+            ui.set_settings_selected_index(3); ui.set_settings_view(0);
+            ui.set_gaming_rows(gen(&[(&s(ui, 584), "alice", "", true, -1),
+                (&s(ui, 767), "", &s(ui, 768), false, 0), (&s(ui, 769), "10", "", true, -1),
+                (&s(ui, 770), "", &s(ui, 771), false, 1), (&s(ui, 772), "", "", true, -1),
+                (&s(ui, 774), &s(ui, 54), "", true, -1), (&s(ui, 775), "", &s(ui, 776), false, 0),
+                (&s(ui, 777), "", &s(ui, 778), false, 1),
+                (&s(ui, 565), "nuubfan", &s(ui, 567), false, -1),
+                (&s(ui, 568), "", &s(ui, 569), false, -1), (&s(ui, 576), "", &s(ui, 581), true, -1)]));
+            ui.set_gaming_split(8);
+        })),
         ("gaming", Box::new(|ui| { ui.set_settings_selected_index(3); ui.set_settings_view(68); ui.set_gaming_index(3); })),
+        ("gaming_library", Box::new(|ui| { ui.set_gaming_index(9); })),
+        ("gaming_signout", Box::new(|ui| {
+            ui.set_gaming_index(8);
+            /* Sign Out waits for its confirming press. */
+            let rows = ui.get_gaming_rows();
+            if let Some(mut r) = rows.row_data(8) { r.armed = true; r.detail = s(ui, 191).into(); rows.set_row_data(8, r); }
+        })),
+        ("game_hotkeys", Box::new(|ui| {
+            ui.set_gaming_index(0);
+            ui.set_settings_view(55); ui.set_gen_index(1); ui.set_gen_scroll(0); ui.set_gen_split(0);
+            ui.set_gen_section(s(ui, 772).into()); ui.set_gen_select(true);
+            ui.set_gen_rows(gen(&[(&s(ui, 773), "", "", false, -1), (&s(ui, 417), &s(ui, 346), "", true, -1),
+                (&s(ui, 418), &s(ui, 345), "", true, -1), (&s(ui, 779), &s(ui, 341), "", true, -1),
+                (&s(ui, 780), &s(ui, 342), "", true, -1), (&s(ui, 781), &s(ui, 339), "", true, -1),
+                (&s(ui, 422), &s(ui, 351), "", true, -1), (&s(ui, 592), &s(ui, 347), "", true, -1)]));
+        })),
+        ("perf_overlay", Box::new(|ui| {
+            ui.set_settings_view(56); ui.set_gen_index(0); ui.set_gen_scroll(0);
+            ui.set_gen_section(s(ui, 774).into());
+            ui.set_gen_rows(gen(&[(&s(ui, 782), "", "", false, 1), (&s(ui, 783), "", "", false, 1),
+                ("CPU", "", "", false, 1), ("GPU", "", "", false, 0), (&s(ui, 784), "", "", false, 1),
+                (&s(ui, 785), "", "", false, 0), (&s(ui, 786), "", "", false, 1), (&s(ui, 787), "", "", false, 1)]));
+        })),
         ("restore", Box::new(|ui| { ui.set_settings_view(22); })),
+        ("start_game", Box::new(|ui| {
+            ui.set_details_active(true); ui.set_settings_view(57); ui.set_gen_index(0); ui.set_gen_scroll(0);
+            ui.set_details_title("Super Mario World".into()); ui.set_details_subtitle("".into());
+            ui.set_details_description("".into());
+            ui.set_gen_section("Super Mario World".into()); ui.set_gen_select(true);
+            let saved = |t: &str| s(ui, 766).replace("{0}", t);
+            ui.set_gen_rows(gen(&[(&s(ui, 763), &s(ui, 765), &saved("today • 21:14"), false, -1),
+                (&s(ui, 765), "", &saved("today • 21:14"), false, -1),
+                (&s(ui, 423).replace("{0}", "0"), "", &saved("yesterday • 18:02"), false, -1),
+                (&s(ui, 423).replace("{0}", "1"), "", &saved("today • 20:40"), false, -1),
+                (&s(ui, 764), "", "", false, -1)]));
+        })),
         ("game_details", Box::new(|ui| {
             ui.set_details_active(true); ui.set_settings_view(50); ui.set_gen_index(0); ui.set_gen_scroll(0);
             ui.set_details_title("Super Mario World".into()); ui.set_details_subtitle("Super Nintendo".into());
@@ -279,8 +396,11 @@ fn main() {
         ("game_delete", Box::new(|ui| {
             ui.set_details_active(true); ui.set_settings_view(50); ui.set_gen_index(3); ui.set_gen_scroll(0);
             ui.set_details_title("Super Mario World".into()); ui.set_gen_section("Super Nintendo".into());
-            ui.set_gen_rows(gen(&[(&s(ui, 540), "", &s(ui, 543), false, 0), (&s(ui, 549), "", "", false, -1),
+            ui.set_gen_rows(gen(&[(&s(ui, 525), "snes9x", "", false, -1), (&s(ui, 549), "", "", false, -1),
                 (&s(ui, 558), "", "snes/Super Mario World (USA).sfc", false, -1), (&s(ui, 544), "", &s(ui, 546), false, -1)]));
+            /* Delete Game waits for its confirming press. */
+            let rows = ui.get_gen_rows();
+            if let Some(mut r) = rows.row_data(3) { r.armed = true; rows.set_row_data(3, r); }
         })),
         ("game_settings", Box::new(|ui| {
             ui.set_details_active(true); ui.set_settings_view(51); ui.set_gen_index(1); ui.set_gen_scroll(0);
@@ -291,27 +411,18 @@ fn main() {
         })),
         ("bios", Box::new(|ui| {
             ui.set_details_active(false); ui.set_settings_selected_index(3); ui.set_settings_view(52); ui.set_gen_index(1); ui.set_gen_scroll(0);
-            ui.set_gen_section(s(ui, 576).into()); ui.set_gen_notice(s(ui, 581).into());
-            let p = s(ui, 582).replace("{0}", "1").replace("{1}", "3");
-            ui.set_gen_rows(gen(&[("PlayStation", &s(ui, 66), &p, true, -1), ("Mega-CD / Sega CD", &s(ui, 577), &p, true, -1),
-                ("Sega Saturn", &s(ui, 578), &p, true, -1), ("Game Boy", &s(ui, 579), &p, true, -1)]));
+            ui.set_gen_section(s(ui, 760).into()); ui.set_gen_notice("".into());
+            ui.set_gen_split(3); ui.set_gen_split_label(s(ui, 761).into());
+            let p = s(ui, 582).replace("{0}", "0").replace("{1}", "1");
+            ui.set_gen_rows(gen(&[("PlayStation", &s(ui, 66), "", true, -1), ("Sega Saturn", &s(ui, 577), &p, true, -1),
+                ("Game Boy", &s(ui, 579), "", true, -1), ("Mega-CD / Sega CD", &s(ui, 577), &p, true, -1),
+                ("Neo Geo", &s(ui, 578), &p, true, -1), ("Atari Lynx", &s(ui, 579), "", true, -1)]));
         })),
         ("achievements", Box::new(|ui| {
-            ui.set_details_active(false); ui.set_settings_selected_index(3); ui.set_settings_view(54); ui.set_gen_index(2); ui.set_gen_scroll(0);
+            ui.set_details_active(false); ui.set_settings_selected_index(3); ui.set_settings_view(54); ui.set_gen_index(2); ui.set_gen_scroll(0); ui.set_gen_split(0);
             ui.set_gen_section(s(ui, 584).into()); ui.set_gen_notice("".into());
             ui.set_gen_rows(gen(&[(&s(ui, 588), "alice", "", false, -1), (&s(ui, 112), "", "", false, 1),
                 (&s(ui, 585), "", &s(ui, 586), false, 0), (&s(ui, 567), "", "", false, -1)]));
-        })),
-        ("metadata", Box::new(|ui| {
-            ui.set_details_active(false); ui.set_settings_selected_index(3); ui.set_settings_view(55); ui.set_gen_index(2); ui.set_gen_scroll(0);
-            ui.set_gen_section(s(ui, 564).into());
-            ui.set_gen_rows(gen(&[(&s(ui, 564), &s(ui, 67), &s(ui, 569), false, -1), (&s(ui, 565), &s(ui, 566), "", false, -1),
-                (&s(ui, 568), &s(ui, 571), "", false, -1)]));
-        })),
-        ("hidden", Box::new(|ui| {
-            ui.set_details_active(false); ui.set_settings_selected_index(3); ui.set_settings_view(56); ui.set_gen_index(0); ui.set_gen_scroll(0);
-            ui.set_gen_section(s(ui, 541).into()); ui.set_gen_notice("".into());
-            ui.set_gen_rows(gen(&[("Tetris", "", "gb", false, 1), ("Pac-Man", "", "arcade", false, 1)]));
         })),
         ("web", Box::new(|ui| {
             ui.set_details_active(true); ui.set_details_has_cover(false); ui.set_settings_view(67); ui.set_gen_index(0); ui.set_gen_scroll(0);
@@ -330,7 +441,11 @@ fn main() {
             ui.set_details_active(false); ui.set_settings_north_hint("".into()); ui.set_settings_selected_index(5); ui.set_settings_view(27); ui.set_diag_index(0); ui.set_recovery_notice("nuubos-support-20261007-101500.tar.gz".into()); })),
         ("recovery", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_settings_view(28); ui.set_recovery_index(3); ui.set_recovery_armed(3); ui.set_recovery_stage(1); })),
         ("recovery_safe", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_safe_mode(true); ui.set_settings_view(28); ui.set_recovery_index(4); })),
+        ("safe_screen", Box::new(|ui| { ui.set_recovery_notice("".into()); ui.set_recovery_armed(-1); ui.set_recovery_stage(0); ui.set_active_user_id("u".into()); ui.set_safe_index(0); ui.set_safe_screen_open(true); })),
+        ("safe_screen_armed", Box::new(|ui| { ui.set_safe_index(5); ui.set_recovery_armed(5); ui.set_recovery_stage(0); })),
+        ("safe_screen_notice", Box::new(|ui| { ui.set_safe_index(2); ui.set_recovery_armed(-1); ui.set_recovery_stage(0); ui.set_recovery_notice("Support bundle saved: nuubos-support-20261008-070500.tar.gz".into()); })),
         ("dropdown", Box::new(|ui| {
+            ui.set_safe_screen_open(false); ui.set_recovery_notice("".into());
             ui.set_settings_view(19); ui.set_settings_choice_open(true); ui.set_settings_choice_title("Sleep After".into());
             let o: Vec<SettingsChoiceEntry> = ["Off","1 min","2 min","5 min","10 min","15 min","30 min","60 min"].iter().map(|s| SettingsChoiceEntry{ value: (*s).into(), label: (*s).into() }).collect();
             ui.set_settings_choice_options(ModelRc::from(Rc::new(VecModel::from(o)))); ui.set_settings_choice_index(2);
@@ -370,8 +485,19 @@ fn main() {
         ui.set_controller_remap_prompt(ui.get_i18n_strings().row_data(364).unwrap_or_default());
         ui.set_controller_remap_waiting(true);
     })));
+    scenes.push(("tester", Box::new(|ui| {
+        ui.set_controller_remap_waiting(false);
+        ui.set_settings_view(14);
+        ui.set_tester_face_east(true); ui.set_tester_dpad_left(true); ui.set_tester_l1(true);
+        ui.set_tester_left_trigger(40); ui.set_tester_left_x(70); ui.set_tester_left_y(-50);
+        ui.set_tester_r3(true); ui.set_tester_hotkey(true);
+        ui.set_tester_action("Face East  •  Button BTN_EAST".into());
+    })));
     scenes.push(("user_picker", Box::new(|ui| {
         ui.set_controller_remap_waiting(false);
+        ui.set_tester_face_east(false); ui.set_tester_dpad_left(false); ui.set_tester_l1(false);
+        ui.set_tester_left_trigger(0); ui.set_tester_left_x(0); ui.set_tester_left_y(0);
+        ui.set_tester_r3(false); ui.set_tester_hotkey(false);
         ui.set_settings_open(false);
         let users: Vec<UserProfileEntry> = ["Fabio", "Elisa", "Ospite"].iter().enumerate().map(|(i, n)| UserProfileEntry {
             id: format!("u{i}").into(), name: (*n).into(), avatar_spec: "".into(), avatar_path: "".into(),
@@ -559,17 +685,28 @@ fn main() {
         let img = if i % 3 == 0 { Some(cover(280, 200, (50 + (i as u8) * 12, 90, 160))) } else { None };
         card(0, t, "Super Nintendo  •  Never played", "Super Nintendo", 1.4, 0x6b5bc4, img, true, i == 2)
     }).collect());
-    scenes.push(("home_recent", Box::new(move |ui| {
+    /* Games copied but none played yet: the empty Recently Played card. */
+    let (shelf_only, apps_only) = (shelf.clone(), apps.clone());
+    scenes.push(("home_unplayed", Box::new(move |ui| {
         ui.set_topbar_controllers(ModelRc::default());
         ui.set_audio_bluetooth_available(false);
+        ui.set_home_recent(ModelRc::default()); ui.set_home_shelf(shelf_only.clone()); ui.set_home_apps(apps_only.clone());
+        ui.set_home_row(0); ui.set_home_empty_variant(2); ui.set_select_face_position(1);
+    })));
+    scenes.push(("home_recent", Box::new(move |ui| {
+        ui.set_home_empty_variant(0);
         ui.set_home_recent(recent.clone()); ui.set_home_shelf(shelf.clone()); ui.set_home_apps(apps.clone());
         ui.set_home_row(0); ui.set_home_recent_index(0); ui.set_context_face_position(0); ui.set_select_face_position(1);
     })));
     scenes.push(("home_recent_end", Box::new(|ui| { ui.set_home_recent_index(5); })));
     scenes.push(("home_shelf", Box::new(|ui| { ui.set_home_row(1); ui.set_home_shelf_index(2); })));
     scenes.push(("home_apps", Box::new(|ui| { ui.set_home_row(2); ui.set_home_apps_index(0); ui.set_library_scanning(true); })));
-    scenes.push(("home_grid", Box::new(move |ui| {
+    scenes.push(("home_apps_notice", Box::new(|ui| {
         ui.set_library_scanning(false);
+        ui.set_home_notice(ui.get_i18n_strings().row_data(411).unwrap_or_default());
+    })));
+    scenes.push(("home_grid", Box::new(move |ui| {
+        ui.set_library_scanning(false); ui.set_home_notice("".into());
         ui.set_library_games(grid.clone()); ui.set_library_aspect(1.4); ui.set_library_title("Super Nintendo".into());
         ui.set_library_detail("14 games".into()); ui.set_library_index(2); ui.set_library_open(true);
     })));
@@ -589,6 +726,11 @@ fn main() {
         t.set_accent_text(c(0xffe2cf)); t.set_focus_fill(c(0x3a2214)); t.set_text(c(0xf7f4f2));
         t.set_text_secondary(c(0xb3aaa4)); t.set_text_dim(c(0x988f89)); t.set_text_faint(c(0x857c76));
         t.set_background(c(0x100d0c)); t.set_surface(c(0x2b2522)); t.set_border(c(0x3b332f));
+    })));
+    /* The system keyboard follows the theme too. */
+    scenes.push(("keyboard_ember", Box::new(|ui| {
+        ui.set_battery_state("charging".into());
+        ui.set_settings_open(true); ui.set_settings_selected_index(1); ui.set_settings_view(6);
     })));
     for (name, f) in &scenes {
         f(&ui);
