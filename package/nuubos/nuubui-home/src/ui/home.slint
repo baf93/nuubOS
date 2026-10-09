@@ -22,6 +22,16 @@ component MarqueeText inherits Rectangle {
     out property <duration> scroll-time: root.overflow > 0px ? 320ms + root.scroll-duration * root.passes : 0ms;
     /* Reading this evaluates the animated position (used to restart). */
     out property <length> offset: marquee-label.x;
+    /* Armed shortly after creation: a marquee created with its text already
+     * set (the info bar of a just opened grid) would otherwise start at its
+     * end position with nothing changing, so it never scrolled until the
+     * text changed (user report 2026-10-09). The timer stops once armed. */
+    property <bool> armed: false;
+    arm-timer := Timer {
+        interval: 60ms;
+        running: !root.armed;
+        triggered => { root.armed = true; }
+    }
 
     background: #00000000;
     clip: true;
@@ -34,7 +44,7 @@ component MarqueeText inherits Rectangle {
         width: self.preferred-width;
         height: parent.height;
         vertical-alignment: center;
-        x: root.active && self.preferred-width > parent.width
+        x: root.active && root.armed && self.preferred-width > parent.width
             ? parent.width - self.preferred-width
             /* Overflowing text at rest shows its beginning, whatever the
              * alignment of text that fits. */
@@ -48,7 +58,7 @@ component MarqueeText inherits Rectangle {
             iteration-count: root.passes;
             direction: alternate;
             easing: linear;
-            enabled: root.active && self.preferred-width > parent.width;
+            enabled: root.active && root.armed && self.preferred-width > parent.width;
         }
     }
 }
@@ -283,11 +293,15 @@ component ControllerStatus inherits Rectangle {
         width: 8px;
         height: 8px;
         border-radius: 4px;
-        border-width: 1px;
-        border-color: Theme.background;
-        background: root.battery-percent >= 50 ? #43d17a
-            : root.battery-percent >= 20 ? Theme.warning : #ff5c5c;
+        /* Outline = fill under the dot (strokes are costly, FaceButtonDot). */
+        background: Theme.background;
         visible: root.battery-percent >= 0;
+        Rectangle {
+            x: 1px; y: 1px; width: 6px; height: 6px;
+            border-radius: 3px;
+            background: root.battery-percent >= 50 ? #43d17a
+                : root.battery-percent >= 20 ? Theme.warning : #ff5c5c;
+        }
     }
 }
 
@@ -409,10 +423,15 @@ component SettingsSectionHeader inherits Rectangle {
         width: scope-text.preferred-width + 14px;
         height: 18px;
         border-radius: Shape.extra-small;
-        background: #00000000;
-        border-width: 1px;
-        border-color: Theme.outline;
+        /* Outline = this fill under an inset page-coloured one: FemtoVG
+         * strokes take three stencil passes, a fill one. */
+        background: Theme.outline;
         visible: root.scope-label != "";
+        Rectangle {
+            x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+            border-radius: max(0px, Shape.extra-small - 1px);
+            background: Theme.background;
+        }
 
         scope-text := Text {
             x: 7px;
@@ -436,9 +455,14 @@ component SettingsToggle inherits Rectangle {
     width: 44px;
     height: 24px;
     border-radius: self.height / 2;
-    background: root.checked ? Theme.primary : Theme.surface-container-highest;
-    border-width: root.checked ? 0px : 2px;
-    border-color: Theme.outline;
+    /* Off: the outline is this fill under the inset track (no stroke). */
+    background: root.checked ? Theme.primary : Theme.outline;
+    Rectangle {
+        x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
+        border-radius: self.height / 2;
+        background: Theme.surface-container-highest;
+        visible: !root.checked;
+    }
 
     Rectangle {
         property <length> size: root.checked ? 18px : 12px;
@@ -491,11 +515,18 @@ component SettingsSelectableRow inherits Rectangle {
     property <length> value-right: root.width - 12px - root.accessory-width
         - (root.accessory-width > 0px ? 10px : 0px);
 
+    /* Outline = the row's own fill, the face an inset fill above it: one
+     * pass each instead of a stencil stroke (three passes in FemtoVG). */
+    property <length> outline-width: root.selected ? 2px : 1px;
     border-radius: Shape.medium;
-    background: root.armed ? Theme.error-container
-        : root.selected ? Theme.secondary-container : Theme.surface-container-low;
-    border-width: root.selected ? 2px : 1px;
-    border-color: root.armed ? Theme.error : root.selected ? Theme.primary : root.emphasized ? Theme.primary-container : Theme.surface-container-low;
+    background: root.armed ? Theme.error : root.selected ? Theme.primary : root.emphasized ? Theme.primary-container : Theme.surface-container-low;
+    Rectangle {
+        x: root.outline-width; y: root.outline-width;
+        width: parent.width - 2 * root.outline-width; height: parent.height - 2 * root.outline-width;
+        border-radius: max(0px, Shape.medium - root.outline-width);
+        background: root.armed ? Theme.error-container
+            : root.selected ? Theme.secondary-container : Theme.surface-container-low;
+    }
 
     SettingsToggle {
         x: parent.width - 12px - self.width;
@@ -525,10 +556,13 @@ component SettingsSelectableRow inherits Rectangle {
         width: 18px;
         height: 18px;
         border-radius: self.width / 2;
-        background: root.swatch;
-        border-width: 2px;
-        border-color: root.selected ? Theme.on-secondary-container : Theme.outline-variant;
+        background: root.selected ? Theme.on-secondary-container : Theme.outline-variant;
         visible: root.show-swatch && !root.toggle && !root.armed;
+        Rectangle {
+            x: 2px; y: 2px; width: 14px; height: 14px;
+            border-radius: 7px;
+            background: root.swatch;
+        }
     }
 
     Rectangle {
@@ -539,17 +573,20 @@ component SettingsSelectableRow inherits Rectangle {
         /* Avatar frames: rounded square, corner = 22% of the side (as the
          * Rust mask, AVATAR_CORNER in main.rs). */
         border-radius: self.width * 0.22;
-        border-width: 1px;
-        border-color: root.selected ? Theme.accent : Theme.border-soft;
-        background: #11151a;
-        clip: true;
+        /* Frame = fill under an inset fill (no stroke, no rounded clip). */
+        background: root.selected ? Theme.accent : Theme.border-soft;
         visible: root.show-preview && !root.toggle && !root.armed;
+        Rectangle {
+            x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+            border-radius: self.width * 0.22;
+            background: #11151a;
+        }
 
         Image {
-            x: parent.border-width;
-            y: parent.border-width;
-            width: parent.width - 2 * parent.border-width;
-            height: parent.height - 2 * parent.border-width;
+            x: 1px;
+            y: 1px;
+            width: parent.width - 2px;
+            height: parent.height - 2px;
             source: root.preview;
             image-fit: contain;
         }
@@ -732,6 +769,23 @@ component NavigationHint inherits Rectangle {
     }
 }
 
+component FaceButtonDot inherits Rectangle {
+    in property <bool> active: false;
+
+    /* Ring = an outer fill under an inner one, not border-width: FemtoVG
+     * strokes borders through the stencil buffer (three passes + state
+     * changes), a fill is one pass. */
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: root.active ? Theme.accent-light : Theme.text-disabled;
+    Rectangle {
+        x: 1px; y: 1px; width: 6px; height: 6px;
+        border-radius: 3px;
+        background: root.active ? Theme.accent : Theme.surface;
+    }
+}
+
 component FaceButtonHint inherits Rectangle {
     in property <int> active-position: -1;
 
@@ -739,46 +793,10 @@ component FaceButtonHint inherits Rectangle {
     height: 28px;
     background: #00000000;
 
-    Rectangle {
-        x: 10px;
-        y: 1px;
-        width: 8px;
-        height: 8px;
-        border-radius: 4px;
-        background: root.active-position == 0 ? Theme.accent : Theme.surface;
-        border-width: 1px;
-        border-color: root.active-position == 0 ? Theme.accent-light : Theme.text-disabled;
-    }
-    Rectangle {
-        x: 19px;
-        y: 10px;
-        width: 8px;
-        height: 8px;
-        border-radius: 4px;
-        background: root.active-position == 1 ? Theme.accent : Theme.surface;
-        border-width: 1px;
-        border-color: root.active-position == 1 ? Theme.accent-light : Theme.text-disabled;
-    }
-    Rectangle {
-        x: 10px;
-        y: 19px;
-        width: 8px;
-        height: 8px;
-        border-radius: 4px;
-        background: root.active-position == 2 ? Theme.accent : Theme.surface;
-        border-width: 1px;
-        border-color: root.active-position == 2 ? Theme.accent-light : Theme.text-disabled;
-    }
-    Rectangle {
-        x: 1px;
-        y: 10px;
-        width: 8px;
-        height: 8px;
-        border-radius: 4px;
-        background: root.active-position == 3 ? Theme.accent : Theme.surface;
-        border-width: 1px;
-        border-color: root.active-position == 3 ? Theme.accent-light : Theme.text-disabled;
-    }
+    FaceButtonDot { x: 10px; y: 1px; active: root.active-position == 0; }
+    FaceButtonDot { x: 19px; y: 10px; active: root.active-position == 1; }
+    FaceButtonDot { x: 10px; y: 19px; active: root.active-position == 2; }
+    FaceButtonDot { x: 1px; y: 10px; active: root.active-position == 3; }
 }
 
 
@@ -1056,6 +1074,10 @@ export struct HomeCard {
     accent: color,
     available: bool,
     favorite: bool,
+    /* Focus of a cached card, set by Rust only on the cards that change
+     * (library.rs sync_focus): a binding on the shared index would mark
+     * every card layer dirty on every move. */
+    focused: bool,
 }
 
 /* Five-point star, own geometry (no third-party icon). */
@@ -1088,23 +1110,33 @@ component HomeFocusRing inherits Rectangle {
     in property <length> radius;
     in property <bool> shown: false;
 
-    background: #00000000;
-    opacity: root.shown ? 1.0 : 0.0;
-    animate opacity { duration: 140ms; easing: ease-out; }
+    /* The fade animates the fill colours, not `opacity`: an Opacity
+     * below 1 over several children renders them through an offscreen
+     * layer on every frame, even at 0 and even when clipped out, and every
+     * card carries a ring. Hidden rings are not drawn at all. */
+    property <float> fade: root.shown ? 1.0 : 0.0;
+    animate fade { duration: 140ms; easing: ease-out; }
 
+    background: #00000000;
+    visible: root.fade > 0.0;
+
+    /* Glow, ring and the dark gap as stacked fills, not border-width:
+     * FemtoVG strokes take three stencil passes, a fill one. The card is
+     * drawn over the gap fill. */
     Rectangle {
         x: -9px; y: -9px; width: parent.width + 18px; height: parent.height + 18px;
         border-radius: root.radius + 9px;
-        background: #00000000;
-        border-width: 4px;
-        border-color: Theme.accent.transparentize(0.8);
+        background: Theme.accent.transparentize(1.0 - 0.2 * root.fade);
     }
     Rectangle {
         x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px;
         border-radius: root.radius + 6px;
-        background: #00000000;
-        border-width: 3px;
-        border-color: Theme.primary;
+        background: Theme.primary.transparentize(1.0 - root.fade);
+    }
+    Rectangle {
+        x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px;
+        border-radius: root.radius + 3px;
+        background: Theme.background;
     }
 }
 
@@ -1122,6 +1154,10 @@ component HomeFocusRing inherits Rectangle {
 component HomeCardView inherits Rectangle {
     in property <HomeCard> card;
     in property <bool> focused: false;
+    /* False when the container draws the ring outside the card's cached
+     * layer (cache-rendering-hint): a focus change then leaves the layer
+     * valid instead of re-rendering it into a new texture. */
+    in property <bool> draw-ring: true;
     in property <bool> dimmed: false;
     in property <string> unavailable-label: "";
 
@@ -1136,8 +1172,10 @@ component HomeCardView inherits Rectangle {
 
     background: #00000000;
 
-    /* Glow + ring, detached from the card by a dark gap. */
-    HomeFocusRing {
+    /* Glow + ring, detached from the card by a dark gap. Not even
+     * instantiated when the container draws it: its fade animation would
+     * tie a cached layer to the animation driver. */
+    if root.draw-ring: HomeFocusRing {
         width: parent.width; height: parent.height;
         radius: root.radius;
         shown: root.focused;
@@ -1149,8 +1187,6 @@ component HomeCardView inherits Rectangle {
         border-radius: root.radius;
         background: root.focused ? Theme.secondary-container : Theme.surface-container;
         visible: root.tile || !root.card.has-cover;
-        border-width: 1px;
-        border-color: root.focused ? Theme.secondary-container : Theme.surface-container;
 
         /* Game placeholder: title in the lower-left corner. */
         if !root.tile: Text {
@@ -1229,9 +1265,13 @@ component HomeCardView inherits Rectangle {
             width: min(parent.width - 2 * root.inset, badge-text.preferred-width + self.label-size * 1.4);
             height: self.label-size * 1.9;
             border-radius: self.height / 2;
-            background: #0d0e10e0;
-            border-width: 1px;
-            border-color: #3a3e45;
+            /* Outline = fill under the pill (no stroke). */
+            background: #3a3e45;
+            Rectangle {
+                x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                border-radius: self.height / 2;
+                background: #0d0e10f0;
+            }
             badge-text := Text {
                 x: parent.label-size * 0.7; width: parent.width - parent.label-size * 1.4; height: parent.height;
                 text: root.unavailable-label;
@@ -1254,6 +1294,8 @@ component HomeCardView inherits Rectangle {
 component HomeTileView inherits Rectangle {
     in property <HomeCard> card;
     in property <bool> focused: false;
+    /* See HomeCardView.draw-ring. */
+    in property <bool> draw-ring: true;
     in property <bool> dimmed: false;
     in property <float> s: 1.0;
 
@@ -1265,17 +1307,21 @@ component HomeTileView inherits Rectangle {
 
     background: #00000000;
 
-    HomeFocusRing {
+    if root.draw-ring: HomeFocusRing {
         width: parent.width; height: parent.height;
         radius: root.radius;
         shown: root.focused;
     }
 
+    /* No animated property inside the tile: it is cached in a layer, and an
+     * animation binding makes the layer depend on the animation driver, so
+     * every tile layer was re-rendered on the first frame after the UI went
+     * idle (~40 ms, a missed frame on each new move). The ring outside the
+     * layer carries the focus fade. */
     Rectangle {
         width: parent.width; height: parent.height;
         border-radius: root.radius;
         background: root.focused ? Theme.secondary-container : Theme.surface-container;
-        animate background { duration: 150ms; easing: ease-out; }
 
         well := Rectangle {
             x: 14px * root.s; y: (parent.height - root.well) / 2;
@@ -1315,13 +1361,23 @@ component HomeTileView inherits Rectangle {
             height: parent.height;
             alignment: center;
             spacing: 2px * root.s;
-            MarqueeText {
+            /* Marquee (animated) only on the focused tile, see above. */
+            if root.focused: MarqueeText {
                 height: 24px * root.s;
                 label: root.card.title;
                 text-color: root.ink;
                 text-size: 18px * root.s;
                 text-weight: 600;
-                active: root.focused;
+                active: true;
+            }
+            if !root.focused: Text {
+                height: 24px * root.s;
+                text: root.card.title;
+                overflow: elide;
+                vertical-alignment: center;
+                color: root.ink;
+                font-size: 18px * root.s;
+                font-weight: 600;
             }
             if root.card.detail != "": Text {
                 height: 19px * root.s;
@@ -1387,7 +1443,8 @@ component HomeInfoChip inherits Rectangle {
 
     property <color> ink: root.warn ? Theme.warning : root.dimmed ? Theme.text-secondary : Theme.text;
     height: 30px * root.s;
-    width: label.preferred-width + (root.has-icon || root.has-dot ? 34px : 22px) * root.s;
+    /* Same margin right as left of the content (11 px). */
+    width: label.preferred-width + (root.has-icon || root.has-dot ? 39px : 22px) * root.s;
     border-radius: self.height / 2;
     background: root.warn ? Theme.warning.transparentize(0.86) : Theme.surface-container-high.transparentize(0.2);
 
@@ -1424,28 +1481,42 @@ component HomeInfoPanel inherits Rectangle {
     in property <string> unavailable-label;
     in property <float> s: 1.0;
     in property <bool> dimmed: false;
+    /* One line (library grid, user request 2026-10-09: more room for the
+     * covers): title on the left, chips or notice right-aligned. */
+    in property <bool> compact: false;
+    property <length> line-h: 30px * root.s;
+    property <length> side-w: min(chip-row.preferred-width, root.width * 0.62);
 
     background: #00000000;
     MarqueeText {
-        x: 0; y: 0; width: parent.width; height: 32px * root.s;
+        x: 0;
+        y: root.compact ? (parent.height - self.height) / 2 : 0;
+        width: root.compact ? max(0px, parent.width - root.side-w - 16px * root.s) : parent.width;
+        height: root.compact ? 28px * root.s : 32px * root.s;
         label: root.card.title;
         active: !root.dimmed;
         text-color: root.dimmed ? Theme.text-secondary : Theme.text;
-        text-size: 24px * root.s;
+        text-size: root.compact ? 20px * root.s : 24px * root.s;
         text-weight: 700;
     }
     if root.notice != "": MarqueeText {
-        x: 0; y: 38px * root.s; width: parent.width; height: 30px * root.s;
+        x: root.compact ? parent.width - self.width : 0;
+        y: root.compact ? (parent.height - root.line-h) / 2 : 38px * root.s;
+        width: root.compact ? root.width * 0.5 : parent.width; height: root.line-h;
+        align-right: root.compact;
         label: root.notice;
         active: true;
         text-color: #ffc94a;
         text-size: 15px * root.s;
         text-weight: 500;
     }
-    if root.notice == "": Rectangle {
-        x: 0; y: 38px * root.s; width: parent.width; height: 30px * root.s;
+    Rectangle {
+        visible: root.notice == "";
+        x: root.compact ? parent.width - self.width : 0;
+        y: root.compact ? (parent.height - root.line-h) / 2 : 38px * root.s;
+        width: root.compact ? root.side-w : parent.width; height: root.line-h;
         clip: true;
-        HorizontalLayout {
+        chip-row := HorizontalLayout {
             alignment: start;
             spacing: 8px * root.s;
             if !root.card.available: HomeInfoChip {
@@ -1499,9 +1570,13 @@ component HomeEmptyCard inherits Rectangle {
     Rectangle {
         width: parent.width; height: parent.height;
         border-radius: root.radius;
-        background: root.focused ? Theme.secondary-container : Theme.surface-container-low;
-        border-width: 1px;
-        border-color: root.focused ? Theme.secondary-container : Theme.outline-variant;
+        /* Outline = this fill under an inset one (no stroke). */
+        background: root.focused ? Theme.secondary-container : Theme.outline-variant;
+        Rectangle {
+            x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+            border-radius: max(0px, root.radius - 1px);
+            background: root.focused ? Theme.secondary-container : Theme.surface-container-low;
+        }
 
         /* Icon in a tonal circle, text beside it. */
         icon-bubble := Rectangle {
@@ -1636,21 +1711,37 @@ component HomeRow inherits Rectangle {
                 height: root.card-h;
                 background: #00000000;
 
+                /* Ring outside the cached card layer (draw-ring: false). */
+                HomeFocusRing {
+                    width: parent.width; height: parent.height;
+                    radius: root.chips ? Shape.large : max(Shape.medium, parent.height * 0.06);
+                    shown: root.active && i == root.index;
+                }
                 if !root.chips: HomeCardView {
                     width: parent.width; height: parent.height;
                     cache-rendering-hint: true;
+                    draw-ring: false;
                     card: card;
-                    focused: root.active && i == root.index;
-                    dimmed: !root.active;
+                    focused: card.focused;
                     unavailable-label: root.unavailable-label;
                 }
                 if root.chips: HomeTileView {
                     width: parent.width; height: parent.height;
                     cache-rendering-hint: true;
+                    draw-ring: false;
                     card: card;
-                    focused: root.active && i == root.index;
-                    dimmed: !root.active;
+                    focused: card.focused;
                     s: root.s;
+                }
+                /* An inactive row recedes under a scrim drawn outside the
+                 * cached tile layers: changing their ink would re-render
+                 * every tile layer of both rows on each row change (Slint
+                 * re-renders a dirty layer even when it is clipped out). */
+                if root.chips: Rectangle {
+                    width: parent.width; height: parent.height;
+                    border-radius: Shape.large;
+                    background: Theme.background.transparentize(0.62);
+                    visible: !root.active;
                 }
             }
         }
@@ -2321,7 +2412,7 @@ export component HomeWindow inherits Window {
     callback splash-size-changed();
     changed width => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
     changed height => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
-    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Automatic Backup", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Back Up Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Back Up to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores power, display, audio, backup and controller mapping settings to their defaults.", "Games, BIOS, saves, users and network settings are kept.", "Press again to reset system settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Solid", "Breathing", "Orbit", "Aurora", "Spectrum", "Battery Level", "Console Colors", "Speed", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Effect", "Brightness", "Color", "SYSTEM SIGNALS", "LIGHTING", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "Slow", "Normal", "Fast", "Startup & Sleep", "Connections", "Games", "Tasks", "Welcome, sleep, wake and power off", "Low battery, charging and full charge", "Controllers, headphones, Wi-Fi and USB drives", "Save states, screenshots and errors", "Downloads, backups and failures", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Save Diagnostic Report", "Saving diagnostic report…", "Report saved", "The report could not be saved", "Useful for getting help. It contains no games, saves, passwords or Wi-Fi keys and is saved in the diagnostics folder.", "Repair Settings", "Check complete", "The operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Full Factory Reset", "Finds and fixes damaged settings files. Games and saves are not touched.", "Resets the current user's preferences, controls and app settings. Saves are kept. The console restarts.", "Erases users, settings, Wi-Fi networks and Bluetooth pairings, then starts the initial setup. Games and BIOS are kept.", "Like Factory Reset, and also erases every user's saves, states, screenshots and app data. Games and BIOS are kept.", "Press again to confirm • the console restarts", "Press once more to also erase all saves", "Safe Mode", "The interface closed unexpectedly several times. nuubOS started with the default theme so you can fix the problem.", "Restart Normally", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Integer Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available in this build", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Diagnostic report", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in as root with the device password", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Theme", "Theme installed", "This is not a valid nuubOS theme", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY", "Connect with WPS", "Cancel WPS", "Press the WPS button on your router…", "WPS timed out. Press the router button and try again.", "Several routers are in WPS mode. Try again in a few minutes.", "WPS failed: {0}", "WPS connection failed", "Leaves safe mode and restarts with your theme and settings.", "Connect to Wi-Fi or turn on Remote Services to get help remotely. Back returns here.", "Nothing played yet", "Your adventure log is a blank page. Pick a game and write chapter one!", "Fresh save file", "No games played so far. The controller is warmed up and ready.", "Player 1, ready?", "Your recently played games will appear here. Go make some history!", "Zero high scores… for now", "Start any game and it will be waiting right here for you.", "This shelf is gathering dust", "Insert coin… or better, some games", "The arcade is quiet. Too quiet.", "Nothing to launch yet", "Applications you add will appear here.", "SERVICES", "DISPLAY", "AUDIO", "SOUNDS", "POWER", "STORAGE & SOFTWARE", "TROUBLESHOOTING", "CONTROLLERS", "RUMBLE & LIGHTING", "Saved Backups", "Backup deleted", "The backup could not be deleted", "Network name (SSID)", "Press together to exit", "Lights up only for system signals", "One steady color", "Slowly fades in and out", "A comet of light circles the stick", "Soft shades drift around the ring", "Every color, slowly turning", "Charge left at a glance, pulses while charging", "The color of the system you are playing", "Theme Color", "Cyan", "Mint", "Lime", "Amber", "Orange", "Red", "Pink", "Violet", "White", "Custom", "YOUR SYSTEMS", "OTHER SYSTEMS", "Start Game", "Continue", "Start from the Beginning", "Automatic Save", "Saved {0}", "Console Boot Screens", "Shows the console's start-up logo when its BIOS is available", "Save State Slots", "Rotate Save Slots", "Each save goes to the next slot, then starts again from slot 0", "Game Hotkeys", "Hold Hotkey and press a button", "Performance Overlay", "Bezels", "Frames the game when it does not fill the screen", "CRT Effect", "Scanlines for consoles played on TVs", "Next Slot", "Previous Slot", "Fast Forward", "Show Overlay", "Frame Rate", "Temperature", "Power Draw", "Battery", "Clock", "Empty"];
+    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Automatic Backup", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Back Up Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Back Up to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores power, display, audio, backup and controller mapping settings to their defaults.", "Games, BIOS, saves, users and network settings are kept.", "Press again to reset system settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Solid", "Breathing", "Orbit", "Aurora", "Spectrum", "Battery Level", "Console Colors", "Speed", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Effect", "Brightness", "Color", "SYSTEM SIGNALS", "LIGHTING", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "Slow", "Normal", "Fast", "Startup & Sleep", "Connections", "Games", "Tasks", "Welcome, sleep, wake and power off", "Low battery, charging and full charge", "Controllers, headphones, Wi-Fi and USB drives", "Save states, screenshots and errors", "Downloads, backups and failures", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Save Diagnostic Report", "Saving diagnostic report…", "Report saved", "The report could not be saved", "Useful for getting help. It contains no games, saves, passwords or Wi-Fi keys and is saved in the diagnostics folder.", "Repair Settings", "Check complete", "The operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Full Factory Reset", "Finds and fixes damaged settings files. Games and saves are not touched.", "Resets the current user's preferences, controls and app settings. Saves are kept. The console restarts.", "Erases users, settings, Wi-Fi networks and Bluetooth pairings, then starts the initial setup. Games and BIOS are kept.", "Like Factory Reset, and also erases every user's saves, states, screenshots and app data. Games and BIOS are kept.", "Press again to confirm • the console restarts", "Press once more to also erase all saves", "Safe Mode", "The interface closed unexpectedly several times. nuubOS started with the default theme so you can fix the problem.", "Restart Normally", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Integer Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Diagnostic report", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in as root with the device password", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Theme", "Theme installed", "This is not a valid nuubOS theme", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY", "Connect with WPS", "Cancel WPS", "Press the WPS button on your router…", "WPS timed out. Press the router button and try again.", "Several routers are in WPS mode. Try again in a few minutes.", "WPS failed: {0}", "WPS connection failed", "Leaves safe mode and restarts with your theme and settings.", "Connect to Wi-Fi or turn on Remote Services to get help remotely. Back returns here.", "Nothing played yet", "Your adventure log is a blank page. Pick a game and write chapter one!", "Fresh save file", "No games played so far. The controller is warmed up and ready.", "Player 1, ready?", "Your recently played games will appear here. Go make some history!", "Zero high scores… for now", "Start any game and it will be waiting right here for you.", "This shelf is gathering dust", "Insert coin… or better, some games", "The arcade is quiet. Too quiet.", "Nothing to launch yet", "Applications you add will appear here.", "SERVICES", "DISPLAY", "AUDIO", "SOUNDS", "POWER", "STORAGE & SOFTWARE", "TROUBLESHOOTING", "CONTROLLERS", "RUMBLE & LIGHTING", "Saved Backups", "Backup deleted", "The backup could not be deleted", "Network name (SSID)", "Press together to exit", "Lights up only for system signals", "One steady color", "Slowly fades in and out", "A comet of light circles the stick", "Soft shades drift around the ring", "Every color, slowly turning", "Charge left at a glance, pulses while charging", "The color of the system you are playing", "Theme Color", "Cyan", "Mint", "Lime", "Amber", "Orange", "Red", "Pink", "Violet", "White", "Custom", "YOUR SYSTEMS", "OTHER SYSTEMS", "Start Game", "Continue", "Start from the Beginning", "Automatic Save", "Saved {0}", "Console Boot Screens", "Shows the console's start-up logo when its BIOS is available", "Save State Slots", "Rotate Save Slots", "Each save goes to the next slot, then starts again from slot 0", "Game Hotkeys", "Hold Hotkey and press a button", "Performance Overlay", "Bezels", "Frames the game when it does not fill the screen", "CRT Effect", "Scanlines for consoles played on TVs", "Next Slot", "Previous Slot", "Fast Forward", "Show Overlay", "Frame Rate", "Temperature", "Power Draw", "Battery", "Clock", "Empty", "{0}%", "The metadata service is busy, try again later", "Uppercase", "Metadata Source", "Covers, screenshots, descriptions and ratings in your language. A free ScreenScraper account gives more requests.", "Covers, screenshots and descriptions in English. A free private API key gives more requests.", "Covers and screenshots only. No account needed.", "TheGamesDB API Key", "Not set", "Fill Missing Data", "Adds only what is missing, such as covers or descriptions. What is already there is kept.", "Search Name", "Searched as \"{0}\". Change it if the game is not found or the match is wrong.", "Source: {0}", "Optional: more requests per day", "Scan for New Games", "Finds games copied to the SD card since the last scan", "New games found: {0}", "No new games found", "BACKGROUND TASK", "Stop", "Stopping…", "Starting game…"];
 
     in-out property <string> topbar-time: "--:--";
     in-out property <string> current-user-name: root.i18n-strings[204];
@@ -2353,6 +2444,16 @@ export component HomeWindow inherits Window {
     in-out property <int> home-empty-variant: 0;
     in-out property <string> home-notice: "";
     in-out property <bool> library-open: false;
+    /* Game loading screen (user request 2026-10-09): shown from the launch
+     * request until the game session ends; the bar animates only while
+     * the game is starting (busy), so Home stops drawing under RetroArch. */
+    in property <bool> launch-open: false;
+    in property <bool> launch-busy: false;
+    in property <string> launch-title;
+    in property <string> launch-system;
+    in property <color> launch-accent;
+    in property <image> launch-cover;
+    in property <bool> launch-has-cover: false;
     in-out property <string> library-title: "";
     in-out property <string> library-detail: "";
     in-out property <[HomeCard]> library-games: [];
@@ -2396,8 +2497,11 @@ export component HomeWindow inherits Window {
     property <length> home-v-scroll: root.home-row == 0 ? 0px
         : min(root.home-row == 1 ? root.home-y1 : root.home-y2, root.home-max-scroll);
     /* System / collection page: a header with the platform's identity. */
-    property <length> library-head-h: 80px * root.home-s;
-    property <length> library-view-h: root.home-rows-h - root.library-head-h - root.home-info-h;
+    /* Compact header and one-line info bar (user request 2026-10-09:
+     * they took too much of the grid's height). */
+    property <length> library-head-h: 44px * root.home-s;
+    property <length> library-info-h: 46px * root.home-s;
+    property <length> library-view-h: root.home-rows-h - root.library-head-h - root.library-info-h;
     /* Grid density: about one column per 320 logical px (2 on handhelds,
      * up to 5 on wide screens); a cover uses up to 82 % of the grid height. */
     property <int> library-target-columns: max(2, min(5, round(root.width / 320px)));
@@ -3181,13 +3285,15 @@ export component HomeWindow inherits Window {
         }
     }
 
-    /* HOME stays completely still behind the lifecycle curtain. */
+    /* HOME stays completely still behind the lifecycle curtain.
+     * No background here or on home-view: the window clear already paints
+     * Theme.background, and every full-screen fill is a whole shading pass
+     * the single-core Mali pays per frame (1080p HDMI is fill-bound). */
     Rectangle {
         x: 0;
         y: 0;
         width: parent.width;
         height: parent.height;
-        background: Theme.background;
 
         /* Topbar: matte background shared with the Quick Menu. */
         Rectangle {
@@ -3235,18 +3341,22 @@ export component HomeWindow inherits Window {
                 width: 28px;
                 height: 28px;
                 border-radius: self.width * 0.22;
-                border-width: 1px;
-                border-color: root.current-user-avatar-available ? Theme.accent : Theme.border-soft;
-                background: #11151a;
-                clip: true;
+                /* Frame = this fill under an inset one (no stroke, no
+                 * rounded clip: both go through the stencil buffer). */
+                background: root.current-user-avatar-available ? Theme.accent : Theme.border-soft;
+                Rectangle {
+                    x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                    border-radius: self.width * 0.22;
+                    background: #11151a;
+                }
 
                 /* Avatar arrives pre-masked (Rust round_avatar); inset it
-                 * inside the frame so the border stays visible. */
+                 * inside the frame so the frame stays visible. */
                 Image {
-                    x: parent.border-width;
-                    y: parent.border-width;
-                    width: parent.width - 2 * parent.border-width;
-                    height: parent.height - 2 * parent.border-width;
+                    x: 1px;
+                    y: 1px;
+                    width: parent.width - 2px;
+                    height: parent.height - 2px;
                     source: root.current-user-avatar;
                     image-fit: contain;
                     visible: root.current-user-avatar-available;
@@ -3341,7 +3451,6 @@ export component HomeWindow inherits Window {
             y: 50px;
             width: parent.width;
             height: parent.height - 102px;
-            background: Theme.background;
             visible: !root.settings-open;
             clip: true;
 
@@ -3478,9 +3587,9 @@ export component HomeWindow inherits Window {
                     colorize: root.library-card.accent.transparentize(0.78);
                 }
                 lib-well := Rectangle {
-                    property <length> d: 52px * root.home-s;
-                    property <length> icon: self.d * 0.58;
-                    x: root.home-pad; y: (root.library-head-h - self.d) / 2 - 8px * root.home-s;
+                    property <length> d: 30px * root.home-s;
+                    property <length> icon: self.d * 0.62;
+                    x: root.home-pad; y: (root.library-head-h - self.d) / 2 - 6px * root.home-s;
                     width: self.d; height: self.d;
                     border-radius: Shape.medium;
                     background: root.library-card.kind == 3 ? root.library-card.accent.transparentize(0.3)
@@ -3502,27 +3611,26 @@ export component HomeWindow inherits Window {
                         colorize: #ffffff;
                     }
                 }
-                VerticalLayout {
-                    x: lib-well.x + lib-well.width + 14px * root.home-s;
-                    y: lib-well.y - 2px * root.home-s;
+                /* One line: name, then the game count (or scan status). */
+                HorizontalLayout {
+                    x: lib-well.x + lib-well.width + 12px * root.home-s;
+                    y: lib-well.y;
                     width: parent.width - self.x - root.home-pad;
-                    height: lib-well.height + 4px * root.home-s;
-                    alignment: center;
-                    spacing: 2px * root.home-s;
+                    height: lib-well.height;
+                    alignment: start;
+                    spacing: 12px * root.home-s;
                     MarqueeText {
-                        height: 32px * root.home-s;
+                        width: min(self.content-width, parent.width - lib-count.preferred-width - 12px * root.home-s);
                         label: root.library-title;
                         active: true;
                         text-color: Theme.text;
-                        text-size: 24px * root.home-s;
+                        text-size: 20px * root.home-s;
                         text-weight: 700;
                     }
-                    Text {
-                        height: 20px * root.home-s;
+                    lib-count := Text {
                         text: home-view.status != "" ? home-view.status : root.library-detail;
                         color: Theme.text-secondary;
-                        font-size: 15px * root.home-s;
-                        overflow: elide;
+                        font-size: 14px * root.home-s;
                         vertical-alignment: center;
                     }
                 }
@@ -3541,17 +3649,39 @@ export component HomeWindow inherits Window {
                         height: library-grid.row-count * library-grid.step;
                         animate y { duration: 280ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
 
-                        for card[i] in root.library-games: HomeCardView {
-                            cache-rendering-hint: true;
-                            property <bool> wide: card.aspect > root.library-aspect;
-                            width: self.wide ? root.library-cell-w : root.library-cell-h * card.aspect;
-                            height: self.wide ? root.library-cell-w / card.aspect : root.library-cell-h;
-                            x: library-grid.grid-x + mod(i, root.library-columns) * (root.library-cell-w + root.home-gap)
-                                + (root.library-cell-w - self.width) / 2;
-                            y: floor(i / root.library-columns) * library-grid.step + (root.library-cell-h - self.height) / 2;
-                            card: card;
-                            focused: i == root.library-index;
-                            unavailable-label: root.i18n-strings[205];
+                        /* Only rows near the visible ones instantiate a card:
+                         * a system can hold hundreds of games, and every card
+                         * keeps its GPU layer (and cover texture) until it is
+                         * destroyed, even while clipped out. */
+                        for card[i] in root.library-games: cell := Rectangle {
+                            property <int> grid-row: floor(i / root.library-columns);
+                            x: library-grid.grid-x + mod(i, root.library-columns) * (root.library-cell-w + root.home-gap);
+                            y: self.grid-row * library-grid.step;
+                            width: root.library-cell-w;
+                            height: root.library-cell-h;
+                            background: #00000000;
+                            if abs(cell.grid-row - library-grid.focus-row) <= root.library-visible-rows + 1: Rectangle {
+                                property <bool> wide: card.aspect > root.library-aspect;
+                                width: self.wide ? root.library-cell-w : root.library-cell-h * card.aspect;
+                                height: self.wide ? root.library-cell-w / card.aspect : root.library-cell-h;
+                                x: (root.library-cell-w - self.width) / 2;
+                                y: (root.library-cell-h - self.height) / 2;
+                                background: #00000000;
+                                /* Ring outside the cached card layer. */
+                                HomeFocusRing {
+                                    width: parent.width; height: parent.height;
+                                    radius: max(Shape.medium, parent.height * 0.06);
+                                    shown: i == root.library-index;
+                                }
+                                HomeCardView {
+                                    width: parent.width; height: parent.height;
+                                    cache-rendering-hint: true;
+                                    draw-ring: false;
+                                    card: card;
+                                    focused: card.focused;
+                                    unavailable-label: root.i18n-strings[205];
+                                }
+                            }
                         }
                     }
                     Rectangle {
@@ -3564,9 +3694,10 @@ export component HomeWindow inherits Window {
 
                 if root.home-focus-valid: HomeInfoPanel {
                     x: root.home-pad;
-                    y: root.library-head-h + root.library-view-h + 12px * root.home-s;
+                    y: root.library-head-h + root.library-view-h + 8px * root.home-s;
                     width: parent.width - 2 * root.home-pad;
-                    height: root.home-info-h - 12px * root.home-s;
+                    height: root.library-info-h - 8px * root.home-s;
+                    compact: true;
                     card: root.home-focused;
                     notice: root.home-notice;
                     unavailable-label: root.i18n-strings[205];
@@ -5161,6 +5292,84 @@ export component HomeWindow inherits Window {
      * mildly with the height, so 640x480 stays compact and TV stays legible.
      * Step 0 greets in every UI language on a rolling drum (the Timer runs
      * only on that step) above the language selector (left/right). */
+    /* Game loading screen: the game's cover, title and system, an M3
+     * linear indeterminate bar (fills only) and "Starting game…". */
+    launch-view := Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: Theme.background;
+        visible: root.launch-open;
+        property <float> s: root.home-s;
+        property <length> cover-h: min(parent.height * 0.46, 340px * self.s);
+        property <float> aspect: root.launch-has-cover && root.launch-cover.height > 0
+            ? max(0.5, min(1.8, root.launch-cover.width / root.launch-cover.height)) : 0.75;
+        TouchArea { }
+        Rectangle {
+            width: parent.width; height: parent.height * 0.6; y: 0;
+            background: @linear-gradient(180deg, root.launch-accent.transparentize(0.78) 0%,
+                Theme.background.transparentize(1.0) 100%);
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 14px * launch-view.s;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: launch-view.cover-h * launch-view.aspect;
+                    height: launch-view.cover-h;
+                    border-radius: max(Shape.medium, self.height * 0.06);
+                    background: root.launch-has-cover ? #00000000 : Theme.surface-container;
+                    if root.launch-has-cover: Image {
+                        width: parent.width; height: parent.height;
+                        source: root.launch-cover;
+                        image-fit: fill;
+                    }
+                }
+            }
+            Text {
+                horizontal-alignment: center;
+                text: root.launch-title;
+                color: Theme.text;
+                font-size: 24px * launch-view.s;
+                font-weight: 700;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                alignment: center;
+                HomeInfoChip {
+                    text: root.launch-system; dot: root.launch-accent; has-dot: true; has-icon: false;
+                    s: launch-view.s;
+                }
+            }
+            HorizontalLayout {
+                alignment: center;
+                /* M3 linear indeterminate progress: a primary segment
+                 * travelling over a tonal track. */
+                Rectangle {
+                    property <length> seg: self.width * 0.32;
+                    property <float> t: root.launch-busy ? mod(animation-tick() / 1ms, 1300) / 1300 : 0.0;
+                    width: min(260px * launch-view.s, launch-view.width * 0.5);
+                    height: 4px * launch-view.s;
+                    border-radius: self.height / 2;
+                    background: Theme.surface-container-highest;
+                    clip: true;
+                    Rectangle {
+                        x: -parent.seg + parent.t * (parent.width + parent.seg);
+                        width: parent.seg; height: parent.height;
+                        border-radius: parent.height / 2;
+                        background: Theme.primary;
+                        visible: root.launch-busy;
+                    }
+                }
+            }
+            Text {
+                horizontal-alignment: center;
+                text: root.i18n-strings[811];
+                color: Theme.text-secondary;
+                font-size: 15px * launch-view.s;
+            }
+        }
+    }
+
     oob-hero := Rectangle {
         x: 0; y: 0; width: parent.width; height: parent.height;
         background: Theme.background;

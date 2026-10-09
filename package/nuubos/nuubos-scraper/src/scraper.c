@@ -392,6 +392,62 @@ static void stem_of(const char *rel, char *out, size_t size)
 		*dot = '\0';
 }
 
+/*
+ * Search name for a second try when a file name finds nothing: no (...)
+ * [...] {...} tags (regions, years, [N64], hacks), '_' as spaces,
+ * no ", The", no version/revision words (v1.1, Rev 1, Rev A). Empty when
+ * nothing is left.
+ */
+static void search_title(const char *stem, char *out, size_t size)
+{
+	char tmp[512];
+	size_t o = 0;
+	int depth = 0;
+
+	for (const char *p = stem; *p && o + 1 < sizeof(tmp); p++) {
+		if (*p == '(' || *p == '[' || *p == '{') {
+			depth++;
+			continue;
+		}
+		if (*p == ')' || *p == ']' || *p == '}') {
+			if (depth > 0)
+				depth--;
+			continue;
+		}
+		if (depth)
+			continue;
+		tmp[o++] = *p == '_' ? ' ' : *p;
+	}
+	tmp[o] = '\0';
+
+	/* Words, dropping version/revision tokens and a trailing ", The". */
+	o = 0;
+	out[0] = '\0';
+	for (char *save = NULL, *w = strtok_r(tmp, " ", &save); w; w = strtok_r(NULL, " ", &save)) {
+		size_t len = strlen(w);
+
+		if ((w[0] == 'v' || w[0] == 'V') && len > 1 && isdigit((unsigned char)w[1]))
+			continue;
+		if (!strcasecmp(w, "rev")) {
+			char *next = strtok_r(NULL, " ", &save);
+
+			(void)next;
+			continue;
+		}
+		if (o + len + 2 >= size)
+			break;
+		if (o)
+			out[o++] = ' ';
+		memcpy(out + o, w, len);
+		o += len;
+		out[o] = '\0';
+	}
+	if (o >= 5 && !strcasecmp(out + o - 5, ", The"))
+		out[o -= 5] = '\0';
+	while (o && (out[o - 1] == ' ' || out[o - 1] == '-' || out[o - 1] == ','))
+		out[--o] = '\0';
+}
+
 static bool game_details(const char *id, struct game_info *g)
 {
 	static char buf[65536];
@@ -1638,6 +1694,41 @@ static void scrape_batch(int provider, const struct game_info *games, size_t cou
 			*single = o;
 	}
 	sky_done();
+
+	/*
+	 * Second chance for what the file names did not find (user report
+	 * 2026-10-09: many titles missed): the same source searched by a
+	 * cleaned name, then libretro thumbnails (cover and screenshot) by the
+	 * title key. Not for games with the user's own search name, nor after
+	 * a stop (quota, network...).
+	 */
+	for (size_t i = 0; i < n && !cancelled && !stop_reason[0]; i++) {
+		struct sky_item one;
+		struct metadata fresh;
+		char clean[512];
+		enum outcome o;
+
+		if (items[i].found || olds[i].search[0])
+			continue;
+		search_title(items[i].g->stem, clean, sizeof(clean));
+		o = NOT_FOUND;
+		if (clean[0] && strcmp(clean, items[i].g->stem)) {
+			one = items[i];
+			(void)sky_lookup(provider, s, &one, 1, clean, offset + i, total);
+			if (one.found)
+				o = apply(one.g, mode, &olds[i], &one.m);
+			sky_done();
+		}
+		if (o == NOT_FOUND && !stop_reason[0] && s->libretro[0]) {
+			memset(&fresh, 0, sizeof(fresh));
+			if (libretro_lookup(items[i].g, clean[0] ? clean : items[i].g->stem, &fresh) == SCRAPED)
+				o = apply(items[i].g, mode, &olds[i], &fresh);
+		}
+		if (o == SCRAPED || o == REVIEW)
+			(*scraped)++;
+		if (single && (o == SCRAPED || o == REVIEW))
+			*single = o;
+	}
 }
 
 static int cmd_game(const char *id, enum mode mode)

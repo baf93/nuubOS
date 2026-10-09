@@ -18,6 +18,10 @@ export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=labwc
 export WLR_RENDERER=gles2
 export WLR_NO_HARDWARE_CURSORS=1
+# UI buffers have at most this many rows (wlroots patch 0001): on HDMI 1080p the
+# display engine scales them up 1.5x at scan-out, as for games (user request
+# 2026-10-09: render 720p, upscale to 1080p). HDMI only.
+export NUUBOS_CLIENT_MAX_LINES=720
 export XCURSOR_THEME=nuubos-hidden
 export XCURSOR_SIZE=1
 

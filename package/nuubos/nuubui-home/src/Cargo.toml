@@ -17,3 +17,8 @@ panic = "abort"
 lto = true
 codegen-units = 1
 strip = true
+
+# i-slint-core with the nuubOS patches, unpacked here by the package's
+# POST_RSYNC hook (patches/packages/i-slint-core).
+[patch.crates-io]
+i-slint-core = { path = "vendor/i-slint-core" }

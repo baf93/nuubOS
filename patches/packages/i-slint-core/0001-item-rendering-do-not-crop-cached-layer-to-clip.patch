@@ -1,0 +1,31 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] item_rendering: do not crop a cached layer to the current clip
+
+render_layer() intersected the layer bounds with the current clip, but the
+clip is not a tracked dependency of the cached layer: a layer rendered while
+its item was partly scrolled out of a clipping parent stayed cropped after
+the item scrolled back in (nuubOS Home: the first cover of a strip cut on
+its left side). Render the layer over the item and its children whole.
+
+Signed-off-by: nuubOS
+---
+--- a/item_rendering.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/item_rendering.rs	2026-10-09 21:52:56.257952206 +0200
+@@ -776,12 +776,13 @@
+     let cache = renderer.layer_cache();
+     let scale_factor = renderer.scale_factor();
+ 
++    // nuubOS: the layer covers the item and its children whole, not just the
++    // part inside the current clip. The clip is not a tracked dependency, so
++    // a layer rendered while its item was partly scrolled out stayed cropped
++    // after the item scrolled back in (a card cut at the strip edge).
+     let compute_bounds = |r: &R| -> LogicalRect {
+         item_children_bounding_rect(item_rc, &r.window().window_adapter())
+-            .intersection(
+-                &r.get_current_clip().union(&LogicalRect::from_size(item_rc.geometry().size)),
+-            )
+-            .unwrap_or_default()
++            .union(&LogicalRect::from_size(item_rc.geometry().size))
+     };
+ 
+     cache.get_or_update_cache_entry(item_rc, || {

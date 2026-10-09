@@ -1,0 +1,63 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] drm/sun4i: de33: latch the address first on any layer geometry change
+
+0032 programs a new buffer address alone and waits one frame before the
+size and pitch only when the source grows. A shrinking source has the same
+problem: when labwc goes back from composition (1920x1080 XRGB, no scaler)
+to direct scan-out of a 1280x720 client buffer scaled on the HDMI plane,
+the rest of the frame read the old buffer with the new pitch and scaler, a
+black/garbled flash each time a notification went away. Latch the address
+first on any change of source size, on-screen size, pitch or format.
+
+Signed-off-by: nuubOS
+---
+--- a/drivers/gpu/drm/sun4i/sun8i_ui_layer.c	2026-10-09 22:34:57.148940146 +0200
++++ b/drivers/gpu/drm/sun4i/sun8i_ui_layer.c	2026-10-09 22:34:57.190421859 +0200
+@@ -220,9 +220,19 @@
+ 	if (!old_state->visible || !old_state->fb || !new_state->fb ||
+ 	    old_state->crtc != new_state->crtc)
+ 		return;
+-	if (drm_rect_width(&new_state->src) <= drm_rect_width(&old_state->src) &&
+-	    drm_rect_height(&new_state->src) <= drm_rect_height(&old_state->src) &&
+-	    new_state->fb->pitches[0] <= old_state->fb->pitches[0])
++	/*
++	 * Any change of source size, on-screen size, pitch or format, not only
++	 * a growing source: a shrinking one (composited desktop -> scaled
++	 * client scan-out on HDMI, when a notification goes away) read the
++	 * old buffer with the new pitch and scaler for the rest of the frame,
++	 * a visible flash.
++	 */
++	if (drm_rect_width(&new_state->src) == drm_rect_width(&old_state->src) &&
++	    drm_rect_height(&new_state->src) == drm_rect_height(&old_state->src) &&
++	    drm_rect_width(&new_state->dst) == drm_rect_width(&old_state->dst) &&
++	    drm_rect_height(&new_state->dst) == drm_rect_height(&old_state->dst) &&
++	    new_state->fb->pitches[0] == old_state->fb->pitches[0] &&
++	    new_state->fb->format == old_state->fb->format)
+ 		return;
+ 	crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
+ 	if (!crtc_state || !crtc_state->active ||
+--- a/drivers/gpu/drm/sun4i/sun8i_vi_layer.c	2026-10-09 22:34:57.149940161 +0200
++++ b/drivers/gpu/drm/sun4i/sun8i_vi_layer.c	2026-10-09 22:34:57.190493487 +0200
+@@ -295,9 +295,19 @@
+ 	if (!old_state->visible || !old_state->fb || !new_state->fb ||
+ 	    old_state->crtc != new_state->crtc)
+ 		return;
+-	if (drm_rect_width(&new_state->src) <= drm_rect_width(&old_state->src) &&
+-	    drm_rect_height(&new_state->src) <= drm_rect_height(&old_state->src) &&
+-	    new_state->fb->pitches[0] <= old_state->fb->pitches[0])
++	/*
++	 * Any change of source size, on-screen size, pitch or format, not only
++	 * a growing source: a shrinking one (composited desktop -> scaled
++	 * client scan-out on HDMI, when a notification goes away) read the
++	 * old buffer with the new pitch and scaler for the rest of the frame,
++	 * a visible flash.
++	 */
++	if (drm_rect_width(&new_state->src) == drm_rect_width(&old_state->src) &&
++	    drm_rect_height(&new_state->src) == drm_rect_height(&old_state->src) &&
++	    drm_rect_width(&new_state->dst) == drm_rect_width(&old_state->dst) &&
++	    drm_rect_height(&new_state->dst) == drm_rect_height(&old_state->dst) &&
++	    new_state->fb->pitches[0] == old_state->fb->pitches[0] &&
++	    new_state->fb->format == old_state->fb->format)
+ 		return;
+ 	crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
+ 	if (!crtc_state || !crtc_state->active ||

@@ -723,7 +723,7 @@ fn main() {
             play_time: detail.split("  •  ").nth(2).map(|t| t.trim_start_matches("Played ")).unwrap_or("").into(),
             cover_path: "".into(), has_cover: img.is_some(), cover: img.unwrap_or_default(), aspect, x_units: 0.0,
             accent: slint::Color::from_rgb_u8((accent >> 16) as u8, (accent >> 8) as u8, accent as u8),
-            available, favorite,
+            available, favorite, focused: false,
         }
     }
     fn units(mut v: Vec<HomeCard>) -> ModelRc<HomeCard> {
@@ -878,15 +878,48 @@ fn main() {
     scenes.push(("app_page_done", Box::new(|ui| {
         ui.set_steamlink_active(false); ui.set_moonlight_active(false); ui.set_settings_open(false); ui.set_settings_view(0);
     })));
+    scenes.push(("launch", Box::new(|ui| {
+        ui.set_library_open(false);
+        ui.set_launch_title("Super Mario World".into());
+        ui.set_launch_system("Super Nintendo".into());
+        ui.set_launch_accent(slint::Color::from_rgb_u8(0x6b, 0x5b, 0xc4));
+        ui.set_launch_cover(cover(280, 200, (200, 60, 50)));
+        ui.set_launch_has_cover(true);
+        ui.set_launch_busy(true);
+        ui.set_launch_open(true);
+    })));
+    scenes.push(("launch_closed", Box::new(|ui| { ui.set_launch_open(false); ui.set_launch_busy(false); })));
     let only = std::env::var("ONLY").unwrap_or_default();
     for (name, f) in &scenes {
         if !only.is_empty() && !only.split(',').any(|o| name.starts_with(o)) {
             continue;
         }
         f(&ui);
+        sync_focus(&ui);
         for (w, h) in sizes {
             shot(&win, w, h, name);
         }
         ui.set_settings_choice_open(false);
+    }
+}
+
+/* Same as nuubui-home library.rs sync_focus: card focus lives in the models. */
+fn sync_focus(ui: &HomeWindow) {
+    let row = ui.get_home_row();
+    for (model, active, index) in [
+        (ui.get_home_recent(), row == 0, ui.get_home_recent_index()),
+        (ui.get_home_shelf(), row == 1, ui.get_home_shelf_index()),
+        (ui.get_home_apps(), row == 2, ui.get_home_apps_index()),
+        (ui.get_library_games(), true, ui.get_library_index()),
+    ] {
+        for i in 0..model.row_count() {
+            let want = active && i as i32 == index;
+            if let Some(mut card) = model.row_data(i) {
+                if card.focused != want {
+                    card.focused = want;
+                    model.set_row_data(i, card);
+                }
+            }
+        }
     }
 }

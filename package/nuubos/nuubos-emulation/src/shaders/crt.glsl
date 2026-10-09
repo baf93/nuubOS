@@ -96,8 +96,10 @@ void main()
     float strength = scale.y >= 2.0 ? CRT_SCANLINES : 0.0;
     float scan = 1.0 - strength * (1.0 - beam);
 
-    /* Gain back part of the light the gaps take. */
-    col *= scan * (1.0 + 0.30 * strength);
+    /* Gain back the light the gaps take: at 2x a gap row keeps ~0.5, so
+     * mid tones average the original brightness (user report 2026-10-09:
+     * the CRT look darkened the picture; was 0.30). Whites clip. */
+    col *= scan * (1.0 + 0.55 * strength);
     FragColor = vec4(min(col, vec3(1.0)), 1.0);
 }
 

@@ -116,6 +116,25 @@ thread_local! {
 }
 
 static COVER_QUEUE: OnceLock<Mutex<mpsc::Sender<(String, u32, f32)>>> = OnceLock::new();
+/* Cover keys still wanted by the UI: a grid cover that leaves the grid
+ * window before its turn is dropped from this set and the loader skips it,
+ * so fast scrolling through a big system does not decode a backlog of
+ * covers nobody sees any more. */
+static COVER_WANTED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+fn cover_wanted(key: &str, wanted: bool) {
+    let mut set = COVER_WANTED.lock().unwrap();
+    let set = set.get_or_insert_with(HashSet::new);
+    if wanted {
+        set.insert(key.to_owned());
+    } else {
+        set.remove(key);
+    }
+}
+
+fn cover_still_wanted(key: &str) -> bool {
+    COVER_WANTED.lock().unwrap().as_ref().is_some_and(|s| s.contains(key))
+}
 
 fn library_command(command: &str) -> std::io::Result<String> {
     let mut stream = UnixStream::connect(LIBRARY_SOCKET)?;
@@ -340,14 +359,22 @@ pub fn start_cover_loader(ui: &HomeWindow) {
     let weak = ui.as_weak();
     thread::spawn(move || {
         for (path, target, radius) in rx {
+            let key = cover_key(&path, target);
+            if !cover_still_wanted(&key) {
+                continue;
+            }
             let img = Image::load_from_path(Path::new(&path)).ok();
             let shaped = img.as_ref().and_then(|i| shape_cover(i, target, radius));
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(ui) = weak.upgrade() else { return };
-                let key = cover_key(&path, target);
-                STATE.with(|st| {
+                let accepted = STATE.with(|st| {
                     let mut st = st.borrow_mut();
+                    /* Cancelled while decoding: the UI no longer wants it. */
+                    if !matches!(st.covers.get(&key), Some(CoverState::Loading)) {
+                        return false;
+                    }
+                    cover_wanted(&key, false);
                     let entry = match shaped {
                         Some((buf, aspect)) => CoverState::Ready(Image::from_rgba8_premultiplied(buf), aspect),
                         None => CoverState::Failed,
@@ -355,8 +382,11 @@ pub fn start_cover_loader(ui: &HomeWindow) {
                     st.covers.insert(key.clone(), entry);
                     st.lru.retain(|k| k != &key);
                     st.lru.push_back(key);
+                    true
                 });
-                cover_arrived(&ui, &path);
+                if accepted {
+                    cover_arrived(&ui, &path);
+                }
             });
         }
     });
@@ -381,6 +411,7 @@ fn request_cover(ui: &HomeWindow, path: &str, small: bool) -> Option<(Image, f32
             }
             Some(CoverState::Loading) | Some(CoverState::Failed) => None,
             None => {
+                cover_wanted(&key, true);
                 st.covers.insert(key, CoverState::Loading);
                 let radius = (12.0 * scale).max(target as f32 * 0.06);
                 if let Some(q) = COVER_QUEUE.get() {
@@ -390,6 +421,22 @@ fn request_cover(ui: &HomeWindow, path: &str, small: bool) -> Option<(Image, f32
             }
         }
     })
+}
+
+/* Forget a grid cover still queued or decoding (it left the grid window);
+ * a later request queues it again. */
+fn cancel_cover(ui: &HomeWindow, path: &str) {
+    if path.is_empty() {
+        return;
+    }
+    let key = cover_key(path, cover_target(ui, false));
+    STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        if matches!(st.covers.get(&key), Some(CoverState::Loading)) {
+            st.covers.remove(&key);
+            cover_wanted(&key, false);
+        }
+    });
 }
 
 /* Drop decoded covers beyond the cache limit, oldest first, except the
@@ -445,6 +492,7 @@ fn game_card(ui: &HomeWindow, snap: &LibSnapshot, g: &LibGame, load: bool) -> Ho
         accent,
         available: g.available,
         favorite: g.favorite,
+        focused: false,
     }
 }
 
@@ -570,6 +618,32 @@ fn build_home(ui: &HomeWindow) {
     ui.set_home_shelf_index(ui.get_home_shelf_index().clamp(0, (counts[1] - 1).max(0)));
     ui.set_home_apps_index(ui.get_home_apps_index().clamp(0, (counts[2] - 1).max(0)));
     ui.set_library_scanning(snap.scanning);
+    sync_focus(ui);
+}
+
+/* Card focus lives in the models (HomeCard.focused) and changes only on
+ * the cards it moves between: Slint marks every binding on a shared index
+ * dirty when it changes, and with it every cached card layer that read it
+ * (18-22 layer re-renders per row change, a missed frame on each move). */
+fn sync_focus(ui: &HomeWindow) {
+    let row = ui.get_home_row();
+    let models = [
+        (ui.get_home_recent(), row == 0, ui.get_home_recent_index()),
+        (ui.get_home_shelf(), row == 1, ui.get_home_shelf_index()),
+        (ui.get_home_apps(), row == 2, ui.get_home_apps_index()),
+        (ui.get_library_games(), true, ui.get_library_index()),
+    ];
+    for (model, active, index) in models {
+        for i in 0..model.row_count() {
+            let want = active && i as i32 == index;
+            if let Some(mut card) = model.row_data(i) {
+                if card.focused != want {
+                    card.focused = want;
+                    model.set_row_data(i, card);
+                }
+            }
+        }
+    }
 }
 
 /* A new playful message for empty sections, per user session. */
@@ -610,6 +684,7 @@ fn build_grid(ui: &HomeWindow, reset: bool) {
     }
     ui.set_library_index(ui.get_library_index().clamp(0, (n - 1).max(0)));
     ui.set_library_detail(count_label(ui, n as i64).into());
+    sync_focus(ui);
     keep_visible_covers(ui);
 }
 
@@ -674,8 +749,11 @@ fn refresh_grid_window(ui: &HomeWindow) {
             }
         } else if cur.has_cover {
             model.set_row_data(i, game_card(ui, &snap, g, false));
+        } else {
+            cancel_cover(ui, &g.cover);
         }
     }
+    sync_focus(ui);
     keep_visible_covers(ui);
 }
 
@@ -774,6 +852,67 @@ pub fn launch_by_id(ui: &HomeWindow, id: &str, available: bool) {
     launch_with_mode(ui, id, available, "resume");
 }
 
+const LAUNCH_SCREEN_TIMEOUT_MS: u64 = 60_000;
+
+thread_local! {
+    /* Closes the loading screen if no session ever starts. */
+    static LAUNCH_TIMER: Timer = Timer::default();
+}
+
+/* Loading screen for the game being launched, from the card Home shows
+ * for it (Recently Played, the open grid, else a title-only screen). */
+fn show_launch_screen(ui: &HomeWindow, id: &str) {
+    let card = [ui.get_home_recent(), ui.get_library_games()]
+        .into_iter()
+        .find_map(|m| (0..m.row_count()).filter_map(|i| m.row_data(i)).find(|c| c.key.as_str() == id));
+    let snap = STATE.with(|st| st.borrow().snap.clone());
+    match card {
+        Some(c) => {
+            ui.set_launch_title(c.title.clone());
+            ui.set_launch_system(c.system_name.clone());
+            ui.set_launch_accent(c.accent);
+            ui.set_launch_has_cover(c.has_cover);
+            ui.set_launch_cover(c.cover.clone());
+        }
+        None => {
+            let game = snap.recent.iter().find(|g| g.id == id);
+            ui.set_launch_title(game.map(|g| g.title.clone()).unwrap_or_default().into());
+            ui.set_launch_system(Default::default());
+            ui.set_launch_has_cover(false);
+        }
+    }
+    ui.set_launch_busy(true);
+    ui.set_launch_open(true);
+    let weak = ui.as_weak();
+    LAUNCH_TIMER.with(|t| {
+        t.start(slint::TimerMode::SingleShot, Duration::from_millis(LAUNCH_SCREEN_TIMEOUT_MS), move || {
+            if let Some(ui) = weak.upgrade() {
+                if !GAME_RUNNING.load(Ordering::SeqCst) {
+                    hide_launch_screen(&ui);
+                }
+            }
+        })
+    });
+}
+
+fn hide_launch_screen(ui: &HomeWindow) {
+    LAUNCH_TIMER.with(|t| t.stop());
+    ui.set_launch_busy(false);
+    ui.set_launch_open(false);
+    ui.set_launch_cover(Image::default());
+}
+
+/* Session start: the game covers Home, stop animating under it; end:
+ * back to Home. */
+fn launch_session(ui: &HomeWindow, running: bool) {
+    if running {
+        LAUNCH_TIMER.with(|t| t.stop());
+        ui.set_launch_busy(false);
+    } else if ui.get_launch_open() {
+        hide_launch_screen(ui);
+    }
+}
+
 /* mode: resume | new | slot:N (nuubos-emud LAUNCH). */
 pub fn launch_with_mode(ui: &HomeWindow, id: &str, available: bool, mode: &str) {
     if !available {
@@ -784,6 +923,7 @@ pub fn launch_with_mode(ui: &HomeWindow, id: &str, available: bool, mode: &str) 
         return;
     }
     let command = format!("LAUNCH\t{}\t{}", id, mode);
+    show_launch_screen(ui, id);
     let weak = ui.as_weak();
     thread::spawn(move || {
         let reason = match emulation_command(&command) {
@@ -796,6 +936,9 @@ pub fn launch_with_mode(ui: &HomeWindow, id: &str, available: bool, mode: &str) 
         };
         let _ = slint::invoke_from_event_loop(move || {
             let Some(ui) = weak.upgrade() else { return };
+            if reason != "busy" {
+                hide_launch_screen(&ui);
+            }
             let text = match reason.as_str() {
                 /* A double press while the game is starting. */
                 "busy" => return,
@@ -828,6 +971,7 @@ pub fn start_game_listener(ui: &HomeWindow) {
                     let weak = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = weak.upgrade() {
+                            launch_session(&ui, running);
                             on_game_session(&ui, running);
                         }
                     });
@@ -839,6 +983,7 @@ pub fn start_game_listener(ui: &HomeWindow) {
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = weak.upgrade() {
+                    launch_session(&ui, false);
                     on_game_session(&ui, false);
                 }
             });
@@ -1011,6 +1156,7 @@ fn move_row(ui: &HomeWindow, delta: i32) -> bool {
         return false;
     }
     ui.set_home_row(row);
+    sync_focus(ui);
     true
 }
 
@@ -1029,6 +1175,7 @@ fn move_column(ui: &HomeWindow, delta: i32) -> bool {
         1 => ui.set_home_shelf_index(next),
         _ => ui.set_home_apps_index(next),
     }
+    sync_focus(ui);
     true
 }
 

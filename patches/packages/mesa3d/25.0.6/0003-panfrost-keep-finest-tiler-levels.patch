@@ -1,0 +1,40 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] panfrost: keep the finest tiler levels besides the full-FB one
+
+When the GPU has fewer hierarchy levels than needed to cover the
+framebuffer from 16 px up (Mali-G31: two), pan_select_tiler_hierarchy_mask
+kept the coarsest levels, so every primitive was binned at least at 512 px
+and walked by every 16 px tile of that bin. Keep the level covering the
+whole framebuffer and use the remaining ones for the finest bins: small
+primitives then cost only the tiles they touch, large ones still go to the
+top level. nuubOS Home at 1280x720 on Mali-G31: 22.5 -> 10 ms of fragment
+time per frame; the per-draw cost of an 8 px shape dropped from ~0.17 ms.
+
+Signed-off-by: nuubOS
+---
+--- a/src/panfrost/lib/pan_util.h	2026-10-09 20:54:59.859213337 +0200
++++ b/src/panfrost/lib/pan_util.h	2026-10-09 20:54:59.886052198 +0200
+@@ -87,15 +87,16 @@
+    uint32_t last_hierarchy_bit = util_last_bit(DIV_ROUND_UP(max_fb_wh, 16));
+    uint32_t hierarchy_mask = BITFIELD_MASK(max_levels);
+ 
+-   /* Always enable the level covering the whole FB, and disable the finest
+-    * levels if we don't have enough to cover everything.
+-    * This is suboptimal for small primitives, since it might force
+-    * primitives to be walked multiple times even if they don't cover the
+-    * the tile being processed. On the other hand, it's hard to guess
+-    * the draw pattern, so it's probably good enough for now.
++   /* Always enable the level covering the whole FB. When there are not
++    * enough levels to cover everything, keep the finest ones for the rest
++    * instead of the coarsest: with only the coarse levels every small
++    * primitive is walked by every tile of a 512 px bin. On Mali-G31 (two
++    * levels) a 720p UI of small shapes spent ~0.17 ms of fragment time per
++    * draw that way (nuubOS: 22.5 -> 10 ms per frame).
+     */
+    if (last_hierarchy_bit > max_levels)
+-      hierarchy_mask <<= last_hierarchy_bit - max_levels;
++      hierarchy_mask = BITFIELD_BIT(last_hierarchy_bit - 1) |
++                       BITFIELD_MASK(max_levels - 1);
+ 
+    return hierarchy_mask;
+ }

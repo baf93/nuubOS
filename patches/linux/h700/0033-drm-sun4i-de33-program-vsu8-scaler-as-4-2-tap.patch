@@ -1,0 +1,78 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] drm/sun4i: de33: program the VSU8 scaler of VI channel 2 as 4/2-tap
+
+On DE33 the VI channels have different scalers (Allwinner BSP de330 feature
+table): channel 0 VSU_ED, channel 1 VSU10, channel 2 VSU8. VSU8 has 4
+horizontal and 2 vertical taps with coefficient banks only at YHCOEFF0,
+YVCOEFF and CHCOEFF0, all loaded with the 4-tap lan2 table (BSP
+de_vsu8_set_para). The DE3 path wrote the left half of the 8-tap lan3 table
+as the horizontal filter, whose taps do not sum to 1.0 on a 4-tap filter:
+scaled pictures got a phase-dependent dark grille, looked darker overall
+and shimmered while scrolling (HDMI UI and games, both scanned out on VI
+channel 2 since 0031).
+
+Signed-off-by: nuubOS
+---
+--- a/drivers/gpu/drm/sun4i/sun8i_vi_scaler.c	2026-10-09 20:34:04.016314404 +0200
++++ b/drivers/gpu/drm/sun4i/sun8i_vi_scaler.c	2026-10-09 20:34:15.381284766 +0200
+@@ -916,6 +916,47 @@
+ 			     cy[offset + i]);
+ }
+ 
++/*
++ * DE33 VI channel 2 has a VSU8 scaler (Allwinner BSP de330 feature table:
++ * channel 0 VSU_ED, channel 1 VSU10, channel 2 VSU8): 4 horizontal taps,
++ * 2 vertical taps, coefficient banks only at YHCOEFF0, YVCOEFF and
++ * CHCOEFF0, all loaded with the 4-tap lan2 table (BSP de_vsu8_set_para).
++ * The 8-tap left half written by the DE3 path does not sum to 1.0 on a
++ * 4-tap filter: columns were dimmed by phase (a dark grille, the whole
++ * picture darker, shimmering while it scrolls).
++ */
++static bool sun8i_vi_scaler_is_vsu8(struct sun8i_layer *layer)
++{
++	return layer->cfg->de_type == SUN8I_MIXER_DE33 && layer->channel == 2;
++}
++
++static void sun8i_vi_scaler_set_coeff_vsu8(struct regmap *map, u32 base,
++					   u32 hstep, u32 vstep,
++					   const struct drm_format_info *format)
++{
++	int offset, i;
++
++	offset = sun8i_vi_scaler_coef_index(hstep) *
++			SUN8I_VI_SCALER_COEFF_COUNT;
++	for (i = 0; i < SUN8I_VI_SCALER_COEFF_COUNT; i++)
++		regmap_write(map, SUN8I_SCALER_VSU_YHCOEFF0(base, i),
++			     lan2coefftab32[offset + i]);
++
++	offset = sun8i_vi_scaler_coef_index(vstep) *
++			SUN8I_VI_SCALER_COEFF_COUNT;
++	for (i = 0; i < SUN8I_VI_SCALER_COEFF_COUNT; i++)
++		regmap_write(map, SUN8I_SCALER_VSU_YVCOEFF(base, i),
++			     lan2coefftab32[offset + i]);
++
++	offset = sun8i_vi_scaler_coef_index(hstep / format->hsub) *
++			SUN8I_VI_SCALER_COEFF_COUNT;
++	for (i = 0; i < SUN8I_VI_SCALER_COEFF_COUNT; i++)
++		regmap_write(map, SUN8I_SCALER_VSU_CHCOEFF0(base, i),
++			     format->is_yuv ?
++			     bicubic4coefftab32[offset + i] :
++			     lan2coefftab32[offset + i]);
++}
++
+ void sun8i_vi_scaler_enable(struct sun8i_layer *layer, bool enable)
+ {
+ 	u32 val, base;
+@@ -1005,6 +1046,10 @@
+ 		     SUN8I_SCALER_VSU_CHPHASE(base), chphase);
+ 	regmap_write(layer->regs,
+ 		     SUN8I_SCALER_VSU_CVPHASE(base), cvphase);
+-	sun8i_vi_scaler_set_coeff(layer->regs, base,
+-				  hscale, vscale, format);
++	if (sun8i_vi_scaler_is_vsu8(layer))
++		sun8i_vi_scaler_set_coeff_vsu8(layer->regs, base,
++					       hscale, vscale, format);
++	else
++		sun8i_vi_scaler_set_coeff(layer->regs, base,
++					  hscale, vscale, format);
+ }

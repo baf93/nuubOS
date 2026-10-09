@@ -1,0 +1,80 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] drm/sun4i: de33: keep the VI scaler when nothing changed
+
+DE33 latches only the buffer address at the frame start; scaler sizes,
+steps, phases and coefficients act at once. sun8i_vi_scaler_setup rewrote
+all of them and set COEFF_RDY on every page flip, so now and then the
+filter changed in the middle of a scanned-out frame: a tear while a
+scaled plane scrolls (HDMI UI, games). Remember the last programmed
+parameters per layer and leave the scaler alone while they are unchanged
+and it is still enabled.
+
+Signed-off-by: nuubOS
+---
+--- a/drivers/gpu/drm/sun4i/sun8i_mixer.h	2026-10-09 21:00:24.625454477 +0200
++++ b/drivers/gpu/drm/sun4i/sun8i_mixer.h	2026-10-09 21:00:38.575690373 +0200
+@@ -231,6 +231,10 @@
+ 	int				overlay;
+ 	struct regmap			*regs;
+ 	const struct sun8i_layer_cfg	*cfg;
++	/* DE33: scaler parameters last programmed (sun8i_vi_scaler_setup) */
++	u32				scaler_key[8];
++	bool				scaler_key_valid;
++	bool				scaler_unchanged;
+ };
+ 
+ static inline struct sun8i_layer *
+--- a/drivers/gpu/drm/sun4i/sun8i_vi_scaler.c	2026-10-09 21:00:24.625395715 +0200
++++ b/drivers/gpu/drm/sun4i/sun8i_vi_scaler.c	2026-10-09 21:00:38.575624537 +0200
+@@ -9,6 +9,8 @@
+  * warranty of any kind, whether express or implied.
+  */
+ 
++#include <linux/string.h>
++
+ #include "sun8i_vi_scaler.h"
+ 
+ static const u32 lan3coefftab32_left[480] = {
+@@ -963,6 +965,12 @@
+ 
+ 	base = sun8i_vi_scaler_base(layer);
+ 
++	/* DE33: nothing changed, the scaler runs: no COEFF_RDY reload. */
++	if (enable && layer->scaler_unchanged)
++		return;
++	if (!enable)
++		layer->scaler_key_valid = false;
++
+ 	if (enable)
+ 		val = SUN8I_SCALER_VSU_CTRL_EN |
+ 		      SUN8I_SCALER_VSU_CTRL_COEFF_RDY;
+@@ -997,6 +1005,29 @@
+ 	 * BSP driver. There is no detailed explanation. YUV 420
+ 	 * chroma is threated specialy for some reason.
+ 	 */
++	/*
++	 * DE33 latches only the buffer address at the frame start; scaler
++	 * sizes, steps, phases and coefficients act at once. Rewriting them
++	 * (and reloading the coefficients) on every page flip changed the
++	 * filter in the middle of a scanned-out frame now and then: a tear
++	 * while scrolling. Keep the scaler as it is when nothing changed.
++	 */
++	if (layer->cfg->de_type == SUN8I_MIXER_DE33) {
++		u32 key[8] = { insize, outsize, hscale, vscale, hphase, vphase,
++			       format->hsub | format->vsub << 8 |
++			       (format->is_yuv ? 1 << 16 : 0), 0 };
++		u32 ctrl = 0;
++
++		regmap_read(layer->regs, SUN8I_SCALER_VSU_CTRL(base), &ctrl);
++		layer->scaler_unchanged = layer->scaler_key_valid &&
++			(ctrl & SUN8I_SCALER_VSU_CTRL_EN) &&
++			!memcmp(key, layer->scaler_key, sizeof(key));
++		if (layer->scaler_unchanged)
++			return;
++		memcpy(layer->scaler_key, key, sizeof(key));
++		layer->scaler_key_valid = true;
++	}
++
+ 	if (format->hsub == 2 && format->vsub == 2) {
+ 		chphase = hphase >> 1;
+ 		cvphase = (vphase >> 1) -

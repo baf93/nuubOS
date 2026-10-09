@@ -1,0 +1,37 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] nuubos: send new surfaces the HDMI-capped scale
+
+labwc tells a new layer-shell or xdg surface its fractional scale before
+the surface enters the scene, using the raw output scale. A client that
+renders once (the Quick Menu) then kept that scale. Use
+wlr_fractional_scale_v1_output_scale() (nuubOS wlroots patch 0001), the
+same capped value the scene sends later.
+
+Signed-off-by: nuubOS
+---
+--- a/src/layers.c	2026-10-09 21:03:36.802164323 +0200
++++ b/src/layers.c	2026-10-09 21:03:36.819813046 +0200
+@@ -684,8 +684,9 @@
+ 
+ 	struct output *output = layer_surface->output->data;
+ 
++	/* nuubOS: capped on HDMI, like the scene's preferred scale */
+ 	wlr_fractional_scale_v1_notify_scale(layer_surface->surface,
+-		output->wlr_output->scale);
++		wlr_fractional_scale_v1_output_scale(output->wlr_output));
+ 
+ 	struct wlr_scene_tree *selected_layer =
+ 		output->layer_tree[layer_surface->current.layer];
+--- a/src/xdg.c	2026-10-09 21:03:36.802230036 +0200
++++ b/src/xdg.c	2026-10-09 21:03:36.819868137 +0200
+@@ -1033,8 +1033,9 @@
+ 	 */
+ 	view_set_output(view, output_nearest_to_cursor());
+ 	if (output_is_usable(view->output)) {
++		/* nuubOS: capped on HDMI, like the scene's preferred scale */
+ 		wlr_fractional_scale_v1_notify_scale(xdg_surface->surface,
+-			view->output->wlr_output->scale);
++			wlr_fractional_scale_v1_output_scale(view->output->wlr_output));
+ 	}
+ 
+ 	view->workspace = server.workspaces.current;

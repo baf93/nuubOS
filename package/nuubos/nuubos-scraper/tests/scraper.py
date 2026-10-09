@@ -23,7 +23,8 @@ for d in (run + '/user', ud + '/roms/snes', share, state + '/users/' + user):
 open(share + '/systems.conf', 'w').write(open(lib + '/systems.conf').read())
 open(run + '/user/active', 'w').write(user + '\n')
 open(state + '/users/%s/localization.conf' % user, 'w').write('LANGUAGE=it\n')
-roms = ['Mario.sfc', 'Zelda.sfc', 'Unknown.sfc', 'Quota.sfc', 'Super Metroid (Europe).sfc', 'Metroid.sfc']
+roms = ['Mario.sfc', 'Zelda.sfc', 'Unknown.sfc', 'Quota.sfc', 'Super Metroid (Europe).sfc', 'Metroid.sfc',
+        'Kirby (USA) [!] v1.1.sfc']
 for i, n in enumerate(roms):
     open(ud + '/roms/snes/' + n, 'wb').write(bytes([65 + i]) * (1000 + i))
 PNG = b'\x89PNG\r\n\x1a\n' + b'x' * 200
@@ -60,6 +61,8 @@ if opt('-f') == 'pegasus':
         title = known.get(b)
         if b == 'Unknown.sfc' and "'--query', 'Super+Mario+Land'" in q:
             title = 'Super Mario Land'
+        if b == 'Kirby (USA) [!] v1.1.sfc' and "'--query', 'Kirby'" in q:
+            title = 'Kirby Super Star'
         if not title:
             continue
         stem = b[:-4]
@@ -164,6 +167,11 @@ try:
 
     check('matched game skipped without force', 'matched' in job('game', ids['Mario']))
     check('not found', '@error not-found' in job('game', ids['Unknown']))
+    kirby = next(v for k, v in ids.items() if k.startswith('Kirby'))
+    out = job('game', kirby)
+    check('missed file name retried by a cleaned name', "'--query', 'Kirby'" in calls()
+          and '@result scraped' in out and 'title=Kirby Super Star' in meta('Kirby (USA) [!] v1.1')
+          and 'search=' not in meta('Kirby (USA) [!] v1.1').replace('search=\n', ''))
     check('search name stored', sc('search', ids['Unknown'], stdin='Super Mario Land\n').startswith('OK'))
     check('libraryd passes the search name', 'meta_search=Super Mario Land' in libcmd('DETAILS\t' + ids['Unknown']))
     out = job('game', ids['Unknown'])

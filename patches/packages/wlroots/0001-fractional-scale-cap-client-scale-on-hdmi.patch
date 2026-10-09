@@ -1,0 +1,109 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] fractional-scale: cap the client scale on HDMI by NUUBOS_CLIENT_MAX_LINES
+
+nuubOS renders the UI on HDMI into a buffer of at most NUUBOS_CLIENT_MAX_LINES
+rows: wlr_fractional_scale_v1_output_scale() returns the output scale capped
+so that a full-height surface stays within that many rows, and the display
+engine scales the buffer up at scan-out. The single-core Mali-G31 cannot
+shade a 1080p FemtoVG UI at 60 fps. The scene uses it for the preferred
+scale it sends; compositors sending a scale themselves (labwc for new
+layer-shell and xdg surfaces) call it too. Only HDMI outputs (connector
+name HDMI*) above the cap are affected: built-in panels have no scaler on
+their plane.
+
+Signed-off-by: nuubOS
+---
+--- a/include/wlr/types/wlr_fractional_scale_v1.h	2026-10-09 21:03:13.055484045 +0200
++++ b/include/wlr/types/wlr_fractional_scale_v1.h	2026-10-09 21:03:24.417424967 +0200
+@@ -11,6 +11,8 @@
+ 
+ #include <wayland-server-core.h>
+ 
++struct wlr_output;
++
+ struct wlr_surface;
+ 
+ struct wlr_fractional_scale_manager_v1 {
+@@ -25,6 +27,14 @@
+ 	} WLR_PRIVATE;
+ };
+ 
++/**
++ * nuubOS: the scale to suggest to clients on this output. Equals
++ * output->scale, capped on HDMI outputs by NUUBOS_CLIENT_MAX_LINES so that
++ * a full-height buffer has at most that many rows (the display engine
++ * scales it up at scan-out). Built-in panels have no scaler: unaffected.
++ */
++double wlr_fractional_scale_v1_output_scale(struct wlr_output *output);
++
+ void wlr_fractional_scale_v1_notify_scale(
+ 		struct wlr_surface *surface, double scale);
+ 
+--- a/types/wlr_fractional_scale_v1.c	2026-10-09 21:03:13.054269599 +0200
++++ b/types/wlr_fractional_scale_v1.c	2026-10-09 21:03:24.416459093 +0200
+@@ -1,7 +1,9 @@
+ #include <assert.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include <wlr/types/wlr_compositor.h>
+ #include <wlr/types/wlr_fractional_scale_v1.h>
++#include <wlr/types/wlr_output.h>
+ #include <wlr/util/log.h>
+ 
+ #include "fractional-scale-v1-protocol.h"
+@@ -64,6 +66,32 @@
+ 	.destroy = fractional_scale_addon_destroy,
+ };
+ 
++static double get_client_max_lines(void) {
++	static double lines = -1;
++	if (lines < 0) {
++		const char *env = getenv("NUUBOS_CLIENT_MAX_LINES");
++		lines = env != NULL ? strtod(env, NULL) : 0;
++		if (lines < 0) {
++			lines = 0;
++		}
++	}
++	return lines;
++}
++
++double wlr_fractional_scale_v1_output_scale(struct wlr_output *output) {
++	double scale = output->scale;
++	double max_lines = get_client_max_lines();
++	if (max_lines > 0 && output->name != NULL &&
++			strncmp(output->name, "HDMI", 4) == 0) {
++		int width, height;
++		wlr_output_effective_resolution(output, &width, &height);
++		if (height > 0 && height * scale > max_lines) {
++			scale = max_lines / height;
++		}
++	}
++	return scale;
++}
++
+ static uint32_t double_to_v120(double d) {
+ 	return round(d * 120);
+ }
+--- a/types/scene/surface.c	2026-10-09 21:03:13.053034275 +0200
++++ b/types/scene/surface.c	2026-10-09 21:03:24.415444288 +0200
+@@ -14,14 +14,16 @@
+ #include "types/wlr_scene.h"
+ 
+ static double get_surface_preferred_buffer_scale(struct wlr_surface *surface) {
+-	double scale = 1;
++	double scale = 0;
+ 	struct wlr_surface_output *surface_output;
+ 	wl_list_for_each(surface_output, &surface->current_outputs, link) {
+-		if (surface_output->output->scale > scale) {
+-			scale = surface_output->output->scale;
++		/* nuubOS: capped on HDMI (NUUBOS_CLIENT_MAX_LINES) */
++		double output_scale = wlr_fractional_scale_v1_output_scale(surface_output->output);
++		if (output_scale > scale) {
++			scale = output_scale;
+ 		}
+ 	}
+-	return scale;
++	return scale > 0 ? scale : 1;
+ }
+ 
+ // Output used for frame pacing (surface frame callbacks, presentation
