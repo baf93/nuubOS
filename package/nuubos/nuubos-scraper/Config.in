@@ -5,11 +5,9 @@ config BR2_PACKAGE_NUUBOS_SCRAPER
 	select BR2_PACKAGE_NUUBOS_LIBRARY
 	select BR2_PACKAGE_LIBCURL
 	select BR2_PACKAGE_CA_CERTIFICATES
-	select BR2_PACKAGE_CJSON
-	select BR2_PACKAGE_ZLIB
+	select BR2_PACKAGE_SKYSCRAPER if BR2_PACKAGE_QT6
 	help
-	  EPIC-015 optional game metadata and media (ScreenScraper),
-	  stored in the provider-neutral Library metadata store. The
-	  nuubOS ScreenScraper developer credentials are read at build
-	  time from local/screenscraper-dev.conf (DEVID=, DEVPASSWORD=);
-	  without them the provider is reported unavailable.
+	  EPIC-015 optional game metadata and media, stored in the
+	  provider-neutral Library metadata store. Sources: ScreenScraper
+	  and TheGamesDB through Skyscraper (package skyscraper, needs
+	  Qt6), libretro thumbnails directly.

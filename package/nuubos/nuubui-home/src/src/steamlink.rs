@@ -78,6 +78,7 @@ pub fn apply(ui: &HomeWindow, s: &Snapshot) {
         ui.set_steamlink_index(count - 1);
         ui.set_steamlink_remove_confirm(false);
     }
+    crate::apppage::refresh(ui);
 }
 
 pub fn open(ui: &HomeWindow) {
@@ -131,8 +132,9 @@ pub fn handle_action(ui: &HomeWindow, action: &str) {
     let count = row_count(ui);
     play_ui_sound(action);
     match action {
-        "menu_up" | "menu_down" => {
-            ui.set_steamlink_index(move_model_selection(index, count, if action == "menu_up" { -1 } else { 1 }));
+        "menu_up" | "menu_down" | "menu_left" | "menu_right" => {
+            let back = action == "menu_up" || action == "menu_left";
+            ui.set_steamlink_index(move_model_selection(index, count, if back { -1 } else { 1 }));
             ui.set_steamlink_remove_confirm(false);
             return;
         }

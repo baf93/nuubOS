@@ -10,6 +10,11 @@
  *            (colour of the running game's system, systems.conf). Colour is
  *            the active theme's accent or a fixed RRGGBB; speed slow,
  *            normal or fast; brightness 10..100.
+ *   Tasks    while a Live Notification runs (a job, a storage operation)
+ *            and the tasks category is on, the ring shows its progress
+ *            over the effect: an accent gauge with a breathing head, or a
+ *            slow comet when the progress is unknown (user request
+ *            2026-10-09). Its completion plays the tasks signal.
  *   Signals  short system animations over the effect, grouped in five
  *            per-user categories: power (welcome, sleep, wake, power off),
  *            battery, connections, games, tasks. Their sources are the
@@ -77,6 +82,7 @@
 
 #define MAX_LEDS 32
 #define MAX_ZONES 4
+#define MAX_TASKS 8
 #define FRAME_MS 33
 #define CROSSFADE_MS 350
 #define DEFAULT_BRIGHTNESS 50
@@ -149,6 +155,12 @@ struct prefs {
 
 enum phase { PHASE_AWAKE, PHASE_SLEEP, PHASE_SHUTDOWN };
 
+/* A running Live Notification (EPIC-006 id, progress 0..100 or -1). */
+struct task {
+	char id[64];
+	int progress;
+};
+
 struct stream {
 	int fd;
 	size_t used;
@@ -181,6 +193,9 @@ static char preview_effect[16];
 static char preview_color[8];
 static long long effect_epoch_ms;
 static struct signal_play sig;
+static struct task tasks[MAX_TASKS];
+static int task_count;
+static long long task_epoch_ms;
 static struct rgb last_out[MAX_LEDS];
 static struct rgb fade_from[MAX_LEDS];
 static long long fade_start_ms = -1;
@@ -983,6 +998,82 @@ static void play_category(unsigned int category)
 }
 
 /* ------------------------------------------------------------------ */
+/* Tasks                                                               */
+/* ------------------------------------------------------------------ */
+
+static bool on(unsigned int category);
+
+static bool tasks_shown(void)
+{
+	return task_count > 0 && phase == PHASE_AWAKE && on(SIG_TASKS);
+}
+
+/* The oldest running task owns the ring, like the oldest card on screen. */
+static struct rgb task_pixel(float u, int i, int n, float t)
+{
+	const struct task *k = &tasks[0];
+	struct rgb c = accent();
+
+	if (k->progress < 0) {
+		float dist = frac(frac(t / 1.6f) - u);
+		float level = dist < 0.3f ? powf(1.0f - dist / 0.3f, 1.5f) : 0.0f;
+
+		return scale(c, 0.06f + 0.94f * level);
+	}
+	{
+		int lit = (k->progress * n + 50) / 100;
+		int head = lit < n ? lit : n - 1;
+
+		if (i == head) {
+			float x = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * t / 1.4f);
+
+			return scale(c, 0.06f + 0.94f * x);
+		}
+		return i < lit ? c : scale(c, 0.06f);
+	}
+}
+
+static void schedule_crossfade(void);
+
+static int task_index(const char *id)
+{
+	for (int i = 0; i < task_count; i++)
+		if (strcmp(tasks[i].id, id) == 0)
+			return i;
+	return -1;
+}
+
+static void task_progress(const char *id, int progress)
+{
+	int i = task_index(id);
+
+	if (i < 0) {
+		if (task_count == MAX_TASKS)
+			return;
+		i = task_count++;
+		snprintf(tasks[i].id, sizeof(tasks[i].id), "%s", id);
+		if (i == 0) {
+			task_epoch_ms = now_ms();
+			if (on(SIG_TASKS))
+				schedule_crossfade();
+		}
+	}
+	tasks[i].progress = progress < -1 ? -1 : progress > 100 ? 100 : progress;
+}
+
+static void task_end(const char *id)
+{
+	int i = task_index(id);
+
+	if (i < 0)
+		return;
+	memmove(&tasks[i], &tasks[i + 1], (size_t)(task_count - i - 1) * sizeof(tasks[0]));
+	task_count--;
+	if (task_count == 0 && on(SIG_TASKS))
+		schedule_crossfade();
+}
+
+/* ------------------------------------------------------------------ */
 /* Frames                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -1001,7 +1092,7 @@ static bool crossfading(long long now)
 static bool needs_frames(void)
 {
 	return supported && phase != PHASE_SHUTDOWN &&
-	       (signal_active() || crossfading(now_ms()) ||
+	       (signal_active() || crossfading(now_ms()) || tasks_shown() ||
 		(phase == PHASE_AWAKE && effect_animated()));
 }
 
@@ -1060,6 +1151,8 @@ static void render(void)
 
 			if (phase != PHASE_AWAKE && !signal_active())
 				px = BLACK;
+			if (tasks_shown())
+				px = task_pixel(u, i, n, (now - task_epoch_ms) / 1000.0f);
 			if (crossfading(now))
 				px = mix(fade_from[j], px, smooth((now - fade_start_ms) / (float)CROSSFADE_MS));
 			if (signal_active())
@@ -1251,18 +1344,34 @@ static bool on(unsigned int category)
 
 /*
  * EPIC-006 event → signal. Only POST starts a signal (UPDATE refreshes a
- * notification already announced) and Live Notifications only when they
- * complete.
+ * notification already announced). A Live Notification (progress=) is a
+ * running task until a message without progress completes it or it is
+ * dismissed; its completion plays the tasks signal.
  */
 static void notification(const char *line)
 {
 	char event[48];
 	char state[24];
+	char id[64];
 	bool done;
 
+	if (!field(line, "id", id, sizeof(id)))
+		id[0] = '\0';
+	if (strncmp(line, "DISMISS ", 8) == 0) {
+		task_end(id);
+		return;
+	}
+	if (strncmp(line, "UPDATE ", 7) == 0 && field(line, "progress", state, sizeof(state))) {
+		task_progress(id, atoi(state));
+		return;
+	}
 	if (strncmp(line, "POST ", 5) != 0 || !field(line, "event", event, sizeof(event)))
 		return;
 	done = !field(line, "progress", state, sizeof(state));
+	if (done)
+		task_end(id);
+	else
+		task_progress(id, atoi(state));
 	field(line, "state", state, sizeof(state));
 
 	/* Battery. */
@@ -1467,7 +1576,11 @@ static void connect_sources(void)
 		stream_open(&status_stream, STATUS_SOCKET, NULL);
 		read_battery();
 	}
-	stream_open(&notify_stream, NOTIFY_SOCKET, "SUBSCRIBE\n");
+	if (notify_stream.fd < 0) {
+		/* notifyd replays the running Live Notifications on SUBSCRIBE. */
+		task_count = 0;
+		stream_open(&notify_stream, NOTIFY_SOCKET, "SUBSCRIBE\n");
+	}
 	stream_open(&emu_stream, EMU_SOCKET, "SUBSCRIBE\n");
 }
 

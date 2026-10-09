@@ -156,7 +156,7 @@ try:
 
     # User emulation settings.
     st0 = cmd('emud.sock', 'SETTINGS')
-    check('settings defaults', 'slots=10\n' in st0 and 'slot_rotation=1\n' in st0 and 'crt=0\n' in st0
+    check('settings defaults', 'slots=10\n' in st0 and 'slot_rotation=1\n' in st0 and 'crt=1\n' in st0
           and 'hotkey_save_state=r1\n' in st0 and 'hotkey_quit=settings\n' in st0)
     check('reject slots', cmd('emud.sock', 'SET\tslots\t0').startswith('ERR'))
     check('reject hotkey', cmd('emud.sock', 'SET\thotkey_quit\tquick_menu').startswith('ERR'))
@@ -164,6 +164,9 @@ try:
     check('set slots', cmd('emud.sock', 'SET\tslots\t3').startswith('OK'))
     check('set hotkey', cmd('emud.sock', 'SET\thotkey_quit\tl3').startswith('OK'))
     check('settings stored', 'hotkey_quit=l3\n' in cmd('emud.sock', 'SETTINGS'))
+    check('crt filter default', 'filter_default=crt\n' in cmd('emud.sock', 'GAME_SETTINGS\t%s\tsnes' % game))
+    check('set crt off', cmd('emud.sock', 'SET\tcrt\t0').startswith('OK'))
+    check('sharp filter default', 'filter_default=sharp\n' in cmd('emud.sock', 'GAME_SETTINGS\t%s\tsnes' % game))
 
     # Pixel perfect, start from the beginning, rotation.
     def launch(mode=''):
@@ -180,10 +183,11 @@ try:
     check('launch new', launch('new'))
     check('panel renders native', wait(lambda: open(t + '/render-height').read() == '\n'))
     sess = session()
-    check('pixel perfect', 'aspect_ratio_index = "21"' in sess and 'video_scale_integer = "true"' in sess
-          and 'video_viewport_bias_y = "0.000000"' in sess and 'video_shader_enable = "false"' in sess)
+    check('integer scaling', 'aspect_ratio_index = "22"' in sess and 'video_scale_integer = "true"' in sess
+          and 'video_viewport_bias_y = "0.000000"' in sess and 'video_shader_enable = "true"' in sess)
     check('auto save, no auto load', 'savestate_auto_save = "true"' in sess and 'savestate_auto_load = "false"' in sess)
-    check('no entry slot, no shader', '--entryslot' not in args() and '--set-shader  -L' in args())
+    check('no entry slot, sharp shader', '--entryslot' not in args()
+          and '--set-shader %s/shaders/global.glslp -L' % emu_share in args())
     slots = []
     for _ in range(4):
         check('save', cmd('emud.sock', 'SAVE_STATE').startswith('OK'))
@@ -220,7 +224,9 @@ try:
     launch('new')
     glslp = open(run + '/emulation/session.glslp').read()
     check('bezel shader', 'bezel.glsl' in glslp and 'CRT = "1"' in glslp and 'BEZEL_STYLE = "0"' in glslp
-          and 'aspect_ratio_index = "24"' in session())
+          and 'aspect_ratio_index = "24"' in session()
+          and 'textures = "SYSICON;BRAND"' in glslp and 'HAS_ICON = "0"' in glslp
+          and 'bezel-wordmark.png' in glslp)
     cmd('emud.sock', 'QUIT'); wait(lambda: 'state=idle' in cmd('emud.sock', 'STATUS'))
 finally:
     for p in procs: p.terminate(); p.wait()

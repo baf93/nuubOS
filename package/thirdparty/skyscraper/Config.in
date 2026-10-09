@@ -1,0 +1,19 @@
+config BR2_PACKAGE_SKYSCRAPER
+	bool "skyscraper"
+	depends on BR2_PACKAGE_QT6
+	depends on BR2_INSTALL_LIBSTDCPP
+	select BR2_PACKAGE_QT6BASE
+	select BR2_PACKAGE_QT6BASE_GUI
+	select BR2_PACKAGE_QT6BASE_NETWORK
+	select BR2_PACKAGE_QT6BASE_SQL
+	select BR2_PACKAGE_QT6BASE_XML
+	select BR2_PACKAGE_QT6BASE_PNG
+	select BR2_PACKAGE_QT6BASE_JPEG
+	select BR2_PACKAGE_OPENSSL
+	help
+	  Skyscraper (Gemba fork), the game data scraper. nuubOS uses it
+	  only as the ScreenScraper and TheGamesDB backend of
+	  nuubos-scraper (EPIC-015): it runs headless (QCoreApplication)
+	  as a single binary with its configuration bundled.
+
+	  https://github.com/Gemba/skyscraper

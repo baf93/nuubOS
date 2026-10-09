@@ -11,20 +11,21 @@ import { Theme, Shape } from "../theme.slint";
 export component TextEntryField inherits Rectangle {
     in property <string> title: "";
 
-    height: 62px;
+    height: 72px;
     background: #00000000;
 
     Text {
-        x: 2px; y: 0; width: parent.width - 4px; height: 18px;
+        x: 2px; y: 0; width: parent.width - 4px; height: 26px;
         text: root.title;
-        color: Theme.primary;
-        font-size: 13px;
-        font-weight: 600;
+        color: Theme.text;
+        font-size: 19px;
+        font-weight: 700;
         overflow: elide;
+        horizontal-alignment: center;
         vertical-alignment: center;
     }
     Rectangle {
-        y: 22px; width: parent.width; height: 40px;
+        y: 32px; width: parent.width; height: 40px;
         border-radius: Shape.extra-small;
         background: Theme.surface-container-high;
         clip: true;
@@ -42,12 +43,24 @@ export component TextEntryField inherits Rectangle {
 component KeyboardKey inherits Rectangle {
     in property <string> label: "";
     in property <bool> selected: false;
+    /* A latched modifier (Shift on) and a locked one (Caps Lock). */
+    in property <bool> active: false;
+    in property <bool> locked: false;
 
-    /* Material 3 tonal keys, the focused key filled with the primary role. */
+    /* Material 3 tonal keys, the focused key filled with the primary role,
+     * a latched modifier with the secondary container. */
     height: 34px;
     border-radius: Shape.small;
-    background: root.selected ? Theme.primary : Theme.surface-container-high;
+    background: root.selected ? Theme.primary : root.active ? Theme.primary-container : Theme.surface-container-high;
     visible: root.label != "";
+
+    /* Caps Lock bar under the label. */
+    Rectangle {
+        x: parent.width * 0.3; y: parent.height - 6px; width: parent.width * 0.4; height: 2px;
+        border-radius: 1px;
+        background: root.selected ? Theme.on-primary : Theme.on-primary-container;
+        visible: root.locked;
+    }
 
     Text {
         width: parent.width;
@@ -55,7 +68,7 @@ component KeyboardKey inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         text: root.label;
-        color: root.selected ? Theme.on-primary : Theme.text;
+        color: root.selected ? Theme.on-primary : root.active ? Theme.on-primary-container : Theme.text;
         font-size: root.label.character-count > 1 ? 12px : 15px;
         font-weight: root.selected ? 600 : 500;
     }
@@ -65,6 +78,8 @@ export component SystemVirtualKeyboard inherits Rectangle {
     in-out property <string> value: "";
     in property <string> title: "";
     in property <bool> secret: false;
+    in property <bool> shift: false;
+    in property <bool> caps: false;
     in property <string> input-kind: "text";
     in property <string> layout-name: "qwerty";
     in property <int> selected-index: 0;
@@ -75,7 +90,7 @@ export component SystemVirtualKeyboard inherits Rectangle {
     in property <[string]> row-three: [];
     /* Height of the sheet content: the parent anchors the sheet to the
      * bottom with exactly this height. */
-    out property <length> content-height: 270px;
+    out property <length> content-height: 280px;
 
     callback accepted();
     callback focus-entry();
@@ -96,7 +111,7 @@ export component SystemVirtualKeyboard inherits Rectangle {
             x: 12px;
             y: 0;
             width: max(parent.width - 24px, self.preferred-width + 16px);
-            /* Children resolve `parent` to this field (62 px): the inner
+            /* Children resolve `parent` to this field (72 px): the inner
              * container is 40 px with a 2 px indicator. */
             height: 38px;
             text <=> root.value;
@@ -120,38 +135,40 @@ export component SystemVirtualKeyboard inherits Rectangle {
     }
 
     HorizontalLayout {
-        x: 18px; y: 84px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        x: 18px; y: 94px; width: parent.width - 36px; height: 34px; spacing: 5px;
         for key[i] in root.row-zero: KeyboardKey {
             label: key;
             selected: root.selected-index == i;
         }
     }
     HorizontalLayout {
-        x: 18px; y: 124px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        x: 18px; y: 134px; width: parent.width - 36px; height: 34px; spacing: 5px;
         for key[i] in root.row-one: KeyboardKey {
             label: key;
             selected: root.selected-index == 10 + i;
         }
     }
     HorizontalLayout {
-        x: 18px; y: 164px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        x: 18px; y: 174px; width: parent.width - 36px; height: 34px; spacing: 5px;
         for key[i] in root.row-two: KeyboardKey {
             label: key;
             selected: root.selected-index == 20 + i;
         }
     }
     HorizontalLayout {
-        x: 18px; y: 204px; width: parent.width - 36px; height: 34px; spacing: 5px;
+        x: 18px; y: 214px; width: parent.width - 36px; height: 34px; spacing: 5px;
         for key[i] in root.row-three: KeyboardKey {
             label: key;
             selected: root.selected-index == 30 + i;
+            active: key == "Shift" && root.shift;
+            locked: key == "Shift" && root.caps;
         }
     }
 
     /* Mode label: symbols and layout names only, nothing to translate. */
     Text {
         x: 18px;
-        y: 246px;
+        y: 256px;
         width: parent.width - 36px;
         text: root.input-kind == "ipv4" ? "IPv4"
             : root.input-kind == "dns" ? "DNS"

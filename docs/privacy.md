@@ -7,13 +7,13 @@ without any account. nuubOS collects no analytics or telemetry.
 The device talks to the network only for features you turn on or start.
 The **Services** section of **Settings → Connectivity** shows Remote Services
 and Syncthing with their state and switches; Software Update is in
-**Settings → System**, Game Metadata (ScreenScraper) and RetroAchievements are
+**Settings → System**, Game Metadata and RetroAchievements are
 in **Settings → Gaming**.
 
 | Feature | When it uses the network | What leaves the device | Stored on the device |
 |---|---|---|---|
 | Wi-Fi time sync (NTP) | when Automatic Time is on and Wi-Fi is connected | time requests | – |
-| Game Metadata (ScreenScraper) | only when you ask for metadata (one game or all) | file name, size and CRC32 of the game, system | metadata and images in USERDATA; optional ScreenScraper account in STATE (root only) |
+| Game Metadata | only when you ask for metadata (one game, all, or the missing data) | to the source you choose: ScreenScraper — file name, size and checksums of the game, system; TheGamesDB — game name and system; libretro thumbnails — the game's name; a search name you set replaces the file name. ScreenScraper and TheGamesDB are reached through Skyscraper, which identifies itself to them | metadata, images and a request cache in USERDATA; optional ScreenScraper account and TheGamesDB key in STATE (root only), handed to Skyscraper only in memory-backed /run |
 | RetroAchievements | after you sign in, while a game runs | your user name and token, game identification and unlocks (sent by RetroArch) | the token only (never the password), per user, in STATE (root only) |
 | Software Update | only when you open Software Update and check / download | a request for the release manifest and file | the downloaded update in USERDATA until installed |
 | Moonlight / Steam Link | only while you use them | the stream with your PC | pairing keys per user |

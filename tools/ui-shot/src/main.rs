@@ -30,6 +30,40 @@ fn gen(rows: &[(&str, &str, &str, bool, i32)]) -> ModelRc<GenRow> {
     ModelRc::from(Rc::new(VecModel::from(v)))
 }
 
+/* Game Details page: (icon, label, primary, on, armed). */
+fn actions(items: &[(i32, String, bool, bool, bool)]) -> ModelRc<DetailAction> {
+    let v: Vec<DetailAction> = items
+        .iter()
+        .map(|(icon, label, primary, on, armed)| DetailAction {
+            icon: *icon, label: label.into(), primary: *primary, on: *on, enabled: true, armed: *armed, busy: false,
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(v)))
+}
+
+fn chips(items: &[(i32, &str, bool)]) -> ModelRc<DetailChip> {
+    let v: Vec<DetailChip> = items.iter().map(|(i, t, w)| DetailChip { icon: *i, text: (*t).into(), warn: *w }).collect();
+    ModelRc::from(Rc::new(VecModel::from(v)))
+}
+
+/* Synthetic art (no third-party images): a box-art-like vertical gradient
+ * with a band, and a soft two-colour backdrop. */
+fn art(w: u32, h: u32, top: (u8, u8, u8), bottom: (u8, u8, u8), band: bool) -> slint::Image {
+    let mut b = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
+    for (i, p) in b.make_mut_slice().iter_mut().enumerate() {
+        let (x, y) = (i as u32 % w, i as u32 / w);
+        let t = y as f32 / h as f32;
+        let mix = |a: u8, c: u8| (a as f32 * (1.0 - t) + c as f32 * t) as u8;
+        let on_band = band && y > h * 6 / 100 && y < h * 22 / 100 && x > w / 10 && x < w * 9 / 10;
+        *p = if on_band {
+            slint::Rgba8Pixel { r: 250, g: 210, b: 60, a: 255 }
+        } else {
+            slint::Rgba8Pixel { r: mix(top.0, bottom.0), g: mix(top.1, bottom.1), b: mix(top.2, bottom.2), a: 255 }
+        };
+    }
+    slint::Image::from_rgba8(b)
+}
+
 fn s(ui: &HomeWindow, i: usize) -> String {
     ui.get_i18n_strings().row_data(i).unwrap_or_default().to_string()
 }
@@ -322,6 +356,23 @@ fn main() {
             ui.set_keyboard_index(14);
             ui.set_settings_view(6);
         })),
+        ("keyboard_caps", Box::new(|ui| {
+            /* Password field, Caps Lock on: the letters show their case. */
+            let row = |keys: &[&str]| -> ModelRc<SharedString> {
+                ModelRc::from(Rc::new(VecModel::from(keys.iter().map(|k| SharedString::from(*k)).collect::<Vec<_>>())))
+            };
+            ui.set_settings_open(true); ui.set_settings_selected_index(3);
+            ui.set_keyboard_row_zero(row(&["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"]));
+            ui.set_keyboard_row_one(row(&["A", "S", "D", "F", "G", "H", "J", "K", "L", "Back"]));
+            ui.set_keyboard_row_two(row(&["Z", "X", "C", "V", "B", "N", "M", ".", "-", "_"]));
+            ui.set_keyboard_row_three(row(&["Shift", "123", "SYM", "@", "/", ":", ";", "'", "Space", "Done"]));
+            ui.set_keyboard_title(s(ui, 172).into());
+            ui.set_keyboard_input_kind("password".into()); ui.set_keyboard_secret(true); ui.set_keyboard_page(0);
+            ui.set_keyboard_shift(true); ui.set_keyboard_caps(true);
+            ui.set_keyboard_value("Secret".into());
+            ui.set_keyboard_index(30);
+            ui.set_settings_view(6);
+        })),
         ("display_audio", Box::new(|ui| { ui.set_settings_selected_index(4); ui.set_settings_view(18); ui.set_display_audio_index(2); ui.set_display_audio_scroll_offset(0); })),
         ("display_audio_sounds", Box::new(|ui| { ui.set_display_color_temperature_available(true); ui.set_display_audio_index(9); ui.set_display_audio_scroll_offset(5); })),
         ("system", Box::new(|ui| { ui.set_display_color_temperature_available(false); ui.set_settings_selected_index(5); ui.set_settings_view(19); ui.set_system_index(4); ui.set_system_scroll_offset(0); })),
@@ -336,23 +387,27 @@ fn main() {
             ui.set_lighting_effect("spectrum".into()); ui.set_lighting_index(7); ui.set_lighting_scroll(4);
         })),
         ("gaming_preview", Box::new(|ui| {
+            ui.set_settings_open(true); ui.set_details_active(false);
             ui.set_settings_selected_index(3); ui.set_settings_view(0);
             ui.set_gaming_rows(gen(&[(&s(ui, 584), "alice", "", true, -1),
                 (&s(ui, 767), "", &s(ui, 768), false, 0), (&s(ui, 769), "10", "", true, -1),
                 (&s(ui, 770), "", &s(ui, 771), false, 1), (&s(ui, 772), "", "", true, -1),
                 (&s(ui, 774), &s(ui, 54), "", true, -1), (&s(ui, 775), "", &s(ui, 776), false, 0),
                 (&s(ui, 777), "", &s(ui, 778), false, 1),
+                (&s(ui, 804), "", &s(ui, 805), false, -1),
+                (&s(ui, 792), "ScreenScraper", &s(ui, 793), true, -1),
                 (&s(ui, 565), "nuubfan", &s(ui, 567), false, -1),
-                (&s(ui, 568), "", &s(ui, 569), false, -1), (&s(ui, 576), "", &s(ui, 581), true, -1)]));
+                (&s(ui, 568), "", &s(ui, 569), false, -1), (&s(ui, 798), "", &s(ui, 799), false, -1),
+                (&s(ui, 576), "", &s(ui, 581), true, -1)]));
             ui.set_gaming_split(8);
         })),
         ("gaming", Box::new(|ui| { ui.set_settings_selected_index(3); ui.set_settings_view(68); ui.set_gaming_index(3); })),
-        ("gaming_library", Box::new(|ui| { ui.set_gaming_index(9); })),
+        ("gaming_library", Box::new(|ui| { ui.set_gaming_index(12); })),
         ("gaming_signout", Box::new(|ui| {
-            ui.set_gaming_index(8);
+            ui.set_gaming_index(10);
             /* Sign Out waits for its confirming press. */
             let rows = ui.get_gaming_rows();
-            if let Some(mut r) = rows.row_data(8) { r.armed = true; r.detail = s(ui, 191).into(); rows.set_row_data(8, r); }
+            if let Some(mut r) = rows.row_data(10) { r.armed = true; r.detail = s(ui, 191).into(); rows.set_row_data(10, r); }
         })),
         ("game_hotkeys", Box::new(|ui| {
             ui.set_gaming_index(0);
@@ -384,25 +439,45 @@ fn main() {
                 (&s(ui, 764), "", "", false, -1)]));
         })),
         ("game_details", Box::new(|ui| {
-            ui.set_details_active(true); ui.set_settings_view(50); ui.set_gen_index(0); ui.set_gen_scroll(0);
+            ui.set_settings_open(true); ui.set_details_active(true); ui.set_settings_view(50); ui.set_gen_index(0);
             ui.set_details_title("Super Mario World".into()); ui.set_details_subtitle("Super Nintendo".into());
-            ui.set_details_description("Mario and Luigi travel to Dinosaur Land, where Bowser has kidnapped Princess Toadstool again.".into());
-            ui.set_gen_section("Super Nintendo".into()); ui.set_gen_select(true);
-            ui.set_gen_rows(gen(&[(&s(ui, 413), "", "", false, -1), (&s(ui, 412), "", "", false, 1),
-                (&s(ui, 537), "1", "Platformers", true, -1), (&s(ui, 524), "", "", true, -1),
-                (&s(ui, 560), "", "", false, -1), (&s(ui, 551), &s(ui, 403), "", false, -1),
-                (&s(ui, 552), "12 h 05 min", "", false, -1), (&s(ui, 553), "Nintendo EAD", "", false, -1)]));
+            ui.set_details_meta("1990  •  Platform  •  Nintendo EAD".into());
+            ui.set_details_description("Mario and Luigi travel to Dinosaur Land, where Bowser has kidnapped Princess Toadstool again. With the help of Yoshi, they explore seven worlds full of secret exits, hidden switches and castles. Ride Yoshi, fly with the cape feather and discover the Star Road to reach the hardest levels. The adventure spans 96 exits and a final battle in Bowser's castle.".into());
+            ui.set_details_cover(art(200, 280, (40, 90, 200), (120, 40, 160), true)); ui.set_details_has_cover(true);
+            ui.set_details_backdrop(art(96, 72, (30, 110, 60), (20, 40, 110), false)); ui.set_details_has_backdrop(true);
+            ui.set_details_chips(chips(&[(11, "1-2", false), (1, &s(ui, 789).replace("{0}", "90"), false),
+                (12, &format!("{}  •  12 h 05 min", s(ui, 403)), false)]));
+            ui.set_details_actions(actions(&[(0, s(ui, 413), true, false, false), (1, s(ui, 412), false, true, false),
+                (2, s(ui, 537), false, false, false), (3, s(ui, 524), false, false, false),
+                (5, s(ui, 560), false, false, false), (9, s(ui, 549), false, false, false), (10, s(ui, 544), false, false, false)]));
+            ui.set_details_caption("snes/Super Mario World (USA).sfc".into()); ui.set_details_caption_armed(false);
+            ui.set_details_desc_step(0); ui.set_gen_notice("".into());
+        })),
+        ("game_details_scrolled", Box::new(|ui| {
+            ui.set_gen_index(2); ui.set_details_desc_step(1);
+            ui.set_details_caption("Platformers, Favorites of the year".into());
         })),
         ("game_delete", Box::new(|ui| {
-            ui.set_details_active(true); ui.set_settings_view(50); ui.set_gen_index(3); ui.set_gen_scroll(0);
-            ui.set_details_title("Super Mario World".into()); ui.set_gen_section("Super Nintendo".into());
-            ui.set_gen_rows(gen(&[(&s(ui, 525), "snes9x", "", false, -1), (&s(ui, 549), "", "", false, -1),
-                (&s(ui, 558), "", "snes/Super Mario World (USA).sfc", false, -1), (&s(ui, 544), "", &s(ui, 546), false, -1)]));
-            /* Delete Game waits for its confirming press. */
-            let rows = ui.get_gen_rows();
-            if let Some(mut r) = rows.row_data(3) { r.armed = true; rows.set_row_data(3, r); }
+            ui.set_gen_index(6); ui.set_details_desc_step(0);
+            ui.set_details_actions(actions(&[(0, s(ui, 413), true, false, false), (1, s(ui, 412), false, true, false),
+                (2, s(ui, 537), false, false, false), (3, s(ui, 524), false, false, false),
+                (5, s(ui, 560), false, false, false), (9, s(ui, 549), false, false, false), (10, s(ui, 544), false, false, true)]));
+            ui.set_details_caption(s(ui, 546).into()); ui.set_details_caption_armed(true);
+        })),
+        ("game_details_bare", Box::new(|ui| {
+            ui.set_gen_index(0);
+            ui.set_details_title("cube".into()); ui.set_details_subtitle("PlayStation Portable".into());
+            ui.set_details_meta("".into()); ui.set_details_description("".into());
+            ui.set_details_has_cover(false); ui.set_details_has_backdrop(false);
+            ui.set_details_chips(chips(&[(13, &s(ui, 561), true), (12, &s(ui, 405), false)]));
+            ui.set_details_actions(actions(&[(0, s(ui, 413), true, false, false), (14, s(ui, 412), false, false, false),
+                (2, s(ui, 537), false, false, false), (6, s(ui, 562), false, false, false), (7, s(ui, 563), false, false, false),
+                (10, s(ui, 544), false, false, false)]));
+            ui.set_details_caption("psp/cube.cso".into()); ui.set_details_caption_armed(false);
+            ui.set_gen_notice(s(ui, 572).into());
         })),
         ("game_settings", Box::new(|ui| {
+            ui.set_gen_notice("".into()); ui.set_details_has_cover(false);
             ui.set_details_active(true); ui.set_settings_view(51); ui.set_gen_index(1); ui.set_gen_scroll(0);
             ui.set_details_title("Super Mario World".into()); ui.set_gen_section(s(ui, 524).into());
             ui.set_gen_rows(gen(&[(&s(ui, 525), &s(ui, 528).replace("{0}", "snes9x"), "", true, -1),
@@ -644,6 +719,8 @@ fn main() {
     fn card(kind: i32, title: &str, detail: &str, system: &str, aspect: f32, accent: u32, img: Option<slint::Image>, available: bool, favorite: bool) -> HomeCard {
         HomeCard {
             key: title.into(), kind, title: title.into(), detail: detail.into(), system_name: system.into(),
+            last_played: detail.split("  •  ").nth(1).unwrap_or("").into(),
+            play_time: detail.split("  •  ").nth(2).map(|t| t.trim_start_matches("Played ")).unwrap_or("").into(),
             cover_path: "".into(), has_cover: img.is_some(), cover: img.unwrap_or_default(), aspect, x_units: 0.0,
             accent: slint::Color::from_rgb_u8((accent >> 16) as u8, (accent >> 8) as u8, accent as u8),
             available, favorite,
@@ -674,6 +751,7 @@ fn main() {
         card(3, "Mega Drive / Genesis", "1 game", "", 1.6, 0x1f4fa8, icon("megadrive"), true, false),
         card(3, "PICO-8", "3 games", "", 1.6, 0xff004d, None, true, false),
     ]);
+    let snes_tile = shelf.row_data(2).unwrap_or_default();
     let apps = units(vec![
         card(4, "Moonlight", "", "", 1.0, 0x1a1d22, Some(cover(96, 96, (90, 160, 255))), true, false),
         card(4, "Steam Link", "", "", 1.0, 0x1a1d22, None, true, false),
@@ -707,6 +785,7 @@ fn main() {
     })));
     scenes.push(("home_grid", Box::new(move |ui| {
         ui.set_library_scanning(false); ui.set_home_notice("".into());
+        ui.set_library_card(snes_tile.clone());
         ui.set_library_games(grid.clone()); ui.set_library_aspect(1.4); ui.set_library_title("Super Nintendo".into());
         ui.set_library_detail("14 games".into()); ui.set_library_index(2); ui.set_library_open(true);
     })));
@@ -732,7 +811,78 @@ fn main() {
         ui.set_battery_state("charging".into());
         ui.set_settings_open(true); ui.set_settings_selected_index(1); ui.set_settings_view(6);
     })));
+    /* Application pages (apppage.rs fills them on the device). */
+    fn entries(items: &[(&str, &str, &str, bool)]) -> ModelRc<AppEntry> {
+        let v: Vec<AppEntry> = items.iter().map(|(t, d, v, g)| AppEntry {
+            title: (*t).into(), detail: (*d).into(), value: (*v).into(), icon: if d.is_empty() { 0 } else { 18 },
+            good: *g, caption: "".into(),
+        }).collect();
+        ModelRc::from(Rc::new(VecModel::from(v)))
+    }
+    fn captions(items: &[&str]) -> ModelRc<SharedString> {
+        ModelRc::from(Rc::new(VecModel::from(items.iter().map(|c| SharedString::from(*c)).collect::<Vec<_>>())))
+    }
+    let app_icon = cover(96, 96, (90, 160, 255));
+    let app_page = move |ui: &HomeWindow, kicker: &str, title: &str, meta: &str| {
+        ui.set_details_active(false); ui.set_library_open(false);
+        ui.set_settings_open(true);
+        ui.set_app_page_icon(app_icon.clone()); ui.set_app_page_has_icon(true);
+        ui.set_app_page_kicker(kicker.into()); ui.set_app_page_title(title.into()); ui.set_app_page_meta(meta.into());
+        ui.set_app_page_pin("".into()); ui.set_app_page_progress(-1.0); ui.set_app_page_description("".into());
+        ui.set_app_page_chips(chips(&[]));
+    };
+    let ap = app_page.clone();
+    scenes.push(("moonlight_pcs", Box::new(move |ui| {
+        ap(ui, "STREAM", "Moonlight", "");
+        ui.set_moonlight_active(true); ui.set_settings_view(40); ui.set_moonlight_index(0);
+        ui.set_app_page_entries(entries(&[("GAMING-PC", "192.168.5.20 • Paired", "Online", true),
+            ("Office laptop", "192.168.5.31 • Not paired", "Offline", false)]));
+        ui.set_app_page_actions(actions(&[(17, "Search for PCs".into(), false, false, false),
+            (19, "Add PC by Address".into(), false, false, false), (3, "Stream Settings".into(), false, false, false)]));
+        ui.set_app_page_captions(captions(&["", "PC address", "Automatic • 60 fps • H.264 • Automatic"]));
+    })));
+    scenes.push(("moonlight_actions", Box::new(|ui| { ui.set_moonlight_index(4); })));
+    let ap = app_page.clone();
+    scenes.push(("moonlight_pin", Box::new(move |ui| {
+        ap(ui, "STREAM", "Office laptop", "192.168.5.31");
+        ui.set_settings_view(41); ui.set_moonlight_index(0);
+        ui.set_app_page_chips(chips(&[(13, "Not paired", true), (18, "Online", false)]));
+        ui.set_app_page_entries(entries(&[]));
+        ui.set_app_page_pin("4831".into());
+        ui.set_app_page_actions(actions(&[(7, "Cancel Pairing".into(), true, false, false), (10, "Remove PC".into(), false, false, false)]));
+        ui.set_app_page_captions(captions(&["Waiting for the PC…", ""]));
+    })));
+    let ap = app_page.clone();
+    scenes.push(("steamlink_absent", Box::new(move |ui| {
+        ap(ui, "STEAM LINK", "Steam Link", "");
+        ui.set_moonlight_active(false); ui.set_steamlink_active(true); ui.set_settings_view(45); ui.set_steamlink_index(0);
+        ui.set_app_page_entries(entries(&[]));
+        ui.set_app_page_description("Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.".into());
+        ui.set_app_page_actions(actions(&[(4, "Download Steam Link".into(), true, false, false)]));
+        ui.set_app_page_captions(captions(&[""]));
+    })));
+    scenes.push(("steamlink_installing", Box::new(|ui| {
+        ui.set_app_page_progress(0.42); ui.set_app_page_progress_label("Downloading Steam Link • 42%".into());
+        ui.set_app_page_actions(actions(&[(7, "Press to cancel".into(), true, false, false)]));
+    })));
+    let ap = app_page.clone();
+    scenes.push(("steamlink_installed", Box::new(move |ui| {
+        ap(ui, "STEAM LINK", "Steam Link", "Version 1.3.9.300");
+        ui.set_app_page_chips(chips(&[(6, "Up to date", false)]));
+        ui.set_app_page_description("Choose and pair your PC in Steam Link".into());
+        ui.set_app_page_actions(actions(&[(0, "Open Steam Link".into(), true, false, false),
+            (5, "Check for Updates".into(), false, false, false), (10, "Remove Steam Link".into(), false, false, false)]));
+        ui.set_app_page_captions(captions(&["Choose and pair your PC in Steam Link", "Version 1.3.9.300", ""]));
+        ui.set_steamlink_index(1);
+    })));
+    scenes.push(("app_page_done", Box::new(|ui| {
+        ui.set_steamlink_active(false); ui.set_moonlight_active(false); ui.set_settings_open(false); ui.set_settings_view(0);
+    })));
+    let only = std::env::var("ONLY").unwrap_or_default();
     for (name, f) in &scenes {
+        if !only.is_empty() && !only.split(',').any(|o| name.starts_with(o)) {
+            continue;
+        }
         f(&ui);
         for (w, h) in sizes {
             shot(&win, w, h, name);

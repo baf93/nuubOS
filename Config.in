@@ -38,5 +38,6 @@ source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-web/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/libretro/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/streaming/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/thirdparty/syncthing/Config.in"
+source "$BR2_EXTERNAL_NUUBOS_PATH/package/thirdparty/skyscraper/Config.in"
 
 endmenu

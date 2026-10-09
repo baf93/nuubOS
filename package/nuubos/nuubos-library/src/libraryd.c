@@ -186,6 +186,8 @@ static int scan_pipe[2] = { -1, -1 };
 static pthread_t scan_thread;
 static bool scanning;
 static bool rescan_pending;
+/* Games added or available again since the last SCAN request found idle. */
+static size_t scan_new;
 static struct scan_result *scan_output;
 
 static char session_game[17];
@@ -1149,6 +1151,7 @@ static bool reconcile(struct scan_result *scan)
 	}
 	log_msg("scan: %zu found, %zu added, %zu changed, %zu available again, %zu unavailable, %zu duplicates",
 		scan->count, added, changed, back, gone, duplicates);
+	scan_new += added + back;
 	return added || changed || back || gone;
 }
 
@@ -1528,8 +1531,8 @@ static void build_status(struct strbuf *b)
 		available++;
 		per_system[games[i].sys]++;
 	}
-	sb_append(b, "user=%s\nscanning=%d\ngames=%zu\n", active_user,
-		  scanning ? 1 : 0, available);
+	sb_append(b, "user=%s\nscanning=%d\ngames=%zu\nscan_new=%zu\n", active_user,
+		  scanning ? 1 : 0, available, scan_new);
 	if (active_user[0]) {
 		append_recent(b, "recent", RECENT_LIMIT);
 		sb_append(b, "collection=favorites\t\t%zu\n", favorite_count);
@@ -1648,7 +1651,7 @@ static void append_metadata(struct strbuf *b, const struct game *g)
 {
 	char stem[512];
 	char path[PATH_MAX];
-	char line[4096];
+	char line[16384];
 	FILE *fp;
 
 	rom_stem(g->rel, stem, sizeof(stem));
@@ -1660,6 +1663,15 @@ static void append_metadata(struct strbuf *b, const struct game *g)
 	while (fgets(line, sizeof(line), fp)) {
 		char *eq;
 
+		/* An over-long line is dropped whole, never split into a
+		 * bogus second key. */
+		if (!strchr(line, '\n') && !feof(fp)) {
+			int c;
+
+			while ((c = fgetc(fp)) != EOF && c != '\n')
+				;
+			continue;
+		}
 		line[strcspn(line, "\r\n")] = '\0';
 		if (line[0] == '#' || !(eq = strchr(line, '=')) || eq == line)
 			continue;
@@ -1846,6 +1858,8 @@ static void handle_command(struct client *c, char *line)
 		c->subscribed = true;
 		send_status(c);
 	} else if (!strcmp(line, "SCAN")) {
+		if (!scanning)
+			scan_new = 0;
 		load_apps();
 		start_scan();
 		reply(c, "OK\n");

@@ -86,6 +86,8 @@ struct LibApp {
 struct LibSnapshot {
     user: String,
     scanning: bool,
+    /* Games added or available again since the last requested scan. */
+    scan_new: usize,
     recent: Vec<LibGame>,
     collections: Vec<LibCollection>,
     systems: Vec<LibSystem>,
@@ -162,6 +164,7 @@ fn parse_snapshot(reply: &str) -> LibSnapshot {
         match key {
             "user" => s.user = value.into(),
             "scanning" => s.scanning = value == "1",
+            "scan_new" => s.scan_new = value.parse().unwrap_or(0),
             "recent" => s.recent.extend(parse_game(value)),
             "collection" => {
                 let f: Vec<&str> = value.split('\t').collect();
@@ -290,8 +293,9 @@ fn cover_target(ui: &HomeWindow, small: bool) -> u32 {
     px.div_ceil(32) * 32
 }
 
-/* Area-average downscale to `target` rows + anti-aliased rounded corners. */
-fn shape_cover(src: &Image, target: u32, radius_px: f32) -> Option<(SharedPixelBuffer<Rgba8Pixel>, f32)> {
+/* Area-average downscale to `target` rows + anti-aliased rounded corners
+ * (radius 0: square corners). */
+pub(crate) fn shape_cover(src: &Image, target: u32, radius_px: f32) -> Option<(SharedPixelBuffer<Rgba8Pixel>, f32)> {
     let b = src.to_rgba8_premultiplied()?;
     let (w, h) = (b.width(), b.height());
     if w == 0 || h == 0 {
@@ -323,7 +327,7 @@ fn shape_cover(src: &Image, target: u32, radius_px: f32) -> Option<(SharedPixelB
         let cx = if fx < r { r } else if fx > ow as f32 - r { ow as f32 - r } else { fx };
         let cy = if fy < r { r } else if fy > oh as f32 - r { oh as f32 - r } else { fy };
         let d = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt();
-        let cov = (r - d + 0.5).clamp(0.0, 1.0) / cnt;
+        let cov = if radius_px <= 0.0 { 1.0 } else { (r - d + 0.5).clamp(0.0, 1.0) } / cnt;
         let c = |v: u32| (v as f32 * cov + 0.5) as u8;
         *o = Rgba8Pixel { r: c(acc[0]), g: c(acc[1]), b: c(acc[2]), a: c(acc[3]) };
     }
@@ -430,6 +434,8 @@ fn game_card(ui: &HomeWindow, snap: &LibSnapshot, g: &LibGame, load: bool) -> Ho
         kind: KIND_GAME,
         title: g.title.clone().into(),
         detail: game_detail(ui, g, &system_name).into(),
+        last_played: if g.last > 0 { last_played_label(ui, g.last) } else { tr(ui, 405, "Never played") }.into(),
+        play_time: if g.last > 0 && g.time > 0 { duration_label(ui, g.time) } else { String::new() }.into(),
         system_name: system_name.into(),
         cover_path: g.cover.clone().into(),
         has_cover: cover.is_some(),
@@ -678,6 +684,7 @@ fn refresh_grid_window(ui: &HomeWindow) {
 /* ---------------------------------------------------------------- */
 
 fn apply_snapshot(ui: &HomeWindow, snap: LibSnapshot) {
+    let scan = (snap.scanning, snap.scan_new);
     let user_changed = STATE.with(|st| {
         let mut st = st.borrow_mut();
         let changed = st.snap.user != snap.user;
@@ -695,6 +702,7 @@ fn apply_snapshot(ui: &HomeWindow, snap: LibSnapshot) {
         pick_empty_variant(ui);
     }
     build_home(ui);
+    crate::gameui::library_scan_state(ui, scan.0, scan.1);
     let scope = STATE.with(|st| st.borrow().grid_scope.clone());
     if ui.get_library_open() && !scope.is_empty() {
         fetch_grid(ui, scope, false);
@@ -911,11 +919,18 @@ fn open_grid(ui: &HomeWindow, card: &HomeCard) {
     });
     ui.set_library_title(card.title.clone());
     ui.set_library_detail(card.detail.clone());
+    ui.set_library_card(card.clone());
     ui.set_library_aspect(aspect);
     ui.set_library_index(0);
     ui.set_library_games(ModelRc::default());
     ui.set_library_open(true);
     fetch_grid(ui, scope, true);
+}
+
+/* The application page shows the icon of the tile it was opened from. */
+fn app_page_icon(ui: &HomeWindow, card: &HomeCard) {
+    ui.set_app_page_icon(card.cover.clone());
+    ui.set_app_page_has_icon(card.has_cover);
 }
 
 fn close_grid(ui: &HomeWindow) {
@@ -1056,8 +1071,14 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
                 KIND_FAVORITES | KIND_COLLECTION | KIND_SYSTEM => open_grid(ui, &card),
                 KIND_GAME => press_game(ui, &card),
                 /* Built-in nuubUI applications (EPIC-025, EPIC-026). */
-                _ if card.key.as_str() == "moonlight" => crate::moonlight::open(ui),
-                _ if card.key.as_str() == "steamlink" => crate::steamlink::open(ui),
+                _ if card.key.as_str() == "moonlight" => {
+                    app_page_icon(ui, &card);
+                    crate::moonlight::open(ui)
+                }
+                _ if card.key.as_str() == "steamlink" => {
+                    app_page_icon(ui, &card);
+                    crate::steamlink::open(ui)
+                }
                 _ if card.key.as_str() == "files" => crate::filesui::open(ui),
                 _ if card.key.as_str() == "media" => crate::mediaui::open(ui),
                 _ if card.key.as_str() == "web" => crate::webui::open(ui),

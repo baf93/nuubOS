@@ -600,6 +600,39 @@ component SettingsSelectableRow inherits Rectangle {
     }
 }
 
+/* Generic dropdown sheet of a discrete multi-value choice (Settings pages
+ * and the Game Details page). */
+component SettingsChoiceSheet inherits Rectangle {
+    in property <string> title;
+    in property <[SettingsChoiceEntry]> options;
+    in property <int> index;
+    in property <int> scroll;
+    in property <int> visible-rows;
+    in property <length> list-y;
+    in property <length> row-step;
+    in property <length> row-height;
+
+    background: Theme.surface-container-high;
+    border-radius: Shape.large;
+    clip: true;
+
+    MarqueeText {
+        x: 16px; y: 10px; width: parent.width - 32px; height: 28px;
+        label: root.title;
+        text-color: Theme.text; text-size: 18px; text-weight: 700;
+        active: true;
+    }
+    for option[i] in root.options: SettingsSelectableRow {
+        x: 12px;
+        y: root.list-y + (i - root.scroll) * root.row-step;
+        width: parent.width - 24px;
+        height: root.row-height;
+        title: option.label;
+        selected: root.index == i;
+        visible: i >= root.scroll && i < root.scroll + root.visible-rows;
+    }
+}
+
 component SettingsActionButton inherits Rectangle {
     in property <string> label: "";
     in property <bool> selected: false;
@@ -1011,6 +1044,9 @@ export struct HomeCard {
     kind: int,
     title: string,
     detail: string,
+    /* Games: the info panel's chips (detail stays the one-line form). */
+    last-played: string,
+    play-time: string,
     system-name: string,
     cover-path: string,
     cover: image,
@@ -1046,6 +1082,32 @@ component HomeCollectionGlyph inherits Rectangle {
     }
 }
 
+/* Focus ring of the Home cards and tiles: the nuubOS ring detached from
+ * the item by a dark gap, plus a soft glow; it fades in and out. */
+component HomeFocusRing inherits Rectangle {
+    in property <length> radius;
+    in property <bool> shown: false;
+
+    background: #00000000;
+    opacity: root.shown ? 1.0 : 0.0;
+    animate opacity { duration: 140ms; easing: ease-out; }
+
+    Rectangle {
+        x: -9px; y: -9px; width: parent.width + 18px; height: parent.height + 18px;
+        border-radius: root.radius + 9px;
+        background: #00000000;
+        border-width: 4px;
+        border-color: Theme.accent.transparentize(0.8);
+    }
+    Rectangle {
+        x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px;
+        border-radius: root.radius + 6px;
+        background: #00000000;
+        border-width: 3px;
+        border-color: Theme.primary;
+    }
+}
+
 /* One Home/library card. The focus treatment (blue ring + soft glow) is
  * drawn outside the card bounds, separated from it by a thin gap, so
  * containers keep a small inset. Covers arrive pre-scaled with rounded
@@ -1075,21 +1137,10 @@ component HomeCardView inherits Rectangle {
     background: #00000000;
 
     /* Glow + ring, detached from the card by a dark gap. */
-    Rectangle {
-        x: -9px; y: -9px; width: parent.width + 18px; height: parent.height + 18px;
-        border-radius: root.radius + 9px;
-        background: #00000000;
-        border-width: 4px;
-        border-color: Theme.accent.transparentize(0.8);
-        visible: root.focused;
-    }
-    Rectangle {
-        x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px;
-        border-radius: root.radius + 6px;
-        background: #00000000;
-        border-width: 3px;
-        border-color: Theme.primary;
-        visible: root.focused;
+    HomeFocusRing {
+        width: parent.width; height: parent.height;
+        radius: root.radius;
+        shown: root.focused;
     }
 
     /* Placeholder / tile face. */
@@ -1196,89 +1247,89 @@ component HomeCardView inherits Rectangle {
 
 }
 
-/* Compact shelf tile (systems, collections, Favorites, applications):
- * icon, name and count on one tonal chip, so the shelves stay small and
- * the game covers keep the screen. Same focus ring as the cards. */
-component HomeChipView inherits Rectangle {
+/* Shelf tile (systems, collections, Favorites, applications): the icon
+ * in a tonal well (systems: tinted with the system colour), the name and
+ * the count beside it, large enough to read from arm's length. Same focus
+ * ring as the cards. */
+component HomeTileView inherits Rectangle {
     in property <HomeCard> card;
     in property <bool> focused: false;
     in property <bool> dimmed: false;
     in property <float> s: 1.0;
 
-    property <length> radius: Shape.medium;
-    property <length> icon-size: root.height * 0.52;
-    property <length> icon-x: (root.height - root.icon-size) / 2 + 2px * root.s;
-    property <color> ink: root.dimmed ? #6f757e : root.focused ? Theme.on-secondary-container : #c9cdd3;
+    property <length> radius: Shape.large;
+    property <length> well: min(root.height - 28px * root.s, 56px * root.s);
+    property <length> icon-size: root.well * 0.56;
+    property <color> ink: root.focused ? Theme.on-secondary-container
+        : root.dimmed ? Theme.text-secondary : Theme.text;
 
     background: #00000000;
 
-    Rectangle {
-        x: -9px; y: -9px; width: parent.width + 18px; height: parent.height + 18px;
-        border-radius: root.radius + 9px;
-        background: #00000000;
-        border-width: 4px;
-        border-color: Theme.accent.transparentize(0.8);
-        visible: root.focused;
-    }
-    Rectangle {
-        x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px;
-        border-radius: root.radius + 6px;
-        background: #00000000;
-        border-width: 3px;
-        border-color: Theme.primary;
-        visible: root.focused;
+    HomeFocusRing {
+        width: parent.width; height: parent.height;
+        radius: root.radius;
+        shown: root.focused;
     }
 
     Rectangle {
         width: parent.width; height: parent.height;
         border-radius: root.radius;
         background: root.focused ? Theme.secondary-container : Theme.surface-container;
+        animate background { duration: 150ms; easing: ease-out; }
 
-        if root.card.kind == 1: HomeStar {
-            x: root.icon-x; y: (parent.height - root.icon-size) / 2;
-            width: root.icon-size; height: root.icon-size;
-        }
-        if root.card.kind == 2: HomeCollectionGlyph {
-            x: root.icon-x + root.icon-size * 0.07; y: (parent.height - root.icon-size * 0.8) / 2;
-            width: root.icon-size * 0.86; height: root.icon-size * 0.80;
-            ink: root.ink;
-        }
-        if root.card.kind >= 3 && root.card.has-cover: Image {
-            x: root.icon-x; y: (parent.height - root.icon-size) / 2;
-            width: root.icon-size; height: root.icon-size;
-            source: root.card.cover;
-            image-fit: contain;
-            colorize: root.card.kind == 3 ? root.ink : #00000000;
-        }
-        if root.card.kind >= 3 && !root.card.has-cover: Image {
-            x: root.icon-x + root.icon-size * 0.1; y: (parent.height - root.icon-size * 0.8) / 2;
-            width: root.icon-size * 0.8; height: root.icon-size * 0.8;
-            source: @image-url("assets/icons/gamepad.svg");
-            colorize: root.ink;
-            image-fit: contain;
+        well := Rectangle {
+            x: 14px * root.s; y: (parent.height - root.well) / 2;
+            width: root.well; height: root.well;
+            border-radius: Shape.medium;
+            background: root.card.kind == 3 ? root.card.accent.transparentize(root.focused ? 0.35 : 0.55)
+                : root.focused ? Theme.primary-container : Theme.surface-container-highest;
+
+            if root.card.kind == 1: HomeStar {
+                x: (parent.width - root.icon-size) / 2; y: (parent.height - root.icon-size) / 2;
+                width: root.icon-size; height: root.icon-size;
+            }
+            if root.card.kind == 2: HomeCollectionGlyph {
+                x: (parent.width - root.icon-size * 0.86) / 2; y: (parent.height - root.icon-size * 0.8) / 2;
+                width: root.icon-size * 0.86; height: root.icon-size * 0.80;
+                ink: root.ink;
+            }
+            if root.card.kind >= 3 && root.card.has-cover: Image {
+                x: (parent.width - root.icon-size) / 2; y: (parent.height - root.icon-size) / 2;
+                width: root.icon-size; height: root.icon-size;
+                source: root.card.cover;
+                image-fit: contain;
+                colorize: root.card.kind == 3 ? #ffffff : #00000000;
+            }
+            if root.card.kind >= 3 && !root.card.has-cover: Image {
+                x: (parent.width - root.icon-size * 0.8) / 2; y: (parent.height - root.icon-size * 0.8) / 2;
+                width: root.icon-size * 0.8; height: root.icon-size * 0.8;
+                source: @image-url("assets/icons/gamepad.svg");
+                colorize: #ffffff;
+                image-fit: contain;
+            }
         }
 
         VerticalLayout {
-            x: root.icon-x + root.icon-size + 10px * root.s;
-            width: parent.width - self.x - 10px * root.s;
+            x: well.x + well.width + 14px * root.s;
+            width: parent.width - self.x - 14px * root.s;
             height: parent.height;
             alignment: center;
-            spacing: 0px;
+            spacing: 2px * root.s;
             MarqueeText {
-                height: 20px * root.s;
+                height: 24px * root.s;
                 label: root.card.title;
-                text-color: root.dimmed ? #8a9099 : root.focused ? Theme.on-secondary-container : Theme.text;
-                text-size: 15px * root.s;
+                text-color: root.ink;
+                text-size: 18px * root.s;
                 text-weight: 600;
                 active: root.focused;
             }
             if root.card.detail != "": Text {
-                height: 16px * root.s;
+                height: 19px * root.s;
                 text: root.card.detail;
                 overflow: elide;
                 vertical-alignment: center;
-                color: root.dimmed ? #6f757e : Theme.text-secondary;
-                font-size: 12px * root.s;
+                color: root.focused ? Theme.on-secondary-container.transparentize(0.25) : Theme.text-secondary;
+                font-size: 14px * root.s;
             }
         }
     }
@@ -1301,14 +1352,15 @@ component HomeSectionTitle inherits Rectangle {
         visible: root.active;
     }
     Text {
-        x: root.active ? 12px : 0px;
+        x: root.active ? 14px : 0px;
+        animate x { duration: 200ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
         y: 0; width: parent.width - self.x - (root.status != "" ? root.status-w + 8px : 0px); height: parent.height;
         text: root.label;
         vertical-alignment: center;
         overflow: elide;
-        color: root.active ? Theme.text : #6f757e;
+        color: root.active ? Theme.text : Theme.text-secondary;
         font-size: root.label-size;
-        font-weight: root.active ? 600 : 500;
+        font-weight: 600;
     }
     if root.status != "": Text {
         x: parent.width - root.status-w; y: 0; width: root.status-w; height: parent.height;
@@ -1321,30 +1373,98 @@ component HomeSectionTitle inherits Rectangle {
     }
 }
 
-/* Title + metadata of the focused card, shown under the covers. */
-component HomeFocusInfo inherits Rectangle {
-    in property <string> title;
-    in property <string> detail;
+/* One chip of the info panel: a dot in the system colour or an icon,
+ * then the text (the Game Details chip style). */
+component HomeInfoChip inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> has-icon: true;
+    in property <color> dot: #00000000;
+    in property <bool> has-dot: false;
+    in property <bool> warn: false;
+    in property <bool> dimmed: false;
+    in property <float> s: 1.0;
+
+    property <color> ink: root.warn ? Theme.warning : root.dimmed ? Theme.text-secondary : Theme.text;
+    height: 30px * root.s;
+    width: label.preferred-width + (root.has-icon || root.has-dot ? 34px : 22px) * root.s;
+    border-radius: self.height / 2;
+    background: root.warn ? Theme.warning.transparentize(0.86) : Theme.surface-container-high.transparentize(0.2);
+
+    if root.has-dot: Rectangle {
+        x: 11px * root.s; y: (parent.height - self.height) / 2;
+        width: 10px * root.s; height: self.width;
+        border-radius: self.width / 2;
+        background: root.dot;
+    }
+    if root.has-icon && !root.has-dot: Image {
+        x: 10px * root.s; y: (parent.height - self.height) / 2;
+        width: 14px * root.s; height: self.width;
+        source: root.icon;
+        colorize: root.warn ? Theme.warning : Theme.text-secondary;
+        image-fit: contain;
+    }
+    label := Text {
+        x: (root.has-icon || root.has-dot ? 28px : 11px) * root.s;
+        y: 0; height: parent.height;
+        text: root.text;
+        color: root.ink;
+        font-size: 14px * root.s;
+        font-weight: 500;
+        vertical-alignment: center;
+    }
+}
+
+/* The focused game under the covers: its title, then chips for the
+ * system (in its colour), last played and time played, like the Game
+ * Details page. A notice replaces the chips while it is shown. */
+component HomeInfoPanel inherits Rectangle {
+    in property <HomeCard> card;
     in property <string> notice: "";
+    in property <string> unavailable-label;
     in property <float> s: 1.0;
     in property <bool> dimmed: false;
 
     background: #00000000;
     MarqueeText {
-        x: 0; y: 0; width: parent.width; height: 26px * root.s;
-        label: root.title;
+        x: 0; y: 0; width: parent.width; height: 32px * root.s;
+        label: root.card.title;
         active: !root.dimmed;
         text-color: root.dimmed ? Theme.text-secondary : Theme.text;
-        text-size: 22px * root.s;
-        text-weight: 600;
+        text-size: 24px * root.s;
+        text-weight: 700;
     }
-    MarqueeText {
-        x: 0; y: 26px * root.s; width: parent.width; height: 20px * root.s;
-        label: root.notice != "" ? root.notice : root.detail;
-        active: !root.dimmed;
-        text-color: root.notice != "" ? #ffc94a : root.dimmed ? Theme.text-faint : Theme.text-secondary;
+    if root.notice != "": MarqueeText {
+        x: 0; y: 38px * root.s; width: parent.width; height: 30px * root.s;
+        label: root.notice;
+        active: true;
+        text-color: #ffc94a;
         text-size: 15px * root.s;
-        text-weight: 400;
+        text-weight: 500;
+    }
+    if root.notice == "": Rectangle {
+        x: 0; y: 38px * root.s; width: parent.width; height: 30px * root.s;
+        clip: true;
+        HorizontalLayout {
+            alignment: start;
+            spacing: 8px * root.s;
+            if !root.card.available: HomeInfoChip {
+                text: root.unavailable-label; warn: true; s: root.s;
+                icon: @image-url("assets/icons/triangle-exclamation.svg");
+            }
+            HomeInfoChip {
+                text: root.card.system-name; dot: root.card.accent; has-dot: true; has-icon: false;
+                dimmed: root.dimmed; s: root.s;
+            }
+            if root.card.last-played != "": HomeInfoChip {
+                text: root.card.last-played; dimmed: root.dimmed; s: root.s;
+                icon: @image-url("assets/icons/clock.svg");
+            }
+            if root.card.play-time != "": HomeInfoChip {
+                text: root.card.play-time; dimmed: root.dimmed; s: root.s;
+                icon: @image-url("assets/icons/play.svg");
+            }
+        }
     }
 }
 
@@ -1370,21 +1490,10 @@ component HomeEmptyCard inherits Rectangle {
 
     background: #00000000;
 
-    Rectangle {
-        x: -9px; y: -9px; width: parent.width + 18px; height: parent.height + 18px;
-        border-radius: root.radius + 9px;
-        background: #00000000;
-        border-width: 4px;
-        border-color: Theme.accent.transparentize(0.8);
-        visible: root.focused;
-    }
-    Rectangle {
-        x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px;
-        border-radius: root.radius + 6px;
-        background: #00000000;
-        border-width: 3px;
-        border-color: Theme.primary;
-        visible: root.focused;
+    HomeFocusRing {
+        width: parent.width; height: parent.height;
+        radius: root.radius;
+        shown: root.focused;
     }
 
     Rectangle {
@@ -1458,11 +1567,13 @@ component HomeEmptyCard inherits Rectangle {
 
 /* One Home section: title and a horizontal strip. Recently Played shows
  * covers (card-h tall, width from the cover aspect) with the focused
- * game's title + metadata in a fixed band under them (info-h, also while
- * another section is selected, dimmed, so nothing moves); the shelves
- * show compact chips (chip-w > 0). The focused item is kept at the left
- * edge (console catalogue style) until the end of the strip. Notices of
- * the selected section go to the right of its title. */
+ * game's info panel under them (info-h, also while another section is
+ * selected, dimmed, so nothing moves); the shelves show tiles
+ * (chip-w > 0). The focused item is kept at the left edge (console
+ * catalogue style) until the end of the strip; the strip glides there
+ * with the M3 emphasized curve. Every card is a cached layer, so a
+ * scroll only composites them. Notices of a tile section go to the right
+ * of its title. */
 component HomeRow inherits Rectangle {
     in property <string> label;
     in property <[HomeCard]> cards;
@@ -1492,31 +1603,31 @@ component HomeRow inherits Rectangle {
     property <length> total-w: root.chips ? root.cards.length * (root.chip-w + root.gap) - root.gap
         : (root.last.x-units + root.last.aspect) * root.card-h + (root.cards.length - 1) * root.gap;
     property <length> h-scroll: max(0px, min(root.focus-x, root.total-w - (root.width - 2 * root.pad)));
-    /* Info shows in the title bar when this row has no info band. */
+    /* Info shows in the title bar when this row has no info panel. */
     property <bool> title-notice: root.active && root.notice != "" && (root.chips || root.empty);
 
     height: root.label-h + root.card-h + root.info-h;
     background: #00000000;
 
     HomeSectionTitle {
-        x: root.pad; y: 0; width: parent.width - 2 * root.pad; height: root.label-h - 6px * root.s;
+        x: root.pad; y: 0; width: parent.width - 2 * root.pad; height: root.label-h - 8px * root.s;
         label: root.label;
         active: root.active;
-        label-size: 16px * root.s;
+        label-size: 19px * root.s;
         status: root.title-notice ? root.notice : root.active ? root.status : "";
         status-color: root.title-notice ? #ffc94a : Theme.text-faint;
     }
 
-    /* Strip with 10 px above/below the cards for the focus glow. */
+    /* Strip with 12 px above/below the cards for the focus glow. */
     Rectangle {
-        x: 0; y: root.label-h - 10px; width: parent.width; height: root.card-h + 20px;
+        x: 0; y: root.label-h - 12px; width: parent.width; height: root.card-h + 24px;
         clip: true;
         background: #00000000;
 
         Rectangle {
-            x: root.pad - root.h-scroll; y: 10px; width: root.total-w; height: root.card-h;
+            x: root.pad - root.h-scroll; y: 12px; width: root.total-w; height: root.card-h;
             background: #00000000;
-            animate x { duration: 180ms; easing: ease-out; }
+            animate x { duration: 260ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
 
             for card[i] in root.cards: Rectangle {
                 x: root.chips ? i * (root.chip-w + root.gap) : card.x-units * root.card-h + i * root.gap;
@@ -1527,13 +1638,15 @@ component HomeRow inherits Rectangle {
 
                 if !root.chips: HomeCardView {
                     width: parent.width; height: parent.height;
+                    cache-rendering-hint: true;
                     card: card;
                     focused: root.active && i == root.index;
                     dimmed: !root.active;
                     unavailable-label: root.unavailable-label;
                 }
-                if root.chips: HomeChipView {
+                if root.chips: HomeTileView {
                     width: parent.width; height: parent.height;
+                    cache-rendering-hint: true;
                     card: card;
                     focused: root.active && i == root.index;
                     dimmed: !root.active;
@@ -1543,7 +1656,7 @@ component HomeRow inherits Rectangle {
         }
     }
 
-    /* An empty row has no info band: its card already says it all. */
+    /* An empty row has no info panel: its card already says it all. */
     if root.empty: HomeEmptyCard {
         x: root.pad; y: root.label-h;
         width: parent.width - 2 * root.pad;
@@ -1556,12 +1669,12 @@ component HomeRow inherits Rectangle {
         s: root.s;
     }
 
-    if root.info-h > 0px && !root.empty: HomeFocusInfo {
-        x: root.pad; y: root.label-h + root.card-h + 6px * root.s;
-        width: parent.width - 2 * root.pad; height: root.info-h - 6px * root.s;
-        title: root.focused.title;
-        detail: root.focused.detail;
+    if root.info-h > 0px && !root.empty: HomeInfoPanel {
+        x: root.pad; y: root.label-h + root.card-h + 12px * root.s;
+        width: parent.width - 2 * root.pad; height: root.info-h - 12px * root.s;
+        card: root.focused;
         notice: root.active ? root.notice : "";
+        unavailable-label: root.unavailable-label;
         dimmed: !root.active;
         s: root.s;
     }
@@ -1570,6 +1683,620 @@ component HomeRow inherits Rectangle {
 /* Power dialog choice (M3 tonal button). Armed = waiting for the
  * confirming press: error roles, the prompt under the action name inside
  * the button. */
+/* Game Details page (EPIC-016): a console game page instead of a
+ * settings list. A blurred, dimmed backdrop of the game (its screenshot,
+ * else its cover; blurred by Rust), the cover as the hero, title, system,
+ * one metadata line and chips (players, rating, play time, warnings), the
+ * description (up/down scrolls it) and one row of actions moved with
+ * left/right: Play is a labelled primary pill, the others are round icon
+ * buttons whose label opens while focused. The line under the actions says
+ * what the focused action does (or its armed prompt / the last notice). */
+export struct DetailAction {
+    /* DetailIcon index. */
+    icon: int,
+    label: string,
+    primary: bool,
+    /* Toggle state (Favorite). */
+    on: bool,
+    enabled: bool,
+    /* Waiting for the confirming press (error style). */
+    armed: bool,
+    /* Work in progress (spinner icon). */
+    busy: bool,
+}
+
+export struct DetailChip {
+    icon: int,
+    text: string,
+    warn: bool,
+}
+
+/* Font Awesome Free icons (assets/icons, CC BY 4.0) by index: 0 play,
+ * 1 star, 2 collections, 3 settings, 4 get metadata, 5 update metadata,
+ * 6 accept, 7 reject, 8 BIOS, 9 reset, 10 delete, 11 players, 12 time,
+ * 13 warning, 14 star outline, 15 more, 16 working, 17 search; nuubOS
+ * own geometry: 18 PC, 19 add. */
+component DetailIcon inherits Image {
+    in property <int> icon;
+    in property <color> ink;
+    source: root.icon == 0 ? @image-url("assets/icons/play.svg")
+        : root.icon == 1 ? @image-url("assets/icons/star.svg")
+        : root.icon == 2 ? @image-url("assets/icons/layer-group.svg")
+        : root.icon == 3 ? @image-url("assets/icons/sliders.svg")
+        : root.icon == 4 ? @image-url("assets/icons/cloud-arrow-down.svg")
+        : root.icon == 5 ? @image-url("assets/icons/rotate.svg")
+        : root.icon == 6 ? @image-url("assets/icons/check.svg")
+        : root.icon == 7 ? @image-url("assets/icons/xmark.svg")
+        : root.icon == 8 ? @image-url("assets/icons/microchip.svg")
+        : root.icon == 9 ? @image-url("assets/icons/rotate-left.svg")
+        : root.icon == 10 ? @image-url("assets/icons/trash-can.svg")
+        : root.icon == 11 ? @image-url("assets/icons/user-group.svg")
+        : root.icon == 12 ? @image-url("assets/icons/clock.svg")
+        : root.icon == 13 ? @image-url("assets/icons/triangle-exclamation.svg")
+        : root.icon == 14 ? @image-url("assets/icons/star-outline.svg")
+        : root.icon == 15 ? @image-url("assets/icons/chevron-down.svg")
+        : root.icon == 17 ? @image-url("assets/icons/magnifying-glass.svg")
+        : root.icon == 18 ? @image-url("assets/icons/desktop.svg")
+        : root.icon == 19 ? @image-url("assets/icons/plus.svg")
+        : @image-url("assets/icons/circle-notch.svg");
+    colorize: root.ink;
+    image-fit: contain;
+}
+
+component DetailActionButton inherits Rectangle {
+    in property <DetailAction> action;
+    in property <bool> focused: false;
+    in property <float> s: 1.0;
+    /* Many actions: the primary one keeps its label only while focused. */
+    in property <bool> compact: false;
+
+    property <length> h: 42px * root.s;
+    property <length> icon-size: root.h * 0.40;
+    property <bool> open: (root.action.primary && !root.compact) || root.focused;
+    property <color> ink: !root.action.enabled ? Theme.text-disabled
+        : root.action.armed ? Theme.on-error-container
+        : root.action.primary ? (root.focused ? Theme.on-primary : Theme.on-primary-container)
+        : root.action.on ? #ffc94a
+        : root.focused ? Theme.on-secondary-container
+        : Theme.text-secondary;
+
+    height: root.h;
+    width: root.open ? root.h * 0.42 + root.icon-size + 8px * root.s + label.preferred-width + root.h * 0.48 : root.h;
+    border-radius: root.h / 2;
+    background: root.action.armed ? Theme.error-container
+        : root.action.primary ? (root.focused ? Theme.primary : Theme.primary-container)
+        : root.focused ? Theme.secondary-container
+        : Theme.surface-container-high.transparentize(0.25);
+    animate width { duration: 140ms; easing: ease-out; }
+
+    /* Focus ring detached by a gap, as on the Home cards. */
+    Rectangle {
+        x: -5px; y: -5px; width: parent.width + 10px; height: parent.height + 10px;
+        border-radius: parent.border-radius + 5px;
+        border-width: 2.5px;
+        border-color: root.action.armed ? Theme.error : Theme.primary;
+        visible: root.focused;
+    }
+    DetailIcon {
+        x: root.open ? root.h * 0.42 : (parent.width - root.icon-size) / 2;
+        y: (parent.height - root.icon-size) / 2;
+        width: root.icon-size; height: root.icon-size;
+        icon: root.action.busy ? 16 : root.action.icon == 1 && !root.action.on ? 14 : root.action.icon;
+        ink: root.ink;
+    }
+    label := Text {
+        x: root.h * 0.42 + root.icon-size + 8px * root.s;
+        y: 0; height: parent.height;
+        text: root.action.label;
+        color: root.ink;
+        font-size: 15px * root.s;
+        font-weight: 600;
+        vertical-alignment: center;
+        visible: root.open;
+    }
+}
+
+component DetailChipView inherits Rectangle {
+    in property <DetailChip> chip;
+    in property <float> s: 1.0;
+
+    property <color> ink: root.chip.warn ? Theme.warning : root.chip.icon == 1 ? #ffc94a : Theme.text-secondary;
+    height: 26px * root.s;
+    border-radius: self.height / 2;
+    background: root.chip.warn ? Theme.warning.transparentize(0.86) : Theme.surface-container-high.transparentize(0.35);
+    HorizontalLayout {
+        padding-left: 10px * root.s; padding-right: 11px * root.s;
+        spacing: 6px * root.s;
+        DetailIcon {
+            y: (parent.height - self.height) / 2;
+            width: 13px * root.s; height: 13px * root.s;
+            icon: root.chip.icon; ink: root.ink;
+        }
+        Text {
+            text: root.chip.text;
+            color: root.chip.warn ? Theme.warning : Theme.text;
+            font-size: 13px * root.s;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component GameDetailsPage inherits Rectangle {
+    in property <float> s: 1.0;
+    in property <string> title;
+    in property <string> system-name;
+    in property <string> meta;
+    in property <string> description;
+    in property <image> cover;
+    in property <bool> has-cover: false;
+    in property <image> backdrop;
+    in property <bool> has-backdrop: false;
+    in property <[DetailChip]> chips;
+    in property <[DetailAction]> actions;
+    in property <int> index: 0;
+    in property <string> caption;
+    in property <bool> caption-armed: false;
+    in property <string> notice;
+    in property <int> desc-step: 0;
+    /* Scroll steps the description needs to show its end (Rust clamps). */
+    out property <int> desc-steps: max(0, ceil((desc.preferred-height - desc-box.height) / root.step-px));
+
+    property <length> pad: 22px * root.s;
+    property <length> bar-h: 42px * root.s;
+    property <length> caption-h: 20px * root.s;
+    property <length> bar-y: root.height - 10px * root.s - root.caption-h - 10px * root.s - root.bar-h;
+    property <length> hero-y: 16px * root.s;
+    property <length> hero-h: root.bar-y - 18px * root.s - root.hero-y;
+    property <float> aspect: root.has-cover && root.cover.height > 0
+        ? max(0.5, min(1.8, root.cover.width / root.cover.height)) : 0.72;
+    property <length> cover-w: min(root.hero-h * root.aspect, root.width * 0.40);
+    property <length> cover-h: root.cover-w / root.aspect;
+    property <length> text-x: root.pad + root.cover-w + 22px * root.s;
+    property <length> desc-size: 14px * root.s;
+    property <length> step-px: root.desc-size * 1.3 * 3;
+
+    background: Theme.background;
+    clip: true;
+
+    if root.has-backdrop: Image {
+        width: parent.width; height: parent.height;
+        source: root.backdrop;
+        image-fit: ImageFit.cover;
+        opacity: 0.55;
+    }
+    /* Scrims: the text side and the action bar stay readable. */
+    Rectangle {
+        width: parent.width; height: parent.height;
+        background: @linear-gradient(90deg, Theme.background.transparentize(0.55) 0%,
+            Theme.background.transparentize(0.25) 45%, Theme.background.transparentize(0.1) 100%);
+    }
+    Rectangle {
+        y: root.bar-y - 40px * root.s; width: parent.width; height: parent.height - self.y;
+        background: @linear-gradient(180deg, Theme.background.transparentize(1.0) 0%,
+            Theme.background.transparentize(0.1) 45%, Theme.background 100%);
+    }
+
+    /* Hero cover (pre-rounded by Rust), or a titled placeholder. */
+    Rectangle {
+        x: root.pad; y: root.hero-y + 4px * root.s;
+        width: root.cover-w; height: root.cover-h;
+        border-radius: max(Shape.medium, self.height * 0.04);
+        background: root.has-cover ? Theme.background : Theme.surface-container;
+        drop-shadow-blur: 24px * root.s;
+        drop-shadow-offset-y: 6px * root.s;
+        drop-shadow-color: #000000b0;
+
+        if root.has-cover: Image {
+            width: parent.width; height: parent.height;
+            source: root.cover;
+            image-fit: contain;
+        }
+        if !root.has-cover: Image {
+            x: (parent.width - self.width) / 2; y: parent.height * 0.30;
+            width: parent.width * 0.42; height: self.width * 0.8;
+            source: @image-url("assets/icons/gamepad.svg");
+            colorize: Theme.text-faint;
+            image-fit: contain;
+        }
+        if !root.has-cover: Text {
+            x: 12px * root.s; y: parent.height * 0.62;
+            width: parent.width - 24px * root.s; height: parent.height * 0.34;
+            text: root.system-name;
+            color: Theme.text-dim;
+            font-size: 13px * root.s;
+            font-weight: 600;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+
+    VerticalLayout {
+        x: root.text-x; y: root.hero-y;
+        width: root.width - root.text-x - root.pad; height: root.hero-h;
+        spacing: 6px * root.s;
+
+        Text {
+            text: root.system-name;
+            color: Theme.primary;
+            font-size: 12px * root.s;
+            font-weight: 700;
+            letter-spacing: 1.2px;
+            overflow: elide;
+            vertical-stretch: 0;
+        }
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: 26px * root.s;
+            font-weight: 700;
+            wrap: word-wrap;
+            overflow: elide;
+            max-height: 26px * root.s * 2.6;
+            vertical-stretch: 0;
+        }
+        if root.meta != "": Text {
+            text: root.meta;
+            color: Theme.text-secondary;
+            font-size: 14px * root.s;
+            overflow: elide;
+            vertical-stretch: 0;
+        }
+        if root.chips.length > 0: Rectangle {
+            vertical-stretch: 0;
+            height: 34px * root.s;
+            clip: true;
+            HorizontalLayout {
+                padding-top: 4px * root.s;
+                padding-bottom: 4px * root.s;
+                spacing: 6px * root.s;
+                alignment: start;
+                for chip in root.chips: DetailChipView { chip: chip; s: root.s; }
+            }
+        }
+        desc-box := Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+            desc := Text {
+                x: 0;
+                y: -min(root.desc-step * root.step-px, max(0px, self.preferred-height - parent.height));
+                width: parent.width;
+                height: self.preferred-height;
+                text: root.description;
+                color: Theme.text-secondary;
+                font-size: root.desc-size;
+                wrap: word-wrap;
+                animate y { duration: 160ms; easing: ease-out; }
+            }
+            /* More text below: a fade and a chevron. */
+            Rectangle {
+                y: parent.height - 22px * root.s; width: parent.width; height: 22px * root.s;
+                background: @linear-gradient(180deg, Theme.background.transparentize(1.0) 0%, Theme.background.transparentize(0.15) 100%);
+                visible: root.desc-step < root.desc-steps;
+                DetailIcon {
+                    x: parent.width - self.width; y: parent.height - self.height;
+                    width: 12px * root.s; height: 12px * root.s;
+                    icon: 15; ink: Theme.text-dim;
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        x: root.pad; y: root.bar-y;
+        width: root.width - 2 * root.pad; height: root.bar-h;
+        spacing: 10px * root.s;
+        alignment: start;
+        for action[i] in root.actions: DetailActionButton {
+            action: action;
+            focused: root.index == i;
+            s: root.s;
+            compact: root.actions.length >= 8;
+        }
+    }
+    MarqueeText {
+        x: root.pad; y: root.bar-y + root.bar-h + 10px * root.s;
+        width: root.width - 2 * root.pad; height: root.caption-h;
+        label: root.notice != "" ? root.notice : root.caption;
+        text-color: root.notice != "" ? #ffc94a : root.caption-armed ? Theme.error : Theme.text-dim;
+        text-size: 13px * root.s;
+        text-weight: 400;
+        active: true;
+    }
+}
+
+/* Application page (Moonlight, Steam Link): the Game Details look for an
+ * application. The app's colour washes the top, its icon is the hero;
+ * kicker, title, one meta line and chips beside it, then its entries
+ * (PCs, PC applications) as rows, or a large pairing PIN, or a download
+ * progress bar, and one row of actions with the caption of the focused
+ * item under it. index runs over the entries, then the actions (the
+ * services' own order); up/down and left/right both move. */
+export struct AppEntry {
+    title: string,
+    detail: string,
+    value: string,
+    /* DetailIcon index. */
+    icon: int,
+    good: bool,
+    caption: string,
+}
+
+component AppEntryRow inherits Rectangle {
+    in property <AppEntry> entry;
+    in property <bool> focused: false;
+    in property <float> s: 1.0;
+
+    property <color> ink: root.focused ? Theme.on-secondary-container : Theme.text;
+    border-radius: Shape.large;
+    background: root.focused ? Theme.secondary-container : Theme.surface-container.transparentize(0.15);
+    animate background { duration: 150ms; easing: ease-out; }
+
+    HomeFocusRing {
+        width: parent.width; height: parent.height;
+        radius: Shape.large;
+        shown: root.focused;
+    }
+    Rectangle {
+        x: 12px * root.s; y: (parent.height - self.height) / 2;
+        width: parent.height - 20px * root.s; height: self.width;
+        border-radius: Shape.medium;
+        background: root.focused ? Theme.primary-container : Theme.surface-container-highest;
+        DetailIcon {
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            width: parent.width * 0.48; height: self.width;
+            icon: root.entry.icon;
+            ink: root.focused ? Theme.on-primary-container : Theme.text-secondary;
+        }
+    }
+    VerticalLayout {
+        x: parent.height + 4px * root.s;
+        width: parent.width - self.x - (root.entry.value != "" ? value.preferred-width + 30px * root.s : 14px * root.s);
+        alignment: center;
+        spacing: 1px * root.s;
+        MarqueeText {
+            height: 23px * root.s;
+            label: root.entry.title;
+            text-color: root.ink;
+            text-size: 17px * root.s;
+            text-weight: 600;
+            active: root.focused;
+        }
+        if root.entry.detail != "": Text {
+            height: 18px * root.s;
+            text: root.entry.detail;
+            color: root.focused ? Theme.on-secondary-container.transparentize(0.25) : Theme.text-secondary;
+            font-size: 13px * root.s;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+    Rectangle {
+        visible: root.entry.value != "";
+        x: parent.width - self.width - 14px * root.s; y: (parent.height - self.height) / 2;
+        width: value.preferred-width + 18px * root.s; height: 26px * root.s;
+        border-radius: self.height / 2;
+        background: root.entry.good ? Theme.primary.transparentize(0.78) : Theme.surface-container-highest;
+        value := Text {
+            x: 9px * root.s; height: parent.height;
+            text: root.entry.value;
+            color: root.entry.good ? Theme.primary : Theme.text-secondary;
+            font-size: 13px * root.s;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component AppPage inherits Rectangle {
+    in property <float> s: 1.0;
+    in property <string> kicker;
+    in property <string> title;
+    in property <string> meta;
+    in property <string> description;
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <color> accent: Theme.primary;
+    in property <[DetailChip]> chips;
+    in property <[AppEntry]> entries;
+    in property <[DetailAction]> actions;
+    in property <[string]> action-captions;
+    in property <int> index: 0;
+    in property <string> notice;
+    /* Pairing PIN to show large ("" = none). */
+    in property <string> pin;
+    in property <string> pin-label;
+    /* Download progress 0..1, below 0 = none. */
+    in property <float> progress: -1;
+    in property <string> progress-label;
+
+    property <length> pad: 22px * root.s;
+    property <length> bar-h: 42px * root.s;
+    property <length> caption-h: 20px * root.s;
+    property <length> bar-y: root.height - 10px * root.s - root.caption-h - 10px * root.s - root.bar-h;
+    property <length> top: 16px * root.s;
+    property <length> hero: min(132px * root.s, root.width * 0.26);
+    property <length> text-x: root.pad + root.hero + 22px * root.s;
+    property <length> row-h: 52px * root.s;
+    property <length> row-step: root.row-h + 10px * root.s;
+    property <length> list-y: root.top + root.hero + 18px * root.s;
+    property <length> list-h: root.bar-y - 14px * root.s - root.list-y;
+    property <int> entry-focus: root.index < root.entries.length ? root.index : -1;
+    property <int> action-focus: root.index - root.entries.length;
+    property <length> list-scroll: root.entry-focus < 0 ? 0px
+        : max(0px, min(root.entry-focus * root.row-step - root.list-h / 2 + root.row-h / 2,
+                       root.entries.length * root.row-step - 10px * root.s - root.list-h));
+    property <string> caption: root.entry-focus >= 0 ? root.entries[root.entry-focus].caption
+        : root.action-captions[root.action-focus];
+    property <bool> caption-armed: root.action-focus >= 0 && root.actions[root.action-focus].armed;
+
+    background: Theme.background;
+    clip: true;
+
+    /* The app's colour washes down from the top. */
+    Rectangle {
+        x: 0; y: 0; width: parent.width; height: root.list-y + 40px * root.s;
+        background: @linear-gradient(180deg, root.accent.transparentize(0.68) 0%, Theme.background.transparentize(1.0) 100%);
+    }
+    /* Hero: the app icon on a raised tile. */
+    Rectangle {
+        x: root.pad; y: root.top;
+        width: root.hero; height: root.hero;
+        border-radius: Shape.extra-large;
+        background: Theme.surface-container-high;
+        drop-shadow-blur: 20px * root.s;
+        drop-shadow-offset-y: 6px * root.s;
+        drop-shadow-color: #00000090;
+        if root.has-icon: Image {
+            x: parent.width * 0.2; y: parent.height * 0.2;
+            width: parent.width * 0.6; height: parent.height * 0.6;
+            source: root.icon;
+            image-fit: contain;
+        }
+        if !root.has-icon: Image {
+            x: parent.width * 0.24; y: parent.height * 0.28;
+            width: parent.width * 0.52; height: parent.height * 0.44;
+            source: @image-url("assets/icons/gamepad.svg");
+            colorize: Theme.text-faint;
+            image-fit: contain;
+        }
+    }
+    VerticalLayout {
+        x: root.text-x; y: root.top;
+        width: root.width - root.text-x - root.pad; height: root.hero;
+        alignment: center;
+        spacing: 6px * root.s;
+        Text {
+            text: root.kicker;
+            color: Theme.primary;
+            font-size: 12px * root.s;
+            font-weight: 700;
+            letter-spacing: 1.2px;
+            overflow: elide;
+        }
+        MarqueeText {
+            height: 34px * root.s;
+            label: root.title;
+            text-color: Theme.text;
+            text-size: 26px * root.s;
+            text-weight: 700;
+            active: true;
+        }
+        if root.meta != "": Text {
+            text: root.meta;
+            color: Theme.text-secondary;
+            font-size: 14px * root.s;
+            overflow: elide;
+        }
+        if root.chips.length > 0: Rectangle {
+            height: 30px * root.s;
+            clip: true;
+            HorizontalLayout {
+                padding-top: 2px * root.s;
+                padding-bottom: 2px * root.s;
+                spacing: 6px * root.s;
+                alignment: start;
+                for chip in root.chips: DetailChipView { chip: chip; s: root.s; }
+            }
+        }
+    }
+
+    /* Entries, or the PIN, or the download, or the description. */
+    Rectangle {
+        x: 0; y: root.list-y - 12px; width: parent.width; height: root.list-h + 24px;
+        clip: true;
+        Rectangle {
+            y: 12px - root.list-scroll;
+            width: parent.width; height: root.entries.length * root.row-step;
+            animate y { duration: 260ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
+            for entry[i] in root.entries: AppEntryRow {
+                x: root.pad; y: i * root.row-step;
+                width: parent.width - 2 * root.pad; height: root.row-h;
+                cache-rendering-hint: true;
+                entry: entry;
+                focused: root.entry-focus == i;
+                s: root.s;
+            }
+        }
+    }
+    if root.entries.length == 0 && root.pin != "": Rectangle {
+        x: root.pad; y: root.list-y;
+        width: root.width - 2 * root.pad; height: min(root.list-h, 96px * root.s);
+        border-radius: Shape.large;
+        background: Theme.primary-container;
+        Text {
+            x: 20px * root.s; width: parent.width * 0.5; height: parent.height;
+            text: root.pin-label;
+            color: Theme.on-primary-container;
+            font-size: 15px * root.s;
+            font-weight: 500;
+            wrap: word-wrap;
+            vertical-alignment: center;
+        }
+        Text {
+            x: parent.width * 0.5; width: parent.width * 0.5 - 20px * root.s; height: parent.height;
+            text: root.pin;
+            color: Theme.on-primary-container;
+            font-size: 44px * root.s;
+            font-weight: 700;
+            letter-spacing: 8px * root.s;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+    if root.entries.length == 0 && root.pin == "": VerticalLayout {
+        x: root.pad; y: root.list-y;
+        width: root.width - 2 * root.pad; height: root.list-h;
+        spacing: 12px * root.s;
+        alignment: start;
+        if root.progress >= 0: Rectangle {
+            height: 10px * root.s;
+            border-radius: self.height / 2;
+            background: Theme.surface-container-highest;
+            Rectangle {
+                x: 0; height: parent.height;
+                width: parent.width * max(0.02, min(1.0, root.progress));
+                border-radius: parent.border-radius;
+                background: Theme.primary;
+                animate width { duration: 300ms; easing: ease-out; }
+            }
+        }
+        if root.progress >= 0 && root.progress-label != "": Text {
+            text: root.progress-label;
+            color: Theme.text;
+            font-size: 15px * root.s;
+            font-weight: 600;
+        }
+        if root.description != "": Text {
+            text: root.description;
+            color: Theme.text-secondary;
+            font-size: 15px * root.s;
+            wrap: word-wrap;
+        }
+    }
+
+    HorizontalLayout {
+        x: root.pad; y: root.bar-y;
+        width: root.width - 2 * root.pad; height: root.bar-h;
+        spacing: 10px * root.s;
+        alignment: start;
+        for action[i] in root.actions: DetailActionButton {
+            action: action;
+            focused: root.action-focus == i;
+            s: root.s;
+        }
+    }
+    MarqueeText {
+        x: root.pad; y: root.bar-y + root.bar-h + 10px * root.s;
+        width: root.width - 2 * root.pad; height: root.caption-h;
+        label: root.notice != "" ? root.notice : root.caption;
+        text-color: root.notice != "" ? #ffc94a : root.caption-armed ? Theme.error : Theme.text-dim;
+        text-size: 13px * root.s;
+        text-weight: 400;
+        active: true;
+    }
+}
+
 export component HomeWindow inherits Window {
     /*
      * Two-stage lifecycle transition.
@@ -1631,6 +2358,8 @@ export component HomeWindow inherits Window {
     in-out property <[HomeCard]> library-games: [];
     in-out property <int> library-index: 0;
     in-out property <float> library-aspect: 0.75;
+    /* The shelf tile the page was opened from (kind, icon, colour). */
+    in-out property <HomeCard> library-card;
     in-out property <int> context-face-position: -1;
     /* Settings pages: label of an extra action on the north face
      * (e.g. Remove on a Web bookmark); empty = none. */
@@ -1643,24 +2372,36 @@ export component HomeWindow inherits Window {
     property <length> home-pad: 22px * root.home-s;
     property <length> home-top-pad: 8px * root.home-s;
     property <length> home-rows-h: root.height - 102px - root.home-top-pad;
-    property <length> home-label-h: 28px * root.home-s;
-    property <length> home-info-h: 52px * root.home-s;
-    property <length> home-gap: 14px * root.home-s;
-    /* One screen, no vertical scrolling (user request 2026-10-08): the
-     * shelves are compact chip rows and Recently Played takes all the
-     * height left, so the covers stay the largest thing on screen. The
-     * last 10 px keep the focus glow of the bottom row. */
-    property <length> home-chip-h: 44px * root.home-s;
-    property <length> home-chip-w: max(160px * root.home-s, min(240px * root.home-s,
-        (root.width - 2 * root.home-pad) / 3.2));
-    property <length> home-row-gap: 6px * root.home-s;
-    property <length> home-big-h: max(96px, root.home-rows-h - 10px - 3 * root.home-label-h
-        - 2 * root.home-chip-h - 2 * root.home-row-gap - root.home-info-h);
-    property <length> library-view-h: root.home-rows-h - root.home-label-h - root.home-info-h;
+    property <length> home-label-h: 40px * root.home-s;
+    property <length> home-info-h: 84px * root.home-s;
+    property <length> home-gap: 16px * root.home-s;
+    /* The Home scrolls vertically (user request 2026-10-09: bigger
+     * content, more spacing, readable text). Recently Played covers take
+     * about half the height; the two shelves together with the info panel
+     * of the covers fill one screen, so with a shelf selected the column
+     * ends exactly at the bottom: no empty space under Applications. */
+    property <length> home-section-gap: 14px * root.home-s;
+    property <length> home-bottom-pad: 14px * root.home-s;
+    property <length> home-big-h: max(130px, min(root.home-rows-h * 0.52,
+        root.home-rows-h - root.home-label-h - root.home-info-h - 24px * root.home-s));
+    property <length> home-chip-h: max(64px * root.home-s, min(96px * root.home-s,
+        (root.home-rows-h - root.home-info-h - 2 * root.home-label-h - root.home-section-gap
+         - root.home-bottom-pad) / 2));
+    property <length> home-chip-w: max(200px * root.home-s, min(300px * root.home-s,
+        (root.width - 2 * root.home-pad) / 2.3));
+    property <length> home-y1: root.home-label-h + root.home-big-h + root.home-info-h + root.home-section-gap;
+    property <length> home-y2: root.home-y1 + root.home-label-h + root.home-chip-h + root.home-section-gap;
+    property <length> home-total-h: root.home-y2 + root.home-label-h + root.home-chip-h + root.home-bottom-pad;
+    property <length> home-max-scroll: max(0px, root.home-total-h - root.home-rows-h);
+    property <length> home-v-scroll: root.home-row == 0 ? 0px
+        : min(root.home-row == 1 ? root.home-y1 : root.home-y2, root.home-max-scroll);
+    /* System / collection page: a header with the platform's identity. */
+    property <length> library-head-h: 80px * root.home-s;
+    property <length> library-view-h: root.home-rows-h - root.library-head-h - root.home-info-h;
     /* Grid density: about one column per 320 logical px (2 on handhelds,
-     * up to 5 on wide screens), never taller than ~1.6 rows per screen. */
+     * up to 5 on wide screens); a cover uses up to 82 % of the grid height. */
     property <int> library-target-columns: max(2, min(5, round(root.width / 320px)));
-    property <length> library-cell-h: max(110px, min(root.library-view-h * 0.60,
+    property <length> library-cell-h: max(110px, min(root.library-view-h * 0.82,
         ((root.width - 2 * root.home-pad + root.home-gap) / root.library-target-columns - root.home-gap)
         / root.library-aspect));
     property <length> library-cell-w: root.library-cell-h * root.library-aspect;
@@ -1939,6 +2680,17 @@ export component HomeWindow inherits Window {
     /* Confirm hint label for the focused row ("" = Select). */
     in-out property <string> gen-select-label: "";
     in-out property <bool> details-active: false;
+    /* Game Details page (settings-view 50): see GameDetailsPage. */
+    out property <bool> details-page: root.details-active && root.settings-view == 50;
+    in-out property <string> details-meta: "";
+    in-out property <image> details-backdrop;
+    in-out property <bool> details-has-backdrop: false;
+    in-out property <[DetailChip]> details-chips: [];
+    in-out property <[DetailAction]> details-actions: [];
+    in-out property <string> details-caption: "";
+    in-out property <bool> details-caption-armed: false;
+    in-out property <int> details-desc-step: 0;
+    out property <int> details-desc-steps: details-page-view.desc-steps;
     /* Title of the shell (Game Details when empty; Files for the Files app). */
     in-out property <string> details-shell-title: "";
     /* Name of the active user's theme (General → Theme). */
@@ -2015,6 +2767,23 @@ export component HomeWindow inherits Window {
     in-out property <string> steamlink-update-title: "";
     in-out property <string> steamlink-update-value: "";
     in-out property <bool> steamlink-remove-confirm: false;
+    /* Application page of Moonlight (views 40, 41) and Steam Link (45),
+     * filled by apppage.rs. */
+    in-out property <string> app-page-kicker;
+    in-out property <string> app-page-title;
+    in-out property <string> app-page-meta;
+    in-out property <string> app-page-description;
+    in-out property <image> app-page-icon;
+    in-out property <bool> app-page-has-icon: false;
+    in-out property <[DetailChip]> app-page-chips: [];
+    in-out property <[AppEntry]> app-page-entries: [];
+    in-out property <[DetailAction]> app-page-actions: [];
+    in-out property <[string]> app-page-captions: [];
+    in-out property <string> app-page-pin;
+    in-out property <float> app-page-progress: -1;
+    in-out property <string> app-page-progress-label;
+    property <bool> app-page-shown: (root.moonlight-active && (root.settings-view == 40 || root.settings-view == 41))
+        || (root.steamlink-active && root.settings-view == 45);
 
     /* Global lifecycle overlays. Business logic remains in nuubos-systemd. */
     in-out property <bool> screensaver-active: false;
@@ -2092,8 +2861,8 @@ export component HomeWindow inherits Window {
     in-out property <[GenRow]> connectivity-services: [];
     property <int> connectivity-scroll-offset: root.settings-view == 1 ? root.connectivity-scroll : 0;
     /* Gaming: GAMING (USER: RetroAchievements and the emulation settings),
-     * then LIBRARY (DEVICE, from row gaming-split: ScreenScraper account, Get
-     * Metadata for All Games, BIOS Files). Rows = GenRows built by gameui.rs
+     * then LIBRARY (DEVICE, from row gaming-split: Scan for New Games,
+     * metadata source and account, Get Metadata for All Games, BIOS Files). Rows = GenRows built by gameui.rs
      * (render_gaming); gaming-select: the focused row has an action. */
     in-out property <int> gaming-index: 0;
     in-out property <int> gaming-split: 1;
@@ -2328,6 +3097,8 @@ export component HomeWindow inherits Window {
     in-out property <int> keyboard-index: 0;
     in-out property <int> keyboard-page: 0;
     in-out property <bool> keyboard-shift: false;
+    /* Shift locked (Caps Lock). */
+    in-out property <bool> keyboard-caps: false;
     in-out property <bool> keyboard-secret: false;
     in-out property <string> keyboard-title: "";
     in-out property <string> keyboard-value: "";
@@ -2578,8 +3349,6 @@ export component HomeWindow inherits Window {
              * layout. Every section stays on screen; an empty one shows a
              * playful empty-state card instead of covers or chips. */
             property <int> variant: root.home-empty-variant;
-            property <length> y1: root.home-label-h + root.home-big-h + root.home-info-h + root.home-row-gap;
-            property <length> y2: self.y1 + root.home-label-h + root.home-chip-h + root.home-row-gap;
             property <string> status: root.library-scanning ? root.i18n-strings[410] : "";
 
             Rectangle {
@@ -2589,6 +3358,12 @@ export component HomeWindow inherits Window {
                 height: root.home-rows-h;
                 clip: true;
                 visible: !root.library-open;
+
+              /* The column glides to the selected section. */
+              home-column := Rectangle {
+                x: 0; y: -root.home-v-scroll;
+                width: parent.width; height: root.home-total-h;
+                animate y { duration: 300ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
 
                 HomeRow {
                     x: 0; y: 0; width: parent.width;
@@ -2610,7 +3385,7 @@ export component HomeWindow inherits Window {
                     empty-icon: 0;
                 }
                 HomeRow {
-                    x: 0; y: home-view.y1; width: parent.width;
+                    x: 0; y: root.home-y1; width: parent.width;
                     label: root.i18n-strings[1];
                     cards: root.home-shelf;
                     index: root.home-shelf-index;
@@ -2619,7 +3394,7 @@ export component HomeWindow inherits Window {
                     chip-w: root.home-chip-w;
                     label-h: root.home-label-h;
                     pad: root.home-pad;
-                    gap: root.home-gap * 0.75;
+                    gap: root.home-gap * 0.8;
                     s: root.home-s;
                     notice: root.home-notice;
                     status: home-view.status;
@@ -2629,7 +3404,7 @@ export component HomeWindow inherits Window {
                     empty-icon: 1;
                 }
                 HomeRow {
-                    x: 0; y: home-view.y2; width: parent.width;
+                    x: 0; y: root.home-y2; width: parent.width;
                     label: root.i18n-strings[135];
                     cards: root.home-apps;
                     index: root.home-apps-index;
@@ -2638,7 +3413,7 @@ export component HomeWindow inherits Window {
                     chip-w: root.home-chip-w;
                     label-h: root.home-label-h;
                     pad: root.home-pad;
-                    gap: root.home-gap * 0.75;
+                    gap: root.home-gap * 0.8;
                     s: root.home-s;
                     notice: root.home-notice;
                     status: home-view.status;
@@ -2646,6 +3421,22 @@ export component HomeWindow inherits Window {
                     empty-headline: root.i18n-strings[725];
                     empty-body: root.i18n-strings[726];
                     empty-icon: 2;
+                }
+              }
+
+                /* Edges of the column fade under the bars while there is
+                 * more above or below. */
+                Rectangle {
+                    y: 0; width: parent.width; height: 20px * root.home-s;
+                    background: @linear-gradient(180deg, Theme.background 0%, Theme.background.transparentize(1.0) 100%);
+                    opacity: root.home-v-scroll > 0px ? 1.0 : 0.0;
+                    animate opacity { duration: 200ms; }
+                }
+                Rectangle {
+                    y: parent.height - self.height; width: parent.width; height: 28px * root.home-s;
+                    background: @linear-gradient(180deg, Theme.background.transparentize(1.0) 0%, Theme.background 100%);
+                    opacity: root.home-v-scroll < root.home-max-scroll ? 1.0 : 0.0;
+                    animate opacity { duration: 200ms; }
                 }
             }
 
@@ -2668,32 +3459,90 @@ export component HomeWindow inherits Window {
                 property <length> grid-x: (self.width - root.library-columns * (root.library-cell-w + root.home-gap)
                     + root.home-gap) / 2;
 
-                HomeSectionTitle {
-                    x: root.home-pad;
-                    y: 0;
-                    width: parent.width - 2 * root.home-pad;
-                    height: root.home-label-h - 6px * root.home-s;
-                    label: root.library-detail != "" ? root.library-title + "  •  " + root.library-detail : root.library-title;
-                    active: true;
-                    label-size: 16px * root.home-s;
-                    status: home-view.status;
+                /* Header: a wash of the system colour, the icon in its
+                 * tinted well, the name and the game count. */
+                Rectangle {
+                    x: 0; y: -root.home-top-pad; width: parent.width;
+                    height: root.library-head-h + root.home-top-pad - 12px;
+                    background: @linear-gradient(180deg,
+                        (root.library-card.kind == 3 ? root.library-card.accent : Theme.primary).transparentize(0.72) 0%,
+                        Theme.background.transparentize(1.0) 100%);
+                }
+                /* The platform silhouette as a faint watermark. */
+                if root.library-card.kind == 3 && root.library-card.has-cover: Image {
+                    property <length> d: root.library-head-h * 1.5;
+                    x: parent.width - self.d * 0.82; y: -root.home-top-pad - self.d * 0.18;
+                    width: self.d; height: self.d;
+                    source: root.library-card.cover;
+                    image-fit: contain;
+                    colorize: root.library-card.accent.transparentize(0.78);
+                }
+                lib-well := Rectangle {
+                    property <length> d: 52px * root.home-s;
+                    property <length> icon: self.d * 0.58;
+                    x: root.home-pad; y: (root.library-head-h - self.d) / 2 - 8px * root.home-s;
+                    width: self.d; height: self.d;
+                    border-radius: Shape.medium;
+                    background: root.library-card.kind == 3 ? root.library-card.accent.transparentize(0.3)
+                        : Theme.primary-container;
+                    if root.library-card.kind == 1: HomeStar {
+                        x: (parent.width - parent.icon) / 2; y: (parent.height - parent.icon) / 2;
+                        width: parent.icon; height: parent.icon;
+                    }
+                    if root.library-card.kind == 2: HomeCollectionGlyph {
+                        x: (parent.width - parent.icon * 0.86) / 2; y: (parent.height - parent.icon * 0.8) / 2;
+                        width: parent.icon * 0.86; height: parent.icon * 0.80;
+                        ink: Theme.on-primary-container;
+                    }
+                    if root.library-card.kind == 3 && root.library-card.has-cover: Image {
+                        x: (parent.width - parent.icon) / 2; y: (parent.height - parent.icon) / 2;
+                        width: parent.icon; height: parent.icon;
+                        source: root.library-card.cover;
+                        image-fit: contain;
+                        colorize: #ffffff;
+                    }
+                }
+                VerticalLayout {
+                    x: lib-well.x + lib-well.width + 14px * root.home-s;
+                    y: lib-well.y - 2px * root.home-s;
+                    width: parent.width - self.x - root.home-pad;
+                    height: lib-well.height + 4px * root.home-s;
+                    alignment: center;
+                    spacing: 2px * root.home-s;
+                    MarqueeText {
+                        height: 32px * root.home-s;
+                        label: root.library-title;
+                        active: true;
+                        text-color: Theme.text;
+                        text-size: 24px * root.home-s;
+                        text-weight: 700;
+                    }
+                    Text {
+                        height: 20px * root.home-s;
+                        text: home-view.status != "" ? home-view.status : root.library-detail;
+                        color: Theme.text-secondary;
+                        font-size: 15px * root.home-s;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
                 }
 
                 Rectangle {
                     x: 0;
-                    y: root.home-label-h - 10px;
+                    y: root.library-head-h - 12px;
                     width: parent.width;
-                    height: root.library-view-h + 10px;
+                    height: root.library-view-h + 12px;
                     clip: true;
 
                     Rectangle {
                         x: 0;
-                        y: 10px - library-grid.v-scroll;
+                        y: 12px - library-grid.v-scroll;
                         width: parent.width;
                         height: library-grid.row-count * library-grid.step;
-                        animate y { duration: 180ms; easing: ease-out; }
+                        animate y { duration: 280ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
 
                         for card[i] in root.library-games: HomeCardView {
+                            cache-rendering-hint: true;
                             property <bool> wide: card.aspect > root.library-aspect;
                             width: self.wide ? root.library-cell-w : root.library-cell-h * card.aspect;
                             height: self.wide ? root.library-cell-w / card.aspect : root.library-cell-h;
@@ -2705,16 +3554,22 @@ export component HomeWindow inherits Window {
                             unavailable-label: root.i18n-strings[205];
                         }
                     }
+                    Rectangle {
+                        y: 0; width: parent.width; height: 22px * root.home-s;
+                        background: @linear-gradient(180deg, Theme.background 0%, Theme.background.transparentize(1.0) 100%);
+                        opacity: library-grid.v-scroll > 0px ? 1.0 : 0.0;
+                        animate opacity { duration: 200ms; }
+                    }
                 }
 
-                if root.home-focus-valid: HomeFocusInfo {
+                if root.home-focus-valid: HomeInfoPanel {
                     x: root.home-pad;
-                    y: root.home-label-h + root.library-view-h + 6px * root.home-s;
+                    y: root.library-head-h + root.library-view-h + 12px * root.home-s;
                     width: parent.width - 2 * root.home-pad;
-                    height: root.home-info-h - 6px * root.home-s;
-                    title: root.home-focused.title;
-                    detail: root.home-focused.detail;
+                    height: root.home-info-h - 12px * root.home-s;
+                    card: root.home-focused;
                     notice: root.home-notice;
+                    unavailable-label: root.i18n-strings[205];
                     s: root.home-s;
                 }
             }
@@ -3177,112 +4032,6 @@ export component HomeWindow inherits Window {
                         && root.srow-visible(root.oob-users-continue, root.oob-scroll, root.settings-list-visible-rows);
                 }
 
-                /* --------------------------------------------- Moonlight PCs (40) */
-                /* The user's PCs (paired, added or found on the network), then
-                 * the actions. Selecting a PC opens it (41). */
-                for host[i] in root.moonlight-hosts: SettingsSelectableRow {
-                    x: root.settings-content-x;
-                    y: root.srow-y(i, root.moonlight-scroll, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    title: host.name;
-                    detail: host.address + " • " + (host.paired ? root.i18n-strings[442] : root.i18n-strings[443]);
-                    value: host.probing ? root.i18n-strings[446]
-                        : host.online == "online" ? root.i18n-strings[444]
-                        : host.online == "offline" ? root.i18n-strings[445]
-                        : "";
-                    emphasized: host.paired && host.online == "online";
-                    navigates: true;
-                    title-fraction: 0.55;
-                    selected: root.settings-view == 40 && root.moonlight-index == i;
-                    visible: root.settings-view == 40
-                        && root.srow-visible(i, root.moonlight-scroll, root.settings-list-visible-rows);
-                }
-                for row[k] in [
-                    { title: root.i18n-strings[438], detail: root.moonlight-discovering ? root.i18n-strings[440] : "", nav: false },
-                    { title: root.i18n-strings[439], detail: "", nav: true },
-                    { title: root.i18n-strings[437], detail: "", nav: true },
-                ]: SettingsSelectableRow {
-                    x: root.settings-content-x;
-                    y: root.srow-y(root.moonlight-hosts.length + k, root.moonlight-scroll, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    title: row.title;
-                    detail: row.detail;
-                    navigates: row.nav;
-                    selected: root.settings-view == 40 && root.moonlight-index == root.moonlight-hosts.length + k;
-                    visible: root.settings-view == 40
-                        && root.srow-visible(root.moonlight-hosts.length + k, root.moonlight-scroll, root.settings-list-visible-rows);
-                }
-                SettingsHint {
-                    x: root.settings-content-x;
-                    y: root.srow-y(3, 0, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    text: root.i18n-strings[458];
-                    visible: root.settings-view == 40 && root.moonlight-hosts.length == 0;
-                }
-
-                /* ---------------------------------------------- Moonlight PC (41) */
-                /* Paired: its applications, A starts the stream. Not paired: Pair
-                 * shows the PIN to enter on the PC. Remove PC comes last. */
-                for app[i] in root.moonlight-apps: SettingsSelectableRow {
-                    x: root.settings-content-x;
-                    y: root.srow-y(i, root.moonlight-scroll, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    title: app;
-                    selected: root.settings-view == 41 && root.moonlight-index == i;
-                    visible: root.settings-view == 41 && root.moonlight-host.paired
-                        && root.srow-visible(i, root.moonlight-scroll, root.settings-list-visible-rows);
-                }
-                SettingsSelectableRow {
-                    x: root.settings-content-x;
-                    y: root.srow-y(0, 0, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    title: root.moonlight-pairing-pin != "" ? root.i18n-strings[448] : root.i18n-strings[447];
-                    detail: root.moonlight-pairing-pin != "" ? root.i18n-strings[449]
-                        : root.moonlight-host.online == "offline" ? root.i18n-strings[452]
-                        : "";
-                    value: root.moonlight-pairing-pin != "" ? root.i18n-strings[474] + " " + root.moonlight-pairing-pin : "";
-                    emphasized: root.moonlight-pairing-pin != "";
-                    title-fraction: 0.5;
-                    selected: root.settings-view == 41 && root.moonlight-index == 0;
-                    visible: root.settings-view == 41 && !root.moonlight-host.paired;
-                }
-                SettingsActionButton {
-                    x: root.settings-content-x;
-                    y: root.srow-y(root.moonlight-remove-row, root.moonlight-scroll, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    armed: root.moonlight-remove-confirm;
-                    label: root.i18n-strings[450];
-                    prompt: root.i18n-strings[191];
-                    danger: true;
-                    selected: root.settings-view == 41 && root.moonlight-index == root.moonlight-remove-row;
-                    visible: root.settings-view == 41
-                        && root.srow-visible(root.moonlight-remove-row, root.moonlight-scroll, root.settings-list-visible-rows);
-                }
-                SettingsHint {
-                    x: root.settings-content-x;
-                    y: root.srow-y(root.moonlight-remove-row + 1, root.moonlight-scroll, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    text: root.moonlight-apps-state == "loading" ? root.i18n-strings[451]
-                        : root.moonlight-apps-state == "error" ? root.i18n-strings[452]
-                        : root.i18n-strings[453];
-                    visible: root.settings-view == 41 && root.moonlight-host.paired && root.moonlight-apps.length == 0;
-                }
-                SettingsHint {
-                    x: root.settings-content-x;
-                    y: root.srow-y(2, 0, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    text: root.i18n-strings[475];
-                    visible: root.settings-view == 41 && !root.moonlight-host.paired && root.moonlight-pairing-pin != "";
-                }
-
                 /* ----------------------------------- Moonlight Stream Settings (42) */
                 for row[k] in [
                     { title: root.i18n-strings[454], value: root.moonlight-resolution-label },
@@ -3298,58 +4047,6 @@ export component HomeWindow inherits Window {
                     value: row.value;
                     selected: root.settings-view == 42 && root.moonlight-index == k;
                     visible: root.settings-view == 42;
-                }
-
-                /* ------------------------------------------------- Steam Link (45) */
-                SettingsSelectableRow {
-                    x: root.settings-content-x;
-                    y: root.srow-y(0, 0, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    title: root.steamlink-state == "installing" ? root.i18n-strings[481]
-                        : root.steamlink-state == "installed" ? root.i18n-strings[483]
-                        : root.i18n-strings[479];
-                    detail: root.steamlink-state == "installing" ? root.i18n-strings[482]
-                        : root.steamlink-state == "installed" ? root.i18n-strings[484]
-                        : root.steamlink-download-detail;
-                    value: root.steamlink-state == "installing" ? root.steamlink-progress-label : "";
-                    emphasized: true;
-                    title-fraction: 0.6;
-                    selected: root.settings-view == 45 && root.steamlink-index == 0;
-                    visible: root.settings-view == 45;
-                }
-                SettingsSelectableRow {
-                    x: root.settings-content-x;
-                    y: root.srow-y(1, 0, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    title: root.steamlink-update-title;
-                    detail: root.steamlink-version-label;
-                    value: root.steamlink-update-value;
-                    title-fraction: 0.6;
-                    selected: root.settings-view == 45 && root.steamlink-index == 1;
-                    visible: root.settings-view == 45 && root.steamlink-state == "installed";
-                }
-                SettingsActionButton {
-                    x: root.settings-content-x;
-                    y: root.srow-y(2, 0, 0);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    armed: root.steamlink-remove-confirm;
-                    label: root.i18n-strings[490];
-                    prompt: root.i18n-strings[191];
-                    danger: true;
-                    selected: root.settings-view == 45 && root.steamlink-index == 2;
-                    visible: root.settings-view == 45 && root.steamlink-state == "installed";
-                }
-                /* Valve's licence terms, before and while downloading. */
-                SettingsHint {
-                    x: root.settings-content-x;
-                    y: root.srow-y(1, 0, 0);
-                    width: root.settings-content-width;
-                    height: 2 * root.settings-row-height;
-                    text: root.i18n-strings[480];
-                    visible: root.settings-view == 45 && root.steamlink-state != "installed";
                 }
 
                 /* ----------------------------------------------------------- Gaming */
@@ -4274,7 +4971,7 @@ export component HomeWindow inherits Window {
 
                 /* Generic dropdown used by every discrete multi-value Settings
                  * choice. */
-                Rectangle {
+                SettingsChoiceSheet {
                     x: root.settings-content-x - 6px;
                     y: root.settings-section-y - 4px;
                     width: root.settings-content-width + 12px;
@@ -4282,28 +4979,16 @@ export component HomeWindow inherits Window {
                         parent.height - self.y - 12px,
                         root.settings-choice-list-y + min(root.settings-choice-options.length, root.settings-choice-visible-rows) * root.settings-row-step + 4px
                     );
-                    background: Theme.surface-container-high;
-                    border-radius: Shape.large;
-                    clip: true;
-                    visible: root.settings-choice-open;
+                    title: root.settings-choice-title;
+                    options: root.settings-choice-options;
+                    index: root.settings-choice-index;
+                    scroll: root.settings-choice-scroll;
+                    visible-rows: root.settings-choice-visible-rows;
+                    list-y: root.settings-choice-list-y;
+                    row-step: root.settings-row-step;
+                    row-height: root.settings-row-height;
+                    visible: root.settings-choice-open && !root.details-page;
                     z: 95;
-
-                    MarqueeText {
-                        x: 16px; y: 10px; width: parent.width - 32px; height: 28px;
-                        label: root.settings-choice-title;
-                        text-color: Theme.text; text-size: 18px; text-weight: 700;
-                        active: true;
-                    }
-                    for option[i] in root.settings-choice-options: SettingsSelectableRow {
-                        x: 12px;
-                        y: root.settings-choice-list-y + (i - root.settings-choice-scroll) * root.settings-row-step;
-                        width: parent.width - 24px;
-                        height: root.settings-row-height;
-                        title: option.label;
-                        selected: root.settings-choice-index == i;
-                        visible: i >= root.settings-choice-scroll
-                            && i < root.settings-choice-scroll + root.settings-choice-visible-rows;
-                    }
                 }
 
                 /* One status line at the pane bottom, reserved by the row grid. */
@@ -4318,6 +5003,67 @@ export component HomeWindow inherits Window {
                     align-right: true;
                     visible: root.settings-notice != "";
                 }
+            }
+
+            details-page-view := GameDetailsPage {
+                x: 0; y: 0; width: parent.width; height: parent.height;
+                visible: root.details-page;
+                /* Height scale, capped by the width (square screens). */
+                s: min(root.home-s, max(1.0, self.width / 640px));
+                title: root.details-title;
+                system-name: root.details-subtitle;
+                meta: root.details-meta;
+                description: root.details-description;
+                cover: root.details-cover;
+                has-cover: root.details-has-cover;
+                backdrop: root.details-backdrop;
+                has-backdrop: root.details-has-backdrop;
+                chips: root.details-chips;
+                actions: root.details-actions;
+                index: root.gen-index;
+                caption: root.details-caption;
+                caption-armed: root.details-caption-armed;
+                notice: root.gen-notice;
+                desc-step: root.details-desc-step;
+            }
+            AppPage {
+                x: 0; y: 0; width: parent.width; height: parent.height;
+                visible: root.app-page-shown;
+                s: min(root.home-s, max(1.0, self.width / 640px));
+                kicker: root.app-page-kicker;
+                title: root.app-page-title;
+                meta: root.app-page-meta;
+                description: root.app-page-description;
+                icon: root.app-page-icon;
+                has-icon: root.app-page-has-icon;
+                chips: root.app-page-chips;
+                entries: root.app-page-entries;
+                actions: root.app-page-actions;
+                action-captions: root.app-page-captions;
+                index: root.steamlink-active ? root.steamlink-index : root.moonlight-index;
+                notice: root.steamlink-active ? root.steamlink-notice : root.moonlight-notice;
+                pin: root.app-page-pin;
+                pin-label: root.i18n-strings[449];
+                progress: root.app-page-progress;
+                progress-label: root.app-page-progress-label;
+            }
+            SettingsChoiceSheet {
+                x: (parent.width - self.width) / 2;
+                y: 24px;
+                width: min(parent.width - 48px, 420px);
+                height: min(
+                    parent.height - self.y - 24px,
+                    root.settings-choice-list-y + min(root.settings-choice-options.length, root.settings-choice-visible-rows) * root.settings-row-step + 4px
+                );
+                title: root.settings-choice-title;
+                options: root.settings-choice-options;
+                index: root.settings-choice-index;
+                scroll: root.settings-choice-scroll;
+                visible-rows: root.settings-choice-visible-rows;
+                list-y: root.settings-choice-list-y;
+                row-step: root.settings-row-step;
+                row-height: root.settings-row-height;
+                visible: root.settings-choice-open && root.details-page;
             }
         }
 
@@ -4336,6 +5082,8 @@ export component HomeWindow inherits Window {
             value <=> root.keyboard-value;
             title: root.keyboard-title;
             secret: root.keyboard-secret;
+            shift: root.keyboard-shift;
+            caps: root.keyboard-caps;
             input-kind: root.keyboard-input-kind;
             layout-name: root.keyboard-layout;
             selected-index: root.keyboard-index;
@@ -4393,8 +5141,13 @@ export component HomeWindow inherits Window {
                 if root.settings-open: ActionHint {
                     kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[186];
                 }
-                if root.settings-open && !root.settings-choice-open && root.settings-north-hint != "": ActionHint {
+                if root.settings-open && !root.settings-choice-open && root.settings-north-hint != "" && root.settings-view != 6: ActionHint {
                     kind: "face"; face-position: root.context-face-position; label: root.settings-north-hint;
+                }
+                /* System keyboard: North toggles Shift / Caps Lock on letters. */
+                if root.settings-open && root.settings-view == 6 && root.keyboard-page == 0
+                    && (root.keyboard-input-kind == "text" || root.keyboard-input-kind == "password"): ActionHint {
+                    kind: "face"; face-position: root.context-face-position; label: root.i18n-strings[791];
                 }
                 if root.settings-open: Rectangle { horizontal-stretch: 1; }
                 if !root.settings-open && !root.library-open: ActionHint { kind: "start"; label: root.i18n-strings[3]; }

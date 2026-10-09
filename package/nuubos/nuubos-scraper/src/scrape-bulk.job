@@ -1,4 +1,4 @@
-# EPIC-015: scrape every game without metadata (argument: all | system:<id>).
+# EPIC-015: scrape the library (argument: all | missing | system:<id>).
 COMMAND=/usr/bin/nuubos-scraper bulk
 SCOPE=device
 CANCEL=1

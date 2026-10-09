@@ -20,8 +20,10 @@
  * section SERVICES (connectivity-services), built here from the same
  * replies.
  *
- * 50 and 51 are a Settings shell of their own (details-active), opened from
- * Home with the Details action; 52-54 are Settings pages. This module keeps
+ * 50 is the console game page GameDetailsPage (details-page: hero cover,
+ * blurred backdrop, metadata chips, description, a row of actions), 51
+ * and 57 a Settings shell of their own (details-active), all opened from
+ * Home; 52-54 are Settings pages. This module keeps
  * no product state: every row reflects the last service reply and every
  * action is a service request. Long work (scraping) is a nuubos-jobd job
  * whose progress is the job's Live Notification.
@@ -30,9 +32,9 @@
 use crate::{
     guarded_scroll_offset, handle_settings_action, move_model_selection, navigate_settings_view, sectioned_scroll,
     open_settings_choice, open_system_keyboard, play_ui_sound, tr, tr_arg, write_ui_context,
-    GenRow, HomeWindow,
+    DetailAction, DetailChip, GenRow, HomeWindow,
 };
-use slint::{ComponentHandle, Image, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -52,6 +54,8 @@ pub const KEYBOARD_RA_NAME: i32 = 12;
 pub const KEYBOARD_RA_PASSWORD: i32 = 13;
 pub const KEYBOARD_SS_NAME: i32 = 14;
 pub const KEYBOARD_SS_PASSWORD: i32 = 15;
+pub const KEYBOARD_TGDB_KEY: i32 = 26;
+pub const KEYBOARD_SEARCH: i32 = 27;
 
 /* The Details shell owns Home input. */
 pub static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -69,6 +73,8 @@ struct Details {
     system: String,
     system_name: String,
     title: String,
+    /* Cover art path (libraryd). */
+    cover: String,
     available: bool,
     favorite: bool,
     last: i64,
@@ -84,6 +90,7 @@ struct Details {
     cores: Vec<String>,
     aspect: String,
     filter: String,
+    filter_default: String,
     /* nuubos-biosctl: missing required firmware for the system. */
     bios_missing: bool,
 }
@@ -124,9 +131,15 @@ struct State {
     ra_name_pending: String,
     ss_user: String,
     ss_available: bool,
+    /* Metadata source (nuubos-scraper provider) and the end of the user's
+     * TheGamesDB key. */
+    ss_provider: String,
+    ss_apikey: String,
     ss_name_pending: String,
     /* A bulk scrape job is running. */
     ss_busy: bool,
+    /* Scan for New Games: 1 = requested, 2 = libraryd reported it running. */
+    lib_scan: u8,
     /* Row keys of Settings → Gaming, in order. */
     gaming_keys: Vec<String>,
     /* The user's emulation settings (nuubos-emud SETTINGS). */
@@ -225,6 +238,7 @@ fn parse_details(reply: &str, d: &mut Details) {
                     d.id = f[0].into();
                     d.system = f[1].into();
                     d.title = f[2].into();
+                    d.cover = f[3].into();
                     d.last = f[5].parse().unwrap_or(0);
                     d.time = f[6].parse().unwrap_or(0);
                     d.available = f[7] == "1";
@@ -256,6 +270,7 @@ fn parse_game_settings(reply: &str, d: &mut Details) {
             "cores" => d.cores = value.split(',').filter(|c| !c.is_empty()).map(str::to_owned).collect(),
             "aspect" => d.aspect = value.into(),
             "filter" => d.filter = value.into(),
+            "filter_default" => d.filter_default = value.into(),
             _ => {}
         }
     }
@@ -399,6 +414,7 @@ fn filter_label(ui: &HomeWindow, v: &str) -> String {
         "sharp" => tr(ui, 532, "Sharp"),
         "smooth" => tr(ui, 533, "Smooth"),
         "pixel" => tr(ui, 534, "Pixel Perfect"),
+        "crt" => tr(ui, 777, "CRT Effect"),
         _ => String::new(),
     }
 }
@@ -431,75 +447,12 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
     let mut rows: Vec<(String, GenRow, bool)> = Vec::new();
     let d = &st.details;
     match view {
-        50 => {
-            if d.available {
-                rows.push(("play".into(), row(tr(ui, 413, "Play"), String::new(), String::new()), true));
-            }
-            rows.push(("favorite".into(), toggle(tr(ui, 412, "Favorite"), d.favorite, String::new()), true));
-            let in_count = d.members.iter().filter(|m| m.member).count();
-            let names: Vec<&str> = d.members.iter().filter(|m| m.member).map(|m| m.name.as_str()).collect();
-            let mut collections = nav(tr(ui, 537, "Collections"), if in_count > 0 { in_count.to_string() } else { String::new() });
-            collections.detail = names.join(", ").into();
-            rows.push(("collections".into(), collections, true));
-            if !d.cores.is_empty() {
-                rows.push(("settings".into(), nav(tr(ui, 524, "Game Settings"), String::new()), true));
-            }
-            match d.meta("match") {
-                "review" => {
-                    let mut r = row(tr(ui, 562, "Accept Match"), d.meta("title").to_owned(), tr(ui, 561, "Check this match"));
-                    r.enabled = !st.busy;
-                    rows.push(("accept".into(), r, !st.busy));
-                    rows.push(("reject".into(), row(tr(ui, 563, "Reject Match"), String::new(), String::new()), !st.busy));
-                }
-                "" => rows.push(("metadata".into(), row(tr(ui, 559, "Get Metadata"),
-                    if st.busy { tr(ui, 571, "Getting metadata") } else { String::new() }, String::new()), !st.busy && d.available)),
-                _ => rows.push(("metadata".into(), row(tr(ui, 560, "Update Metadata"),
-                    if st.busy { tr(ui, 571, "Getting metadata") } else { String::new() }, String::new()), !st.busy && d.available)),
-            }
-            if !d.available {
-                rows.push(("info".into(), row(tr(ui, 205, "Unavailable"), String::new(), d.path.clone()), false));
-            } else if d.bios_missing {
-                rows.push(("bios".into(), nav(tr(ui, 583, "BIOS missing for this system"), String::new()), true));
-            }
-            if d.last > 0 {
-                rows.push(("info".into(), row(tr(ui, 551, "Last Played"), days_ago(ui, d.last), String::new()), false));
-                rows.push(("info".into(), row(tr(ui, 552, "Time Played"), duration(ui, d.time), String::new()), false));
-                rows.push(("info".into(), row(tr(ui, 550, "Sessions"), d.sessions.to_string(), String::new()), false));
-            } else {
-                rows.push(("info".into(), row(tr(ui, 551, "Last Played"), tr(ui, 405, "Never played"), String::new()), false));
-            }
-            for (key, idx, fallback) in [
-                ("developer", 553, "Developer"),
-                ("publisher", 554, "Publisher"),
-                ("release", 555, "Release Date"),
-                ("genre", 556, "Genre"),
-                ("players", 557, "Players"),
-            ] {
-                let v = d.meta(key);
-                if !v.is_empty() {
-                    rows.push(("info".into(), row(tr(ui, idx, fallback), v.to_owned(), String::new()), false));
-                }
-            }
-            if !d.core.is_empty() {
-                rows.push(("info".into(), row(tr(ui, 525, "Emulator"), d.core.clone(), String::new()), false));
-            }
-            rows.push(("info".into(), row(tr(ui, 558, "File"), String::new(), d.path.clone()), false));
-            if d.last > 0 {
-                rows.push(("stats".into(), row(tr(ui, 549, "Reset Play Statistics"), String::new(),
-                    armed_detail(&st.armed, "stats", tr(ui, 598, "Press again to reset"), String::new())), true));
-            }
-            if d.available {
-                rows.push(("delete".into(), row(tr(ui, 544, "Delete Game"), String::new(),
-                    armed_detail(&st.armed, "delete", tr(ui, 546, "Press again to delete permanently"),
-                        tr(ui, 545, "Permanently deletes the game file for every user. Saves are kept."))), true));
-            }
-        }
         51 => {
             let core = if d.core_override.is_empty() { default_label(ui, &d.core_default) } else { d.core_override.clone() };
             rows.push(("core".into(), nav(tr(ui, 525, "Emulator"), core), d.cores.len() > 1));
-            let aspect = if d.aspect.is_empty() { default_label(ui, &tr(ui, 529, "As the game")) } else { aspect_label(ui, &d.aspect) };
+            let aspect = if d.aspect.is_empty() { default_label(ui, &tr(ui, 531, "Integer Scaling")) } else { aspect_label(ui, &d.aspect) };
             rows.push(("aspect".into(), nav(tr(ui, 526, "Aspect Ratio"), aspect), true));
-            let filter = if d.filter.is_empty() { default_label(ui, &tr(ui, 532, "Sharp")) } else { filter_label(ui, &d.filter) };
+            let filter = if d.filter.is_empty() { default_label(ui, &filter_label(ui, &d.filter_default)) } else { filter_label(ui, &d.filter) };
             rows.push(("filter".into(), nav(tr(ui, 527, "Video Filter"), filter), true));
             rows.push(("reset".into(), row(tr(ui, 535, "Reset Game Settings"), String::new(),
                 armed_detail(&st.armed, "reset", tr(ui, 598, "Press again to reset"),
@@ -641,6 +594,204 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
     rows
 }
 
+/* ---------------------------------------------------------------- */
+/* Game Details page (50)                                           */
+/* ---------------------------------------------------------------- */
+
+fn detail_action(icon: i32, label: String, primary: bool) -> DetailAction {
+    DetailAction { icon, label: label.into(), primary, on: false, enabled: true, armed: false, busy: false }
+}
+
+fn detail_chip(icon: i32, text: String, warn: bool) -> DetailChip {
+    DetailChip { icon, text: text.into(), warn }
+}
+
+/* The page's actions in order: (key, button, line under the actions). */
+fn details_actions(ui: &HomeWindow, st: &State) -> Vec<(String, DetailAction, String)> {
+    let d = &st.details;
+    let mut out = Vec::new();
+    if d.available {
+        out.push(("play".into(), detail_action(0, tr(ui, 413, "Play"), true), String::new()));
+    }
+    let mut favorite = detail_action(1, tr(ui, 412, "Favorite"), false);
+    favorite.on = d.favorite;
+    out.push(("favorite".into(), favorite, String::new()));
+    let names: Vec<&str> = d.members.iter().filter(|m| m.member).map(|m| m.name.as_str()).collect();
+    out.push(("collections".into(), detail_action(2, tr(ui, 537, "Collections"), false), names.join(", ")));
+    if !d.cores.is_empty() {
+        let core = if d.core.is_empty() { String::new() } else { format!("{}: {}", tr(ui, 525, "Emulator"), d.core) };
+        out.push(("settings".into(), detail_action(3, tr(ui, 524, "Game Settings"), false), core));
+    }
+    if d.meta("match") == "review" {
+        let mut accept = detail_action(6, tr(ui, 562, "Accept Match"), false);
+        accept.enabled = !st.busy;
+        out.push(("accept".into(), accept, format!("{}: {}", tr(ui, 561, "Check this match"), d.meta("title"))));
+        let mut reject = detail_action(7, tr(ui, 563, "Reject Match"), false);
+        reject.enabled = !st.busy;
+        out.push(("reject".into(), reject, String::new()));
+    } else {
+        let mut get = if d.meta("match").is_empty() {
+            detail_action(4, tr(ui, 559, "Get Metadata"), false)
+        } else {
+            detail_action(5, tr(ui, 560, "Update Metadata"), false)
+        };
+        get.enabled = !st.busy && d.available;
+        get.busy = st.busy;
+        let caption = if st.busy {
+            tr(ui, 571, "Getting metadata")
+        } else if !d.meta("provider").is_empty() {
+            tr_arg(ui, 802, "Source: {0}", source_name(d.meta("provider")))
+        } else {
+            String::new()
+        };
+        out.push(("metadata".into(), get, caption));
+    }
+    let mut search = detail_action(17, tr(ui, 800, "Search Name"), false);
+    search.enabled = !st.busy && d.available;
+    let searched = if d.meta("search").is_empty() { d.title.clone() } else { d.meta("search").to_owned() };
+    out.push(("search".into(), search, tr_arg(ui, 801, "Searched as \"{0}\". Change it if the game is not found or the match is wrong.", &searched)));
+    if d.available && d.bios_missing {
+        out.push(("bios".into(), detail_action(8, tr(ui, 576, "BIOS Files"), false),
+            tr(ui, 583, "BIOS missing for this system")));
+    }
+    if d.last > 0 {
+        let mut reset = detail_action(9, tr(ui, 549, "Reset Play Statistics"), false);
+        reset.armed = st.armed == "stats";
+        out.push(("stats".into(), reset,
+            armed_detail(&st.armed, "stats", tr(ui, 598, "Press again to reset"), String::new())));
+    }
+    if d.available {
+        let mut delete = detail_action(10, tr(ui, 544, "Delete Game"), false);
+        delete.armed = st.armed == "delete";
+        out.push(("delete".into(), delete, armed_detail(&st.armed, "delete",
+            tr(ui, 546, "Press again to delete permanently"),
+            tr(ui, 545, "Permanently deletes the game file for every user. Saves are kept."))));
+    }
+    out
+}
+
+/* Warnings first, then players, rating and play time. */
+fn details_chips(ui: &HomeWindow, d: &Details) -> Vec<DetailChip> {
+    let mut chips = Vec::new();
+    if !d.available {
+        chips.push(detail_chip(13, tr(ui, 205, "Unavailable"), true));
+    }
+    if d.meta("match") == "review" {
+        chips.push(detail_chip(13, tr(ui, 561, "Check this match"), true));
+    }
+    if !d.meta("players").is_empty() {
+        chips.push(detail_chip(11, d.meta("players").to_owned(), false));
+    }
+    if let Ok(rating) = d.meta("rating").parse::<u32>() {
+        chips.push(detail_chip(1, tr_arg(ui, 789, "{0}%", &rating.min(100).to_string()), false));
+    }
+    let played = if d.last > 0 {
+        format!("{}  •  {}", days_ago(ui, d.last), duration(ui, d.time))
+    } else {
+        tr(ui, 405, "Never played")
+    };
+    chips.push(detail_chip(12, played, false));
+    chips
+}
+
+/* Year, genre and developer (else publisher) on one line. */
+fn details_meta(d: &Details) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let year: String = d.meta("release").chars().take(4).collect();
+    if year.len() == 4 && year.chars().all(|c| c.is_ascii_digit()) {
+        parts.push(year);
+    }
+    for key in ["genre", if d.meta("developer").is_empty() { "publisher" } else { "developer" }] {
+        if !d.meta(key).is_empty() {
+            parts.push(d.meta(key).to_owned());
+        }
+    }
+    parts.join("  •  ")
+}
+
+fn render_details(ui: &HomeWindow) {
+    let (items, chips, meta, path) = STATE.with(|st| {
+        let st = st.borrow();
+        (details_actions(ui, &st), details_chips(ui, &st.details), details_meta(&st.details), st.details.path.clone())
+    });
+    let count = items.len() as i32;
+    let index = ui.get_gen_index().clamp(0, (count - 1).max(0));
+    STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        st.keys = items.iter().map(|i| i.0.clone()).collect();
+        st.actionable = items.iter().map(|i| i.1.enabled).collect();
+    });
+    /* The focused action explains itself; otherwise the game's file. */
+    let (caption, armed, select) = items
+        .get(index as usize)
+        .map(|(_, a, c)| (if c.is_empty() { path.clone() } else { c.clone() }, a.armed, a.enabled))
+        .unwrap_or_default();
+    let actions: Vec<DetailAction> = items.into_iter().map(|i| i.1).collect();
+    ui.set_details_actions(ModelRc::from(Rc::new(VecModel::from(actions))));
+    ui.set_details_chips(ModelRc::from(Rc::new(VecModel::from(chips))));
+    ui.set_details_meta(meta.into());
+    ui.set_details_caption(caption.into());
+    ui.set_details_caption_armed(armed);
+    ui.set_gen_index(index);
+    ui.set_gen_select(select);
+    ui.set_gen_select_label("".into());
+}
+
+/* Backdrop: a small, box-blurred copy of the screenshot (or the cover),
+ * stretched under the page; cheap to decode and to draw. */
+fn blurred(src: &Image) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+    let (mut buf, _) = crate::library::shape_cover(src, 72, 0.0)?;
+    let (w, h) = (buf.width() as usize, buf.height() as usize);
+    let px = buf.make_mut_slice();
+    let mut tmp = px.to_vec();
+    const R: usize = 3;
+    for _ in 0..2 {
+        for horizontal in [true, false] {
+            let (outer, inner) = if horizontal { (h, w) } else { (w, h) };
+            for o in 0..outer {
+                let at = |i: usize| if horizontal { o * w + i } else { i * w + o };
+                for i in 0..inner {
+                    let (lo, hi) = (i.saturating_sub(R), (i + R).min(inner - 1));
+                    let mut acc = [0u32; 4];
+                    for j in lo..=hi {
+                        let p = px[at(j)];
+                        acc[0] += p.r as u32;
+                        acc[1] += p.g as u32;
+                        acc[2] += p.b as u32;
+                        acc[3] += p.a as u32;
+                    }
+                    let n = (hi - lo + 1) as u32;
+                    tmp[at(i)] = Rgba8Pixel {
+                        r: (acc[0] / n) as u8, g: (acc[1] / n) as u8, b: (acc[2] / n) as u8, a: (acc[3] / n) as u8,
+                    };
+                }
+            }
+            px.copy_from_slice(&tmp);
+        }
+    }
+    Some(buf)
+}
+
+/* Left/right: actions; up/down: the description. */
+fn details_move(ui: &HomeWindow, action: &str) {
+    match action {
+        "menu_left" | "menu_right" => {
+            let count = STATE.with(|st| st.borrow().keys.len()) as i32;
+            let index = ui.get_gen_index() + if action == "menu_left" { -1 } else { 1 };
+            if count == 0 || !(0..count).contains(&index) {
+                return;
+            }
+            ui.set_gen_index(index);
+            STATE.with(|st| st.borrow_mut().armed.clear());
+            render(ui);
+        }
+        _ => {
+            let step = ui.get_details_desc_step() + if action == "menu_up" { -1 } else { 1 };
+            ui.set_details_desc_step(step.clamp(0, ui.get_details_desc_steps()));
+        }
+    }
+}
+
 pub(crate) fn render(ui: &HomeWindow) {
     let view = ui.get_settings_view();
     if (58..=62).contains(&view) {
@@ -661,6 +812,10 @@ pub(crate) fn render(ui: &HomeWindow) {
     }
     if view == GAMING_VIEW || (view == 0 && ui.get_settings_selected_index() == 3) {
         render_gaming(ui);
+        return;
+    }
+    if view == 50 {
+        render_details(ui);
         return;
     }
     if !(50..=57).contains(&view) && view != 63 && view != 66 {
@@ -752,6 +907,10 @@ pub(crate) fn focused_key(ui: &HomeWindow) -> String {
 /* Fetch everything the Details page aggregates, off the UI thread. */
 fn load_details(ui: &HomeWindow, id: String) {
     let weak = ui.as_weak();
+    /* The hero cover is decoded at its on-screen height (physical px). */
+    let scale = ui.window().scale_factor();
+    let target = ((ui.window().size().height as f32 * 0.62) as u32).max(64).div_ceil(32) * 32;
+    let radius = (12.0 * scale).max(target as f32 * 0.04);
     thread::spawn(move || {
         let mut d = Details::default();
         parse_details(&library(&format!("DETAILS\t{id}"), true), &mut d);
@@ -761,15 +920,25 @@ fn load_details(ui: &HomeWindow, id: String) {
         parse_game_settings(&emulation(&format!("GAME_SETTINGS\t{}\t{}", d.id, d.system), true), &mut d);
         let bios = run_tool("/usr/bin/nuubos-biosctl", &["status", &d.system], None);
         d.bios_missing = parse_bios(&bios).0.iter().any(|s| s.state == "missing" || s.state == "invalid");
+        let load = |p: &str| if p.is_empty() { None } else { Image::load_from_path(std::path::Path::new(p)).ok() };
+        let cover_src = load(&d.cover);
+        let cover = cover_src.as_ref().and_then(|i| crate::library::shape_cover(i, target, radius)).map(|c| c.0);
+        let backdrop = load(d.meta("screenshot")).or(cover_src).as_ref().and_then(blurred);
         let _ = slint::invoke_from_event_loop(move || {
             let Some(ui) = weak.upgrade() else { return };
-            if !ACTIVE.load(Ordering::SeqCst) {
+            if !ACTIVE.load(Ordering::SeqCst) || STATE.with(|st| st.borrow().details.id != d.id) {
                 return;
             }
             let title = if d.meta("title").is_empty() { d.title.clone() } else { d.meta("title").to_owned() };
             ui.set_details_title(title.into());
             ui.set_details_subtitle(d.system_name.clone().into());
             ui.set_details_description(d.meta("description").replace("\\n", "\n").into());
+            if let Some(c) = cover {
+                ui.set_details_cover(Image::from_rgba8_premultiplied(c));
+                ui.set_details_has_cover(true);
+            }
+            ui.set_details_has_backdrop(backdrop.is_some());
+            ui.set_details_backdrop(backdrop.map(Image::from_rgba8_premultiplied).unwrap_or_default());
             STATE.with(|st| st.borrow_mut().details = d);
             render(&ui);
         });
@@ -790,6 +959,10 @@ pub fn open_details(ui: &HomeWindow, id: &str, title: &str, cover: Option<Image>
     ui.set_details_description("".into());
     ui.set_details_has_cover(cover.is_some());
     ui.set_details_cover(cover.unwrap_or_default());
+    ui.set_details_meta("".into());
+    ui.set_details_has_backdrop(false);
+    ui.set_details_backdrop(Image::default());
+    ui.set_details_desc_step(0);
     show(ui, 50);
     ui.set_settings_open(true);
     write_ui_context("settings");
@@ -844,6 +1017,10 @@ pub fn leave_details(ui: &HomeWindow) {
     ui.set_settings_open(false);
     ui.set_details_active(false);
     ui.set_details_cover(Image::default());
+    ui.set_details_backdrop(Image::default());
+    ui.set_details_has_backdrop(false);
+    ui.set_details_actions(ModelRc::default());
+    ui.set_details_chips(ModelRc::default());
     ui.set_gen_rows(ModelRc::default());
     write_ui_context("home");
 }
@@ -899,9 +1076,11 @@ fn scrape_outcome(ui: &HomeWindow, out: &str) -> String {
         "not-found" => tr(ui, 573, "No metadata found for this game"),
         "quota" => tr(ui, 574, "Daily metadata limit reached, try again later"),
         "auth" => tr(ui, 575, "Check the account"),
+        "busy" | "service" => tr(ui, 790, "The metadata service is busy, try again later"),
         "unavailable" => tr(ui, 570, "The metadata service is not available in this build"),
         "network" => tr(ui, 494, "Check the network connection"),
         "cancelled" => tr(ui, 596, "Cancelled"),
+        "complete" | "matched" => tr(ui, 572, "Metadata updated"),
         _ => tr(ui, 93, "Failed"),
     }
 }
@@ -926,7 +1105,7 @@ fn open_core_choice(ui: &HomeWindow) {
 
 fn open_aspect_choice(ui: &HomeWindow) {
     let d = STATE.with(|st| st.borrow().details.clone());
-    let mut options = vec![(String::new(), default_label(ui, &tr(ui, 529, "As the game")))];
+    let mut options = vec![(String::new(), default_label(ui, &tr(ui, 531, "Integer Scaling")))];
     for v in ["core", "4:3", "16:9", "full", "integer"] {
         options.push((v.to_owned(), aspect_label(ui, v)));
     }
@@ -935,7 +1114,7 @@ fn open_aspect_choice(ui: &HomeWindow) {
 
 fn open_filter_choice(ui: &HomeWindow) {
     let d = STATE.with(|st| st.borrow().details.clone());
-    let mut options = vec![(String::new(), default_label(ui, &tr(ui, 532, "Sharp")))];
+    let mut options = vec![(String::new(), default_label(ui, &filter_label(ui, &d.filter_default)))];
     for v in ["sharp", "smooth", "pixel"] {
         options.push((v.to_owned(), filter_label(ui, v)));
     }
@@ -966,6 +1145,8 @@ pub fn apply_choice(ui: &HomeWindow, context: &str, value: String) {
         "game-aspect" => game_set(ui, "aspect", value),
         "game-filter" => game_set(ui, "filter", value),
         "emu-slots" => emu_set(ui, "slots", value),
+        "game-source" => tool_then(ui, "/usr/bin/nuubos-scraper", vec!["provider".into(), "set".into(), value],
+            None, |ui, _| refresh_gaming(ui)),
         c if c.starts_with("emu-hotkey:") => emu_set(ui, &format!("hotkey_{}", &c[11..]), value),
         "game-collection" => {
             if value == "new" {
@@ -1016,6 +1197,10 @@ fn details_confirm(ui: &HomeWindow, key: &str) {
             open_bios(ui);
         }
         "metadata" => scrape_game(ui, d.id.clone(), !d.meta("match").is_empty()),
+        "search" => {
+            let current = if d.meta("search").is_empty() { d.title.clone() } else { d.meta("search").to_owned() };
+            open_system_keyboard(ui, &tr(ui, 800, "Search Name"), KEYBOARD_SEARCH, 50, "text", &current);
+        }
         "accept" | "reject" => {
             let verb = key.to_owned();
             let id = d.id.clone();
@@ -1102,17 +1287,27 @@ pub fn handle_details_action(ui: &HomeWindow, action: &str, settings_active: &Ar
         return;
     }
     play_ui_sound(action);
+    let page = ui.get_settings_view() == 50;
     match action {
+        "menu_up" | "menu_down" | "menu_left" | "menu_right" if page => details_move(ui, action),
         "menu_up" | "menu_down" => move_selection(ui, action),
         "menu_back" => {
             if ui.get_settings_view() == 51 {
                 show(ui, 50);
-                render(ui);
+                /* Back on the action that opened Game Settings. */
+                if let Some(i) = STATE.with(|st| st.borrow().keys.iter().position(|k| k == "settings")) {
+                    ui.set_gen_index(i as i32);
+                    render(ui);
+                }
             } else {
                 leave_details(ui);
             }
         }
         "menu_confirm" => {
+            let i = ui.get_gen_index().max(0) as usize;
+            if page && !STATE.with(|st| st.borrow().actionable.get(i).copied().unwrap_or(false)) {
+                return;
+            }
             let key = focused_key(ui);
             details_confirm(ui, &key);
         }
@@ -1129,6 +1324,25 @@ pub fn handle_details_action(ui: &HomeWindow, action: &str, settings_active: &Ar
  * Files (user request 2026-10-08: no Game Metadata sub-page, no Hidden
  * Games). */
 pub const GAMING_VIEW: i32 = 68;
+
+/* Metadata sources (nuubos-scraper providers), product names. */
+const SOURCES: [&str; 3] = ["screenscraper", "thegamesdb", "libretro"];
+
+fn source_name(id: &str) -> &'static str {
+    match id {
+        "thegamesdb" => "TheGamesDB",
+        "libretro" => "libretro",
+        _ => "ScreenScraper",
+    }
+}
+
+fn source_detail(ui: &HomeWindow, id: &str) -> String {
+    match id {
+        "thegamesdb" => tr(ui, 794, "Covers, screenshots and descriptions in English. A free private API key gives more requests."),
+        "libretro" => tr(ui, 795, "Covers and screenshots only. No account needed."),
+        _ => tr(ui, 793, "Covers, screenshots, descriptions and ratings in your language. A free ScreenScraper account gives more requests."),
+    }
+}
 
 fn gaming_rows(ui: &HomeWindow, st: &State) -> Vec<(String, GenRow, bool)> {
     let mut rows = Vec::new();
@@ -1148,23 +1362,41 @@ fn gaming_rows(ui: &HomeWindow, st: &State) -> Vec<(String, GenRow, bool)> {
         tr(ui, 776, "Frames the game when it does not fill the screen")), true));
     rows.push(("crt".into(), toggle(tr(ui, 777, "CRT Effect"), on("crt"),
         tr(ui, 778, "Scanlines for consoles played on TVs")), true));
-    if !st.ss_available {
-        let mut r = row(tr(ui, 565, "ScreenScraper Account"), tr(ui, 205, "Unavailable"),
-            tr(ui, 570, "The metadata service is not available in this build"));
-        r.enabled = false;
-        rows.push(("info".into(), r, false));
-    } else if st.ss_user.is_empty() {
-        rows.push(("ss-signin".into(), row(tr(ui, 565, "ScreenScraper Account"), tr(ui, 566, "Not signed in"),
-            String::new()), true));
-    } else {
-        rows.push(("ss-signout".into(), row(tr(ui, 565, "ScreenScraper Account"), st.ss_user.clone(),
-            armed_detail(&st.armed, "ss-signout", tr(ui, 191, "Press again to confirm"), tr(ui, 567, "Sign Out"))), true));
+    /* LIBRARY (DEVICE): the library scan, the metadata source, its optional
+     * account or key, then the two scraping runs. */
+    let scanning = ui.get_library_scanning();
+    rows.push(("scan".into(), row(tr(ui, 804, "Scan for New Games"),
+        if scanning { tr(ui, 410, "Searching for games…") } else { String::new() },
+        tr(ui, 805, "Finds games copied to the SD card since the last scan")), !scanning));
+    let mut source = nav(tr(ui, 792, "Metadata Source"), source_name(&st.ss_provider).to_owned());
+    source.detail = source_detail(ui, &st.ss_provider).into();
+    rows.push(("ss-source".into(), source, true));
+    match st.ss_provider.as_str() {
+        "screenscraper" => if st.ss_user.is_empty() {
+            rows.push(("ss-signin".into(), row(tr(ui, 565, "ScreenScraper Account"), tr(ui, 566, "Not signed in"),
+                tr(ui, 803, "Optional: more requests per day")), true));
+        } else {
+            rows.push(("ss-signout".into(), row(tr(ui, 565, "ScreenScraper Account"), st.ss_user.clone(),
+                armed_detail(&st.armed, "ss-signout", tr(ui, 191, "Press again to confirm"), tr(ui, 567, "Sign Out"))), true));
+        },
+        "thegamesdb" => rows.push(("tgdb-key".into(), row(tr(ui, 796, "TheGamesDB API Key"),
+            if st.ss_apikey.is_empty() { tr(ui, 797, "Not set") } else { format!("•••• {}", st.ss_apikey) },
+            tr(ui, 803, "Optional: more requests per day")), true)),
+        _ => {}
     }
-    let mut bulk = row(tr(ui, 568, "Get Metadata for All Games"),
-        if st.ss_busy { tr(ui, 571, "Getting metadata") } else { String::new() },
-        tr(ui, 569, "Uses the Internet only when you ask. Games without metadata keep their file name."));
+    let busy = if st.ss_busy { tr(ui, 571, "Getting metadata") } else { String::new() };
+    let mut bulk = row(tr(ui, 568, "Get Metadata for All Games"), busy.clone(),
+        if st.ss_available {
+            tr(ui, 569, "Uses the Internet only when you ask. Games without metadata keep their file name.")
+        } else {
+            tr(ui, 570, "The metadata service is not available")
+        });
     bulk.enabled = st.ss_available;
     rows.push(("bulk".into(), bulk, st.ss_available && !st.ss_busy));
+    let mut fill = row(tr(ui, 798, "Fill Missing Data"), String::new(),
+        tr(ui, 799, "Adds only what is missing, such as covers or descriptions. What is already there is kept."));
+    fill.enabled = st.ss_available;
+    rows.push(("fill".into(), fill, st.ss_available && !st.ss_busy));
     let mut bios = nav(tr(ui, 576, "BIOS Files"), String::new());
     bios.detail = tr(ui, 581, "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.").into();
     rows.push(("bios".into(), bios, true));
@@ -1177,7 +1409,7 @@ fn render_gaming(ui: &HomeWindow) {
         let rows = gaming_rows(ui, &st);
         st.gaming_keys = rows.iter().map(|r| r.0.clone()).collect();
         /* LIBRARY (DEVICE) starts after the user's rows. */
-        let split = rows.iter().position(|r| matches!(r.0.as_str(), "info" | "ss-signin" | "ss-signout"))
+        let split = rows.iter().position(|r| r.0 == "scan")
             .unwrap_or(rows.len()) as i32;
         ui.set_gaming_split(split);
         let select = rows.get(ui.get_gaming_index().max(0) as usize).map(|r| r.2).unwrap_or(false);
@@ -1214,7 +1446,9 @@ pub fn refresh_gaming(ui: &HomeWindow) {
                 st.ra_enabled = kv(&ra, "enabled") == "1";
                 st.ra_hardcore = kv(&ra, "hardcore") == "1";
                 st.ss_user = kv(&ss, "user").to_owned();
-                st.ss_available = kv(&ss, "provider") == "available";
+                st.ss_available = kv(&ss, "available") == "1";
+                st.ss_provider = kv(&ss, "provider").to_owned();
+                st.ss_apikey = kv(&ss, "apikey").to_owned();
             });
             render_gaming(&ui);
         });
@@ -1266,10 +1500,11 @@ pub fn handle_gaming(ui: &HomeWindow, action: &str) {
                             None, |ui, _| refresh_gaming(ui));
                     }
                 }
-                "bulk" if !STATE.with(|st| st.borrow().ss_busy) => {
+                "bulk" | "fill" if !STATE.with(|st| st.borrow().ss_busy) => {
                     STATE.with(|st| st.borrow_mut().ss_busy = true);
                     render_gaming(ui);
-                    tool_then(ui, "/usr/bin/nuubos-jobctl", vec!["run".into(), "scrape-bulk".into(), "all".into()],
+                    let scope = if key == "fill" { "missing" } else { "all" };
+                    tool_then(ui, "/usr/bin/nuubos-jobctl", vec!["run".into(), "scrape-bulk".into(), scope.into()],
                         None, |ui, out| {
                             STATE.with(|st| st.borrow_mut().ss_busy = false);
                             let text = scrape_outcome(ui, out.trim());
@@ -1277,11 +1512,45 @@ pub fn handle_gaming(ui: &HomeWindow, action: &str) {
                             render_gaming(ui);
                         });
                 }
+                "scan" if !ui.get_library_scanning() => {
+                    STATE.with(|st| st.borrow_mut().lib_scan = 1);
+                    thread::spawn(|| { let _ = library("SCAN", false); });
+                }
+                "ss-source" => {
+                    let current = STATE.with(|st| st.borrow().ss_provider.clone());
+                    let options = SOURCES.iter().map(|id| (id.to_string(), source_name(id).to_owned())).collect();
+                    open_settings_choice(ui, "game-source", &tr(ui, 792, "Metadata Source"), options, &current);
+                }
+                "tgdb-key" => {
+                    open_system_keyboard(ui, &tr(ui, 796, "TheGamesDB API Key"), KEYBOARD_TGDB_KEY, GAMING_VIEW, "text", "");
+                }
                 _ => {}
             }
         }
         _ => {}
     }
+}
+
+/* Every libraryd snapshot: the Scan row follows `scanning`, and the end of a
+ * scan the user asked for reports how many games it found. */
+pub fn library_scan_state(ui: &HomeWindow, scanning: bool, found: usize) {
+    let done = STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        match (st.lib_scan, scanning) {
+            (1, true) => st.lib_scan = 2,
+            (2, false) => { st.lib_scan = 0; return true; }
+            _ => {}
+        }
+        false
+    });
+    if ui.get_settings_view() != GAMING_VIEW {
+        return;
+    }
+    if done {
+        notice(ui, if found == 0 { tr(ui, 807, "No new games found") }
+            else { tr_arg(ui, 806, "New games found: {0}", &found.to_string()) });
+    }
+    render_gaming(ui);
 }
 
 /* SET one emulation setting, then show the stored values again. */
@@ -1721,7 +1990,8 @@ pub fn handle_page(ui: &HomeWindow, view: i32, action: &str) {
 
 /* System keyboard results for this module's purposes. */
 pub fn keyboard_done(ui: &HomeWindow, purpose: i32, value: String) {
-    let value = value.trim().to_owned();
+    /* Passwords are taken exactly as typed (spaces included). */
+    let value = if matches!(purpose, KEYBOARD_RA_PASSWORD | KEYBOARD_SS_PASSWORD) { value } else { value.trim().to_owned() };
     match purpose {
         KEYBOARD_COLLECTION => {
             navigate_settings_view(ui, 50);
@@ -1776,6 +2046,35 @@ pub fn keyboard_done(ui: &HomeWindow, purpose: i32, value: String) {
                     refresh_achievements(ui);
                 });
         }
+        KEYBOARD_TGDB_KEY => {
+            ui.set_keyboard_value("".into());
+            navigate_settings_view(ui, GAMING_VIEW);
+            if value.is_empty() {
+                render_gaming(ui);
+                return;
+            }
+            tool_then(ui, "/usr/bin/nuubos-scraper", vec!["apikey".into(), "set".into()], Some(value),
+                |ui, out| {
+                    refresh_gaming(ui);
+                    notice(ui, if out.starts_with("OK") { tr(ui, 199, "Saved") } else { tr(ui, 93, "Failed") });
+                });
+        }
+        KEYBOARD_SEARCH => {
+            ui.set_keyboard_value("".into());
+            navigate_settings_view(ui, 50);
+            render(ui);
+            /* Store the name, then look the game up with it. */
+            let id = STATE.with(|st| st.borrow().details.id.clone());
+            let weak = ui.as_weak();
+            thread::spawn(move || {
+                let _ = run_tool("/usr/bin/nuubos-scraper", &["search", &id], Some(value));
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak.upgrade() {
+                        scrape_game(&ui, id, true);
+                    }
+                });
+            });
+        }
         KEYBOARD_SS_PASSWORD => {
             ui.set_keyboard_value("".into());
             navigate_settings_view(ui, GAMING_VIEW);
@@ -1784,8 +2083,14 @@ pub fn keyboard_done(ui: &HomeWindow, purpose: i32, value: String) {
                 render(ui);
                 return;
             }
+            notice(ui, tr(ui, 590, "Signing in…"));
+            render_gaming(ui);
             tool_then(ui, "/usr/bin/nuubos-scraper", vec!["account".into(), "set".into(), name], Some(value),
-                |ui, _| refresh_gaming(ui));
+                |ui, out| {
+                    refresh_gaming(ui);
+                    notice(ui, if out.starts_with("OK") { tr(ui, 588, "Signed in") } else if out.contains("network") {
+                        tr(ui, 494, "Check the network connection") } else { tr(ui, 589, "Sign-in failed") });
+                });
         }
         _ => {}
     }

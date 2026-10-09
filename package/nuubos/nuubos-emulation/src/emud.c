@@ -114,6 +114,9 @@
 #ifndef HDMI_ENABLED
 #define HDMI_ENABLED "/sys/class/drm/card0-HDMI-A-1/enabled"
 #endif
+#ifndef SYSTEM_ICONS
+#define SYSTEM_ICONS "/usr/share/nuubos/systems"
+#endif
 #ifndef SYSTEMS_CONF
 #define SYSTEMS_CONF "/usr/share/nuubos/systems.conf"
 #endif
@@ -1040,6 +1043,7 @@ static void default_settings(struct emu_settings *e)
 	memset(e, 0, sizeof(*e));
 	e->slots = DEFAULT_SLOTS;
 	e->slot_rotation = true;
+	e->crt = true;
 	copy_text(e->overlay_items, sizeof(e->overlay_items), DEFAULT_OVERLAY_ITEMS);
 	for (int i = 0; i < HK_COUNT; i++)
 		copy_text(e->hotkey[i], sizeof(e->hotkey[i]), hotkey_defaults[i]);
@@ -1515,13 +1519,17 @@ static int write_session_shader(const char *shader, const char *params)
 
 /*
  * Picture presentation (A, B, I, L). Without a per-game override the game
- * is pixel perfect: square pixels, integer scale (smart: a few overscan
- * lines may be cropped; only content stuck at 1x with a large margin, such
- * as PSP on 640x480, is scaled to fit instead, RetroArch patch 0003),
- * centred horizontally and at the top of the screen. Bezels make the
- * viewport the whole screen and bezel.glsl places the picture the same
- * way; the CRT look applies to TV systems (display.conf) unless the game
- * has its own filter. Returns the --set-shader argument ("" = none).
+ * gets integer scaling with the core's aspect (a PS1 game is 4:3 whatever
+ * its resolution): whole vertical scale, width from the aspect; content
+ * that would leave more than 12 % of the screen unused (GBA or PSP on
+ * 640x480) is scaled to fit with its aspect instead (stock smart mode),
+ * through sharp bilinear so no pixel is uneven. The picture is centred
+ * horizontally and at the top of the screen (RetroArch patch 0003); the
+ * per-game "integer" aspect is the same picture without bezels. Bezels
+ * make the viewport the whole screen and bezel.glsl places the picture
+ * the same way; the CRT look applies to TV systems (display.conf) unless
+ * the game has its own filter. Returns the --set-shader argument ("" =
+ * none).
  */
 static const char *write_presentation(FILE *fp, const struct game_overrides *o)
 {
@@ -1537,7 +1545,7 @@ static const char *write_presentation(FILE *fp, const struct game_overrides *o)
 	bool crt;
 	bool bezel = false;
 	bool integer = true;
-	int index = 21; /* square pixels */
+	int index = 22; /* the core's aspect */
 
 	for (int i = 0; keys[i]; i++)
 		remember_key(keys[i]);
@@ -1550,7 +1558,7 @@ static const char *write_presentation(FILE *fp, const struct game_overrides *o)
 		      : 22; /* core */
 		integer = false;
 	} else if (!strcmp(o->aspect, "integer")) {
-		index = 22; /* integer scale of the core's aspect */
+		/* the default presentation, without bezels */
 	} else if (session.settings.bezels) {
 		index = 24;
 		integer = false;
@@ -1571,22 +1579,35 @@ static const char *write_presentation(FILE *fp, const struct game_overrides *o)
 
 	shader[0] = '\0';
 	if (bezel) {
-		char params[512];
+		char params[1536];
+		char icon[PATH_MAX];
 		float rgb[3];
+		bool has_icon;
 
 		system_colour(session.system, rgb);
+		snprintf(icon, sizeof(icon), SYSTEM_ICONS "/%s.png", session.system);
+		has_icon = file_exists(icon);
+		/* An unused sampler still needs an image: the wordmark. */
+		if (!has_icon)
+			copy_text(icon, sizeof(icon), SHADER_DIR "/bezel-wordmark.png");
 		snprintf(params, sizeof(params),
-			 "parameters = \"BEZEL_R;BEZEL_G;BEZEL_B;BEZEL_STYLE;CRT\"\n"
+			 "textures = \"SYSICON;BRAND\"\n"
+			 "SYSICON = \"%s\"\nSYSICON_linear = \"true\"\n"
+			 "SYSICON_mipmap = \"true\"\n"
+			 "BRAND = \"" SHADER_DIR "/bezel-wordmark.png\"\n"
+			 "BRAND_linear = \"false\"\n"
+			 "parameters = \"BEZEL_R;BEZEL_G;BEZEL_B;BEZEL_STYLE;HAS_ICON;CRT\"\n"
 			 "BEZEL_R = \"%.3f\"\nBEZEL_G = \"%.3f\"\nBEZEL_B = \"%.3f\"\n"
-			 "BEZEL_STYLE = \"%d\"\nCRT = \"%d\"\n",
-			 rgb[0], rgb[1], rgb[2], !strcmp(screen, "lcd") ? 1 : 0, crt ? 1 : 0);
+			 "BEZEL_STYLE = \"%d\"\nHAS_ICON = \"%d\"\nCRT = \"%d\"\n",
+			 icon, rgb[0], rgb[1], rgb[2], !strcmp(screen, "lcd") ? 1 : 0,
+			 has_icon ? 1 : 0, crt ? 1 : 0);
 		if (write_session_shader(SHADER_DIR "/bezel.glsl", params) == 0)
 			copy_text(shader, sizeof(shader), SESSION_SHADER);
-	} else if (!strcmp(o->filter, "sharp")) {
-		copy_text(shader, sizeof(shader), DEFAULT_SHADER_PRESET);
 	} else if (crt) {
 		if (write_session_shader(SHADER_DIR "/crt.glsl", "") == 0)
 			copy_text(shader, sizeof(shader), SESSION_SHADER);
+	} else if (!o->filter[0] || !strcmp(o->filter, "sharp")) {
+		copy_text(shader, sizeof(shader), DEFAULT_SHADER_PRESET);
 	}
 	fprintf(fp, "video_shader_enable = \"%s\"\n", shader[0] ? "true" : "false");
 	return shader;
@@ -2586,15 +2607,21 @@ static void handle_game_settings(struct client *c, const char *verb, char *arg)
 	if (!strcmp(verb, "GAME_SETTINGS")) {
 		char out[1024];
 		const char *effective;
+		struct emu_settings settings;
+		char screen[16];
 		int len;
 
+		/* filter_default: what an empty filter gives (write_presentation) */
+		load_settings(user, &settings);
+		system_screen(fields[1], screen, sizeof(screen));
 		def_core[0] = '\0';
 		(void)resolve_core(fields[1], def_core, sizeof(def_core), def_path, sizeof(def_path));
 		effective = o.core[0] && list_has(cores, o.core) ? o.core : def_core;
 		len = snprintf(out, sizeof(out),
 			       "core=%s\ncore_default=%s\ncore_override=%s\ncores=%s\n"
-			       "aspect=%s\nfilter=%s\nend=1\n",
-			       effective, def_core, o.core, cores, o.aspect, o.filter);
+			       "aspect=%s\nfilter=%s\nfilter_default=%s\nend=1\n",
+			       effective, def_core, o.core, cores, o.aspect, o.filter,
+			       settings.crt && !strcmp(screen, "crt") ? "crt" : "sharp");
 		if (len > 0 && write_all(c->fd, out, (size_t)len) != 0)
 			close_client(c);
 		return;

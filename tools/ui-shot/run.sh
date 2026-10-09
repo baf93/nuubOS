@@ -7,7 +7,7 @@
 # writes PNGs to output/ui-shot/<lang>/. Development aid only: nothing here is
 # shipped in the image, and it never replaces hardware qualification.
 #
-# Usage: tools/ui-shot/run.sh [lang ...]      (default: en it)
+# Usage: [ONLY=scene,prefix] tools/ui-shot/run.sh [lang ...]   (default: en it)
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$ROOT/output/ui-shot"
@@ -26,6 +26,7 @@ for L in "${LANGS[@]}"; do
     docker run --rm --user "$(id -u):$(id -g)" \
         -e HOME=/tmp \
         -e LANG_FILE="/i18n/$L.lang" \
+        -e ONLY="${ONLY:-}" \
         -e CARGO_HOME=/workspace/dl/br-cargo-home \
         -e CARGO_TARGET_DIR=/target \
         -e RUSTFLAGS="-L native=/fclink -L native=/usr/lib/x86_64-linux-gnu -L native=/lib/x86_64-linux-gnu" \
@@ -42,7 +43,7 @@ for L in "${LANGS[@]}"; do
         -v /usr/share/fonts:/usr/share/fonts:ro \
         -w /shot \
         nuubos-dev:0.5 \
-        sh -c 'cargo build --offline --release --locked --target-dir /target > /tmp/build.log 2>&1; rc=$?; grep -E "^(error|warning: unused)" -A6 /tmp/build.log; [ "$rc" = 0 ] || exit 1; /target/release/ui-shot; SCENES=qm /target/release/ui-shot'
+        sh -c 'cargo build --offline --release --locked --target-dir /target > /tmp/build.log 2>&1; rc=$?; grep -E "^(error|warning: unused)" -A6 /tmp/build.log; [ "$rc" = 0 ] || exit 1; /target/release/ui-shot; [ -n "$ONLY" ] || SCENES=qm /target/release/ui-shot'
     BUILD=$?
     # A failed build must not report the previous binary's snapshots.
     if [ "$BUILD" -ne 0 ]; then

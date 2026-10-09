@@ -1,3 +1,4 @@
+mod apppage;
 mod filesui;
 mod gameui;
 mod library;
@@ -1078,7 +1079,7 @@ fn apply_keyboard_layout(ui: &HomeWindow) {
         },
     };
 
-    let shift = ui.get_keyboard_shift() && page == 0 && kind == "text";
+    let shift = ui.get_keyboard_shift() && page == 0 && matches!(kind.as_str(), "text" | "password");
     let display_rows: [Vec<String>; 4] = rows.map(|row| {
         row.into_iter()
             .map(|key| {
@@ -3331,8 +3332,10 @@ fn open_system_keyboard(
     ui.set_keyboard_value(initial.into());
     ui.set_keyboard_page(0);
     ui.set_keyboard_index(0);
-    /* User names start capitalized; Shift is one-shot (off after a letter). */
+    /* User names start capitalized; Shift is one-shot (off after a letter),
+     * pressed again it locks (Caps Lock). */
     ui.set_keyboard_shift(matches!(purpose, 8 | 9) && initial.is_empty());
+    ui.set_keyboard_caps(false);
     apply_keyboard_layout(ui);
     navigate_settings_view(ui, 6);
     ui.invoke_focus_system_keyboard();
@@ -3510,11 +3513,29 @@ fn finish_system_keyboard(ui: &HomeWindow) {
         }
         moonlight::KEYBOARD_PURPOSE_ADDRESS => moonlight::add_host(ui, &value),
         gameui::KEYBOARD_COLLECTION..=gameui::KEYBOARD_SS_PASSWORD => gameui::keyboard_done(ui, purpose, value),
+        gameui::KEYBOARD_TGDB_KEY | gameui::KEYBOARD_SEARCH => gameui::keyboard_done(ui, purpose, value),
         filesui::KEYBOARD_FOLDER..=filesui::KEYBOARD_SHARE_PASSWORD => filesui::keyboard_done(ui, purpose, value),
         mediaui::KEYBOARD_SERVER..=mediaui::KEYBOARD_JF_PASSWORD => mediaui::keyboard_done(ui, purpose, value),
         webui::KEYBOARD_ADDRESS => webui::keyboard_done(ui, value),
         _ => navigate_settings_view(ui, return_view),
     }
+}
+
+/* Shift: off → one letter uppercase → Caps Lock → off. Letters only, on
+ * the letter page of text and password fields. */
+fn keyboard_toggle_shift(ui: &HomeWindow) {
+    let kind = ui.get_keyboard_input_kind();
+    if ui.get_keyboard_page() != 0 || !matches!(kind.as_str(), "text" | "password") {
+        return;
+    }
+    let (shift, caps) = match (ui.get_keyboard_shift(), ui.get_keyboard_caps()) {
+        (false, _) => (true, false),
+        (true, false) => (true, true),
+        (true, true) => (false, false),
+    };
+    ui.set_keyboard_shift(shift);
+    ui.set_keyboard_caps(caps);
+    apply_keyboard_layout(ui);
 }
 
 fn handle_system_keyboard_confirm(ui: &HomeWindow) {
@@ -3534,25 +3555,25 @@ fn handle_system_keyboard_confirm(ui: &HomeWindow) {
             ui.set_keyboard_value(value.into());
             ui.invoke_system_keyboard_place_cursor(cursor);
         }
-        "Shift" => {
-            ui.set_keyboard_shift(!ui.get_keyboard_shift());
-            apply_keyboard_layout(ui);
-        },
+        "Shift" => keyboard_toggle_shift(ui),
         "123" => {
             ui.set_keyboard_page(1);
             ui.set_keyboard_shift(false);
+            ui.set_keyboard_caps(false);
             ui.set_keyboard_index(0);
             apply_keyboard_layout(ui);
         }
         "SYM" => {
             ui.set_keyboard_page(2);
             ui.set_keyboard_shift(false);
+            ui.set_keyboard_caps(false);
             ui.set_keyboard_index(0);
             apply_keyboard_layout(ui);
         }
         "ABC" => {
             ui.set_keyboard_page(0);
             ui.set_keyboard_shift(false);
+            ui.set_keyboard_caps(false);
             ui.set_keyboard_index(0);
             apply_keyboard_layout(ui);
         }
@@ -3571,8 +3592,10 @@ fn handle_system_keyboard_confirm(ui: &HomeWindow) {
             let mut value = ui.get_keyboard_value().to_string();
             if ui.get_keyboard_shift() && key.chars().all(|c| c.is_alphabetic()) {
                 value.push_str(&key.to_uppercase());
-                ui.set_keyboard_shift(false);
-                apply_keyboard_layout(ui);
+                if !ui.get_keyboard_caps() {
+                    ui.set_keyboard_shift(false);
+                    apply_keyboard_layout(ui);
+                }
             } else {
                 value.push_str(&key);
             }
@@ -5169,6 +5192,7 @@ fn handle_settings_action(
             "menu_up" => move_keyboard_vertical(ui, -1),
             "menu_down" => move_keyboard_vertical(ui, 1),
             "menu_confirm" => handle_system_keyboard_confirm(ui),
+            "face_north" => keyboard_toggle_shift(ui),
             _ => {}
         },
         _ => {}
@@ -5325,6 +5349,7 @@ fn route_input_action(
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = weak.upgrade() {
                     moonlight::handle_action(&ui, &action, &settings_active);
+                    apppage::refresh(&ui);
                 }
             });
         }
@@ -5343,6 +5368,7 @@ fn route_input_action(
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = weak.upgrade() {
                     steamlink::handle_action(&ui, &action);
+                    apppage::refresh(&ui);
                 }
             });
         }
@@ -5379,7 +5405,7 @@ fn route_input_action(
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
                 /* North is a row action only where the page shows its hint. */
-                if action == "face_north" && ui.get_settings_north_hint().is_empty() {
+                if action == "face_north" && ui.get_settings_north_hint().is_empty() && ui.get_settings_view() != 6 {
                     return;
                 }
                 handle_settings_action(&ui, &action, &settings_active);

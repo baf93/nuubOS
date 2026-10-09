@@ -1,11 +1,9 @@
 From: nuubOS <noreply@nuubos.invalid>
-Subject: [PATCH] nuubOS pixel perfect viewport and GET_FPS command
+Subject: [PATCH] nuubOS viewport placement and GET_FPS command
 
-Smart integer scaling fell back to non-integer scaling when underscaling
-left more than 12% of the screen empty; nuubOS keeps the picture pixel
-perfect on every screen. An overscaled picture now crops its overscan
-evenly instead of following the viewport bias (nuubOS places smaller
-pictures at the top of the screen with a bias of 0).
+An overscaled integer picture now crops its overscan evenly instead of
+following the viewport bias (nuubOS places smaller pictures at the top
+of the screen with a bias of 0).
 
 GET_FPS replies with the frames presented per second since the previous
 GET_FPS, for the nuubOS performance overlay.
@@ -14,37 +12,7 @@ Upstream-Status: Inappropriate [nuubOS specific]
 ---
 --- a/gfx/video_driver.c
 +++ b/gfx/video_driver.c
-@@ -2709,13 +2709,22 @@
-              * noticeable jumps in margin size would be needed to capture a
-              * relatively small number of additional use cases.
-              * TODO: Make this threshold configurable. */
--            float width_utilization  = (float)(width  - padding_x) / width;
--            float height_utilization = (float)(height - padding_y) / height;
--            if (MAX(height_utilization, width_utilization) < 0.88)
--            {
--               video_viewport_get_scaled_aspect(vp, width, height, y_down);
--               return;
--            }
-+            /* nuubOS: the picture stays pixel perfect whenever it can
-+             * be scaled up at all. Only content that would stay at 1x
-+             * with a large margin (PSP 480x272 or NDS on 640x480) is
-+             * scaled to fit instead: unscaled it is just too small. */
-+            if (     padding_x >= 0 && padding_y >= 0
-+                  && max_scale_w + (half_w * 0.5f) <= 1.0f
-+                  && max_scale_h + (half_h * 0.5f) <= 1.0f)
-+            {
-+               float width_utilization  = (float)(width  - padding_x) / width;
-+               float height_utilization = (float)(height - padding_y) / height;
-+               if (MAX(height_utilization, width_utilization) < 0.88)
-+               {
-+                  video_viewport_get_scaled_aspect(vp, width, height, y_down);
-+                  return;
-+               }
-+            }
-          }
- 
-          /* Use regular scaling if overscale is unreasonable */
-@@ -2737,6 +2746,12 @@
+@@ -2737,6 +2737,12 @@
        height -= padding_y;
     }
  

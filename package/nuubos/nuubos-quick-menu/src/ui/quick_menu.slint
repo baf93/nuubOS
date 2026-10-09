@@ -521,20 +521,21 @@ component QmRow inherits Rectangle {
 component QmTextEntryField inherits Rectangle {
     in property <string> title: "";
 
-    height: 62px;
+    height: 72px;
     background: #00000000;
 
     Text {
-        x: 2px; y: 0; width: parent.width - 4px; height: 18px;
+        x: 2px; y: 0; width: parent.width - 4px; height: 26px;
         text: root.title;
-        color: Theme.primary;
-        font-size: 13px;
-        font-weight: 600;
+        color: Theme.text;
+        font-size: 19px;
+        font-weight: 700;
         overflow: elide;
+        horizontal-alignment: center;
         vertical-alignment: center;
     }
     Rectangle {
-        y: 22px; width: parent.width; height: 40px;
+        y: 32px; width: parent.width; height: 40px;
         border-radius: Shape.extra-small;
         background: Theme.surface-container-high;
         clip: true;
@@ -757,9 +758,13 @@ export component QuickMenuWindow inherits Window {
     in-out property <string> stream-decode-label: "";
     in-out property <string> stream-video-label: "";
 
+    /* BACKGROUND TASK: the oldest running job that may be cancelled (its
+     * Live Notification carries cancel=1). Row 29 = title (+ progress) and
+     * Stop, second press through game-confirm-index. */
     in-out property <bool> context-section-visible: false;
-    in-out property <string> context-section-title: root.i18n-strings[231];
+    in-out property <string> context-section-title: root.i18n-strings[808];
     in-out property <string> context-primary-label: "";
+    in-out property <string> context-primary-value: "";
 
     /*
      * Physical face positions, never Xbox/Nintendo letters:
@@ -830,7 +835,8 @@ export component QuickMenuWindow inherits Window {
 
     property <length> focus-top:
         /* 18 Screenshot and 28 Performance Overlay sit before 14 Quit Game. */
-        root.selected-index == 18 ? root.game-row0-y + 6 * root.game-step
+        root.selected-index == 29 ? root.context-y + root.section-header
+        : root.selected-index == 18 ? root.game-row0-y + 6 * root.game-step
         : root.selected-index == 28 ? root.game-row0-y + 7 * root.game-step
         : root.selected-index == 14 ? root.game-row0-y + 8 * root.game-step
         /* WEB: 20 Resume, 27 Keyboard, then 21..26 in order. */
@@ -857,7 +863,7 @@ export component QuickMenuWindow inherits Window {
         max(0px, root.focus-bottom - root.viewport-bottom),
         max(0px, root.focus-top - root.viewport-top
             - (root.focus-top == root.audio-row-y || root.selected-index == 8 || root.selected-index == 15
-                || root.selected-index == 20
+                || root.selected-index == 20 || root.selected-index == 29
                 ? root.section-header : 0px)));
 
     property <bool> selected-adjustable:
@@ -1036,8 +1042,7 @@ export component QuickMenuWindow inherits Window {
             visible: root.web-section-visible;
         }
 
-        /* Optional context block. Sections remain independent, so future
-         * adapters can show/hide them without changing the system shell. */
+        /* BACKGROUND TASK: Stop for a running cancellable job. */
         QmSectionHeader {
             x: 16px; y: root.context-y - root.scroll; width: parent.width - 32px;
             label: root.context-section-title;
@@ -1047,6 +1052,10 @@ export component QuickMenuWindow inherits Window {
             x: 16px; y: root.context-y + root.section-header - root.scroll;
             width: parent.width - 32px; height: root.row-height;
             title: root.context-primary-label;
+            value: root.context-primary-value;
+            armed: root.game-confirm-index == 29;
+            prompt: root.i18n-strings[191];
+            selected: root.selected-index == 29;
             visible: root.context-section-visible;
         }
 
@@ -1374,7 +1383,7 @@ export component QuickMenuWindow inherits Window {
         property <length> pad: 18px;
         property <length> key-gap: 5px;
         property <length> footer: 30px;
-        property <length> field-height: 62px;
+        property <length> field-height: 72px;
         property <length> key-height: (self.height - 12px - self.field-height - 10px - self.footer - 6px - 3 * self.key-gap) / 4;
 
         QmTextEntryField {

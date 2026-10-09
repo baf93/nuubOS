@@ -1518,6 +1518,11 @@ struct ToastView {
     detail: String,
     battery: i32,
     progress: f32,
+    /* A Live Notification (carries progress=, even -1): shown until its
+     * completion, never timed out. */
+    live: bool,
+    /* nuubos-jobd id of a running job that may be cancelled (cancel=1). */
+    job: String,
 }
 
 impl ToastView {
@@ -1868,6 +1873,12 @@ fn toast_view(ui: &QuickMenuWindow, n: &Notification) -> Option<ToastView> {
         detail,
         battery: battery.clamp(-1, 100),
         progress,
+        live: n.fields.contains_key("progress"),
+        job: if n.event == "job" && n.text("cancel") == "1" {
+            n.id.strip_prefix("job.").unwrap_or_default().to_owned()
+        } else {
+            String::new()
+        },
     })
 }
 
@@ -1875,11 +1886,18 @@ fn toast_view(ui: &QuickMenuWindow, n: &Notification) -> Option<ToastView> {
  * One notification is visible at a time; later ones wait in a short queue.
  * A notification with the id of a visible or queued one replaces it in
  * place (EPIC-006 stable ids), so reconnects or progress never stack.
+ * Live Notifications stay on screen until their completion (user request
+ * 2026-10-09): a timed notification shows over a running one for its usual
+ * time, then the oldest running one comes back.
  */
 #[derive(Default)]
 struct Toasts {
     current: Option<ToastView>,
     pending: VecDeque<ToastView>,
+    /* Running Live Notifications, oldest first. */
+    live: Vec<ToastView>,
+    /* Id of the job whose Stop was confirmed, until it ends. */
+    stopping: String,
     deadline: Option<Instant>,
     /* Notifications received before the last resume describe the sleep
      * transition itself (e.g. Bluetooth dropping) and are discarded. */
@@ -1889,6 +1907,25 @@ struct Toasts {
 impl Toasts {
     /* Returns true when the visible notification changed. */
     fn post(&mut self, view: ToastView, update_only: bool) -> bool {
+        if view.live {
+            /* Progress of a running one, or a new one: always kept (an
+             * UPDATE of a live one missed while asleep included). */
+            match self.live.iter_mut().find(|l| l.id == view.id) {
+                Some(running) => *running = view.clone(),
+                None => self.live.push(view.clone()),
+            }
+            if self.current.as_ref().is_some_and(|c| c.id == view.id) {
+                self.current = Some(view);
+                self.deadline = None;
+                return true;
+            }
+            if self.current.is_none() {
+                self.show_next();
+                return true;
+            }
+            return false;
+        }
+        let was_live = self.end_live(&view.id);
         if self.current.as_ref().is_some_and(|c| c.id == view.id) {
             self.deadline = Some(Instant::now() + view.timeout());
             self.current = Some(view);
@@ -1898,22 +1935,53 @@ impl Toasts {
             *queued = view;
             return false;
         }
-        if update_only {
+        /* The completion of a live one waiting behind another card. */
+        if update_only && !was_live {
             return false;
         }
         self.pending.push_back(view);
         while self.pending.len() > TOAST_QUEUE_LIMIT {
             self.pending.pop_front();
         }
-        if self.current.is_none() {
+        /* A running live card makes room and comes back afterwards. */
+        if self.current.as_ref().map_or(true, |c| c.live) {
             self.show_next();
             return true;
         }
         false
     }
 
+    /* The oldest running job the BACKGROUND TASK row can stop. */
+    fn stoppable(&self) -> Option<&ToastView> {
+        self.live.iter().find(|l| !l.job.is_empty())
+    }
+
+    /* Forgets a running Live Notification; true when it was one. */
+    fn end_live(&mut self, id: &str) -> bool {
+        let before = self.live.len();
+        self.live.retain(|l| l.id != id);
+        if self.stopping == id {
+            self.stopping.clear();
+        }
+        self.live.len() != before
+    }
+
     fn dismiss(&mut self, id: &str) -> bool {
         self.pending.retain(|q| q.id != id);
+        self.end_live(id);
+        if self.current.as_ref().is_some_and(|c| c.id == id) {
+            self.show_next();
+            return true;
+        }
+        false
+    }
+
+    /* A completion or dismissal that arrived while notifications are not
+     * shown (lifecycle curtain, before a resume) still ends a live one. */
+    fn finish_hidden(&mut self, id: &str) -> bool {
+        if !self.end_live(id) {
+            return false;
+        }
         if self.current.as_ref().is_some_and(|c| c.id == id) {
             self.show_next();
             return true;
@@ -1930,17 +1998,29 @@ impl Toasts {
     }
 
     fn show_next(&mut self) {
-        self.current = self.pending.pop_front();
+        self.current = self.pending.pop_front().or_else(|| self.live.first().cloned());
         self.deadline = self
             .current
             .as_ref()
+            .filter(|view| !view.live)
             .map(|view| Instant::now() + view.timeout());
     }
 
+    /* Before Sleep/power off: timed cards are dropped, running jobs are kept
+     * and come back with `resume`. */
     fn clear(&mut self) {
         self.current = None;
         self.pending.clear();
         self.deadline = None;
+    }
+
+    fn resume(&mut self) -> bool {
+        self.resumed_at = Some(Instant::now());
+        if self.current.is_none() && !self.live.is_empty() {
+            self.show_next();
+            return true;
+        }
+        false
     }
 
     /* Same content in the notification surface and in the Quick Menu copy. */
@@ -2639,7 +2719,7 @@ fn read_game_snapshot() -> GameSnapshot {
 }
 
 fn apply_game_snapshot(ui: &QuickMenuWindow, snapshot: &GameSnapshot) {
-    if !snapshot.running && ui.get_selected_index() >= 8 {
+    if !snapshot.running && (8..TASK_ROW).contains(&ui.get_selected_index()) {
         ui.set_selected_index(3);
     }
     if !snapshot.running {
@@ -2719,7 +2799,7 @@ fn read_stream_state() -> (bool, bool) {
 }
 
 fn apply_stream_running(ui: &QuickMenuWindow, running: bool, steamlink: bool) {
-    if (!running || steamlink) && ui.get_selected_index() >= if running { 17 } else { 15 } {
+    if (!running || steamlink) && (if running { 17 } else { 15 }..TASK_ROW).contains(&ui.get_selected_index()) {
         ui.set_selected_index(if running { 15 } else { 3 });
         ui.set_game_confirm_index(-1);
     }
@@ -3168,6 +3248,9 @@ fn selectable_menu_indices(ui: &QuickMenuWindow) -> Vec<i32> {
     if ui.get_web_section_visible() {
         indices.extend_from_slice(&[20, 27, 21, 22, 23, 24, 25, 26]);
     }
+    if ui.get_context_section_visible() {
+        indices.push(TASK_ROW);
+    }
     indices.push(3);
     if ui.get_brightness_visible() {
         indices.push(5);
@@ -3207,6 +3290,49 @@ fn move_menu_selection(ui: &QuickMenuWindow, delta: i32) {
     let next = (position + delta).rem_euclid(indices.len() as i32) as usize;
     ui.set_selected_index(indices[next]);
     ui.set_game_confirm_index(-1);
+}
+
+/* Quick Menu row of the BACKGROUND TASK section (Stop, second press). */
+const TASK_ROW: i32 = 29;
+
+/* The section follows the running cancellable jobs (their Live
+ * Notifications); hidden when none runs. */
+fn apply_task_section(ui: &QuickMenuWindow, toasts: &Toasts) {
+    let Some(task) = toasts.stoppable() else {
+        ui.set_context_section_visible(false);
+        if ui.get_selected_index() == TASK_ROW {
+            ui.set_game_confirm_index(-1);
+            ui.set_selected_index(first_selectable_index(ui));
+        }
+        return;
+    };
+    let title = if task.progress >= 0.0 {
+        format!("{} · {}%", task.title, (task.progress * 100.0).round() as i32)
+    } else {
+        task.title.clone()
+    };
+    ui.set_context_section_visible(true);
+    ui.set_context_primary_label(title.into());
+    ui.set_context_primary_value(if toasts.stopping == task.id {
+        tr(ui, 810, "Stopping…")
+    } else {
+        tr(ui, 809, "Stop")
+    }.into());
+}
+
+/* Asks nuubos-jobd to cancel the job (the worker stops at a safe point;
+ * its cancelled Live Notification ends the row). */
+fn stop_task(toasts: &mut Toasts) {
+    let Some(task) = toasts.stoppable() else { return };
+    let (id, job) = (task.id.clone(), task.job.clone());
+    toasts.stopping = id;
+    thread::spawn(move || {
+        let status = Command::new("/usr/bin/nuubos-jobctl").args(["cancel", &job])
+            .stdout(Stdio::null()).stderr(Stdio::null()).status();
+        if !status.is_ok_and(|s| s.success()) {
+            eprintln!("quick-menu: cancel job {job} failed");
+        }
+    });
 }
 
 fn write_menu_state(ui: &QuickMenuWindow, mapped: bool) {
@@ -3991,7 +4117,10 @@ fn handle_event(
             );
 
             let result = run_suspend_sync();
-            notifier.toasts.resumed_at = Some(Instant::now());
+            if notifier.toasts.resume() {
+                notifier.apply(ui);
+                notifier.sync(conn, ui.get_lifecycle_active());
+            }
             result?;
         } else if event.action == "menu_confirm" {
             /*
@@ -4079,6 +4208,20 @@ fn handle_event(
             flush_brightness(ui, brightness_dirty)?;
             unmap_overlay(ui, queue, state, conn);
             *mapped = false;
+        }
+        "menu_confirm" if *mapped
+            && !ui.get_lifecycle_active()
+            && ui.get_context_section_visible()
+            && ui.get_selected_index() == TASK_ROW =>
+        {
+            if ui.get_game_confirm_index() != TASK_ROW {
+                ui.set_game_confirm_index(TASK_ROW);
+            } else {
+                ui.set_game_confirm_index(-1);
+                stop_task(&mut notifier.toasts);
+                apply_task_section(ui, &notifier.toasts);
+            }
+            redraw_overlay(ui, queue, state, qh, conn)?;
         }
         "menu_confirm" if *mapped
             && !ui.get_lifecycle_active()
@@ -4542,6 +4685,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             notifier.apply(&ui);
                             toast_dirty = true;
                         }
+                    } else if notification.verb == NotifyVerb::Dismiss
+                        || !notification.fields.contains_key("progress")
+                    {
+                        if notifier.toasts.finish_hidden(&notification.id) {
+                            notifier.apply(&ui);
+                            toast_dirty = true;
+                        }
+                    }
+                    apply_task_section(&ui, &notifier.toasts);
+                    if mapped {
+                        dirty = true;
                     }
                 }
             }

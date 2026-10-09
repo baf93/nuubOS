@@ -47,6 +47,8 @@ define NUUBOS_EMULATION_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/share/nuubos/emulation/shaders/crt.glsl
 	$(INSTALL) -D -m 0644 $(@D)/shaders/bezel.glsl \
 		$(TARGET_DIR)/usr/share/nuubos/emulation/shaders/bezel.glsl
+	$(INSTALL) -D -m 0644 $(@D)/shaders/bezel-wordmark.png \
+		$(TARGET_DIR)/usr/share/nuubos/emulation/shaders/bezel-wordmark.png
 	$(INSTALL) -D -m 0644 $(@D)/display.conf \
 		$(TARGET_DIR)/usr/share/nuubos/emulation/display.conf
 	$(INSTALL) -D -m 0644 "$(@D)/autoconfig/udev/nuubOS Gamepad.cfg" \

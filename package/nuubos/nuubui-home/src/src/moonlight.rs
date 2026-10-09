@@ -215,6 +215,7 @@ fn apply(ui: &HomeWindow, s: &Snapshot) {
         ui.set_moonlight_apps_state(s.apps_state.clone().into());
     }
     update_scroll(ui);
+    crate::apppage::refresh(ui);
 }
 
 /* Follows nuubos-streamd: the pages (Moonlight and Steam Link), and
@@ -310,6 +311,7 @@ fn open_host(ui: &HomeWindow, host: MoonlightHostEntry) {
     ui.set_moonlight_index(0);
     ui.set_moonlight_scroll(0);
     navigate_settings_view(ui, 41);
+    crate::apppage::refresh(ui);
     send(if paired { format!("APPS\t{id}") } else { format!("REFRESH\t{id}") });
 }
 
@@ -327,6 +329,7 @@ fn back_to_hosts(ui: &HomeWindow) {
     navigate_settings_view(ui, 40);
     ui.set_moonlight_index(index.map(|i| i as i32).unwrap_or(0));
     update_scroll(ui);
+    crate::apppage::refresh(ui);
 }
 
 fn launch(ui: &HomeWindow, app: String) {
@@ -448,8 +451,13 @@ pub fn handle_action(ui: &HomeWindow, action: &str, settings_active: &Arc<Atomic
     let count = row_count(ui);
     play_ui_sound(action);
     match action {
-        "menu_up" | "menu_down" => {
-            ui.set_moonlight_index(move_model_selection(index, count, if action == "menu_up" { -1 } else { 1 }));
+        /* The application pages (40, 41) also move with left/right: their
+         * actions are a row. */
+        "menu_up" | "menu_down" | "menu_left" | "menu_right"
+            if matches!(action, "menu_up" | "menu_down") || view == 40 || view == 41 =>
+        {
+            let back = action == "menu_up" || action == "menu_left";
+            ui.set_moonlight_index(move_model_selection(index, count, if back { -1 } else { 1 }));
             ui.set_moonlight_remove_confirm(false);
             update_scroll(ui);
             return;

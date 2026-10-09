@@ -46,6 +46,7 @@
  *   media.removed           name=
  *   job                     type= state=queued|running|succeeded|failed|cancelled
  *                           [progress=] [step=] [reason=]   (nuubos-jobd)
+ *                           [cancel=1]  (running, cancellable: id job.<n>)
  *   stream.paired           name=      (PC streaming host paired)
  *   stream.pair.failed      name=
  *   stream.failed           reason=unreachable|unpaired|app|start|connection|steamlink

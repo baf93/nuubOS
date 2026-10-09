@@ -291,8 +291,12 @@ static void notify_job(const struct job *j)
 	nuubos_notify_begin(&n, "POST", id, "job");
 	nuubos_notify_str(&n, "type", j->type.name);
 	nuubos_notify_str(&n, "state", state_name(j->state));
-	if (j->state == JOB_RUNNING || j->state == JOB_QUEUED)
+	if (j->state == JOB_RUNNING || j->state == JOB_QUEUED) {
 		nuubos_notify_int(&n, "progress", j->state == JOB_QUEUED ? -1 : j->progress);
+		/* The Quick Menu offers Stop for it (CANCEL <n>). */
+		if (j->type.cancel)
+			nuubos_notify_int(&n, "cancel", 1);
+	}
 	if (j->step[0])
 		nuubos_notify_str(&n, "step", j->step);
 	if (j->reason[0])
