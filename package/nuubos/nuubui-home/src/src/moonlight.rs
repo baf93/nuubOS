@@ -12,7 +12,7 @@
  */
 
 use crate::{
-    guarded_scroll_offset, handle_settings_action, move_model_selection, navigate_settings_view,
+    guarded_scroll_offset, handle_settings_action, sectioned_scroll, move_model_selection, navigate_settings_view,
     on_game_session, open_settings_choice, open_system_keyboard, play_ui_sound, tr, tr_arg,
     write_ui_context, HomeWindow, MoonlightHostEntry,
 };
@@ -60,12 +60,18 @@ pub(crate) struct Snapshot {
     apps_state: String,
     hosts: Vec<Host>,
     apps: Vec<String>,
+    pub(crate) audio: String,
+    pub(crate) local_audio: bool,
+    pub(crate) optimize: bool,
+    pub(crate) quit_app: bool,
     pub(crate) steamlink_installed: bool,
     pub(crate) steamlink_version: String,
     pub(crate) steamlink_latest: String,
     pub(crate) steamlink_job: String,
     pub(crate) steamlink_progress: i32,
     pub(crate) steamlink_error: String,
+    pub(crate) steamlink_previous: String,
+    pub(crate) steamlink_auto_update: bool,
 }
 
 pub(crate) static SNAPSHOT: Mutex<Option<Snapshot>> = Mutex::new(None);
@@ -99,6 +105,10 @@ fn parse(text: &str) -> Snapshot {
             "fps" => s.fps = value.parse().unwrap_or(60),
             "codec" => s.codec = value.into(),
             "bitrate" => s.bitrate = value.parse().unwrap_or(0),
+            "audio" => s.audio = value.into(),
+            "local_audio" => s.local_audio = value == "1",
+            "optimize" => s.optimize = value != "0",
+            "quit_app" => s.quit_app = value == "1",
             "discovering" => s.discovering = value == "1",
             "pairing_host" => s.pairing_host = value.into(),
             "pairing_pin" => s.pairing_pin = value.into(),
@@ -110,6 +120,8 @@ fn parse(text: &str) -> Snapshot {
             "steamlink_job" => s.steamlink_job = value.into(),
             "steamlink_progress" => s.steamlink_progress = value.parse().unwrap_or(-1),
             "steamlink_error" => s.steamlink_error = value.into(),
+            "steamlink_previous" => s.steamlink_previous = value.into(),
+            "steamlink_auto_update" => s.steamlink_auto_update = value != "0",
             "host" => {
                 let f: Vec<&str> = value.split('\t').collect();
                 if f.len() >= 7 {
@@ -150,15 +162,26 @@ fn row_count(ui: &HomeWindow) -> i32 {
         40 => ui.get_moonlight_hosts().row_count() as i32 + 3,
         41 if ui.get_moonlight_host().paired => ui.get_moonlight_apps().row_count() as i32 + 1,
         41 => 2,
-        42 => 4,
+        42 => SETTINGS_ROWS,
         _ => 0,
     }
 }
+
+/* Stream Settings (42), like Moonlight's own: VIDEO 0 Resolution, 1 Frame
+ * Rate, 2 Bitrate (left/right steps), 3 Video Codec | AUDIO 4 Channels,
+ * 5 Play Audio on the PC | PC 6 Optimize Game Settings, 7 Quit the App
+ * After Streaming (home.slint moonlight-audio-start/-pc-start). */
+const SETTINGS_ROWS: i32 = 8;
+const BITRATE_STEPS: [i32; 13] = [0, 5000, 10000, 15000, 20000, 25000, 30000, 40000, 50000, 60000, 80000, 100000, 150000];
 
 fn update_scroll(ui: &HomeWindow) {
     let count = row_count(ui);
     if count > 0 && ui.get_moonlight_index() >= count {
         ui.set_moonlight_index(count - 1);
+    }
+    if ui.get_settings_view() == 42 {
+        ui.set_moonlight_scroll(sectioned_scroll(ui, ui.get_moonlight_index(), count, ui.get_moonlight_scroll(), (4, 6, 0)));
+        return;
     }
     ui.set_moonlight_scroll(guarded_scroll_offset(
         ui.get_moonlight_index(),
@@ -185,6 +208,15 @@ fn apply(ui: &HomeWindow, s: &Snapshot) {
     } else {
         tr(ui, 122, "Automatic").into()
     });
+    ui.set_moonlight_bitrate_fraction(s.bitrate as f32 / 150000.0);
+    ui.set_moonlight_audio_label(match s.audio.as_str() {
+        "5.1" => tr(ui, 861, "5.1 Surround"),
+        "7.1" => tr(ui, 862, "7.1 Surround"),
+        _ => tr(ui, 860, "Stereo"),
+    }.into());
+    ui.set_moonlight_local_audio(s.local_audio);
+    ui.set_moonlight_optimize(s.optimize);
+    ui.set_moonlight_quit_app(s.quit_app);
 
     /* The open PC follows the snapshot; it disappears when removed. */
     let selected = ui.get_moonlight_host().id.to_string();
@@ -381,7 +413,21 @@ fn open_setting(ui: &HomeWindow, row: i32) {
             ],
             &s.fps.to_string(),
         ),
-        2 => open_settings_choice(
+        4 => open_settings_choice(
+            ui,
+            "moonlight-audio",
+            &tr(ui, 859, "Audio Channels"),
+            vec![
+                ("stereo".into(), tr(ui, 860, "Stereo")),
+                ("5.1".into(), tr(ui, 861, "5.1 Surround")),
+                ("7.1".into(), tr(ui, 862, "7.1 Surround")),
+            ],
+            &s.audio,
+        ),
+        5 => send(format!("SET\tlocal_audio\t{}", if s.local_audio { 0 } else { 1 })),
+        6 => send(format!("SET\toptimize\t{}", if s.optimize { 0 } else { 1 })),
+        7 => send(format!("SET\tquit_app\t{}", if s.quit_app { 0 } else { 1 })),
+        3 => open_settings_choice(
             ui,
             "moonlight-codec",
             &tr(ui, 456, "Video Codec"),
@@ -390,8 +436,8 @@ fn open_setting(ui: &HomeWindow, row: i32) {
         ),
         _ => {
             let mut options = vec![("0".to_owned(), automatic)];
-            for mbps in [5, 10, 15, 20, 30, 40] {
-                options.push(((mbps * 1000).to_string(), tr_arg(ui, 461, "{0} Mbps", &mbps.to_string())));
+            for kbps in BITRATE_STEPS.iter().skip(1) {
+                options.push((kbps.to_string(), tr_arg(ui, 461, "{0} Mbps", &(kbps / 1000).to_string())));
             }
             open_settings_choice(ui, "moonlight-bitrate", &tr(ui, 457, "Bitrate"), options, &s.bitrate.to_string());
         }
@@ -462,6 +508,15 @@ pub fn handle_action(ui: &HomeWindow, action: &str, settings_active: &Arc<Atomic
             update_scroll(ui);
             return;
         }
+        /* Stream Settings: left/right step the bitrate like Moonlight's
+         * slider. */
+        "menu_left" | "menu_right" if view == 42 && index == 2 => {
+            let current = SNAPSHOT.lock().unwrap().as_ref().map(|s| s.bitrate).unwrap_or(0);
+            let pos = BITRATE_STEPS.iter().position(|b| *b >= current).unwrap_or(0) as i32;
+            let next = (pos + if action == "menu_left" { -1 } else { 1 }).clamp(0, BITRATE_STEPS.len() as i32 - 1);
+            send(format!("SET\tbitrate\t{}", BITRATE_STEPS[next as usize]));
+            return;
+        }
         "menu_back" => {
             match view {
                 41 | 42 => back_to_hosts(ui),
@@ -487,6 +542,7 @@ pub fn handle_action(ui: &HomeWindow, action: &str, settings_active: &Arc<Atomic
                 open_system_keyboard(ui, &tr(ui, 441, "PC address"), KEYBOARD_PURPOSE_ADDRESS, 40, "text", "");
             } else {
                 ui.set_moonlight_index(0);
+                ui.set_moonlight_scroll(0);
                 navigate_settings_view(ui, 42);
             }
         }

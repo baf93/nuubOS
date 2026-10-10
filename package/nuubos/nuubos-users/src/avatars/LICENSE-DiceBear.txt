@@ -12,14 +12,6 @@ individual package ecosystems, and each copy keeps the license of the file it
 came from.
 
 
-### Pixel Art
-
-|    File | [src/pixel-art.json](https://github.com/dicebear/styles/blob/main/src/pixel-art.json) |
-| ------: | :------------------------------------------------------------------------------------ |
-|  Artist | [DiceBear](https://www.dicebear.com)                                                  |
-| License | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)                         |
-|  Source | [Pixel Art](https://www.figma.com/community/file/1198754108850888330)                 |
-
 ### Voxel Art
 
 |    File | [src/voxel-art.json](https://github.com/dicebear/styles/blob/main/src/voxel-art.json) |

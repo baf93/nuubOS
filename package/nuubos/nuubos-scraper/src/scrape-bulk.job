@@ -1,4 +1,4 @@
-# EPIC-015: scrape the library (argument: all | missing | system:<id>).
+# EPIC-015: scrape the library (argument: all | missing | lang | system:<id>).
 COMMAND=/usr/bin/nuubos-scraper bulk
 SCOPE=device
 CANCEL=1

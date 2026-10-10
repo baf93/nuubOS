@@ -6,6 +6,7 @@
 #   GET  ?op=systems                   systems (upload targets) + game counts
 #   GET  ?op=games&system=ID           games of a system (libraryd)
 #   GET  ?op=bios                      BIOS Manager status (nuubos-biosctl)
+#   GET  ?op=mood                      colors of the active user's Mood
 #   POST ?op=scan                      Library scan
 #   POST ?op=delete&game=ID            Delete Game (libraryd ownership rules)
 #   PUT  ?op=upload&root=roms|bios&path=REL   file body; atomic (.part, rename)
@@ -22,6 +23,7 @@ BIOS="$R/userdata/bios"
 SYSTEMS_CONF="$R/usr/share/nuubos/systems.conf"
 LIBRARYCTL="${NUUBOS_LIBRARYCTL:-/usr/bin/nuubos-libraryctl}"
 BIOSCTL="${NUUBOS_BIOSCTL:-/usr/bin/nuubos-biosctl}"
+THEMECTL="${NUUBOS_THEMECTL:-/usr/bin/nuubos-themectl}"
 
 reply()
 {
@@ -117,6 +119,16 @@ bios)
     done < "$tmp"
     rm -f "$tmp"
     reply "200 OK" "[${out%,}]"
+    ;;
+mood)
+    out=""
+    for kv in $("$THEMECTL" tokens 2>/dev/null); do
+        k="${kv%%=*}"; v="${kv#*=}"
+        printf '%s' "$k" | grep -q '^[a-z-]\{1,20\}$' || continue
+        printf '%s' "$v" | grep -Eq '^#[0-9A-Fa-f]{6}$|^[a-z0-9-]{1,32}$' || continue
+        out="$out\"$k\":\"$v\","
+    done
+    reply "200 OK" "{${out%,}}"
     ;;
 scan)
     [ "$method" = POST ] || fail "405 Method Not Allowed" "method"

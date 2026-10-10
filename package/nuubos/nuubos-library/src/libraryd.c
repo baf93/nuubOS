@@ -10,8 +10,12 @@
  *     content is added, missing content becomes UNAVAILABLE, nothing is
  *     deleted;
  *   - the active user's library state under /userdata/users/<id>/library:
- *     play history (Last Played, Time Played, sessions), favorites and
- *     custom collections;
+ *     play history (Last Played, Time Played, sessions) and custom
+ *     collections (the former favorites list is migrated into a collection
+ *     named by the UI, MIGRATE_FAVORITES);
+ *   - Find (SEARCH/FILTERS): title, system, year, genre, players and
+ *     never-played filters, random pick, over a metadata index rebuilt at
+ *     every scan (the scraper requests one after writing metadata);
  *   - safe Delete Game (EPIC-011/012): the ROM and the files its .m3u/.cue
  *     owns, never content another game references, never user saves;
  *   - the Game Details view (EPIC-016), aggregating the catalog, the user's
@@ -57,6 +61,9 @@
 #ifndef SHARE_ROOT
 #define SHARE_ROOT "/usr/share/nuubos"
 #endif
+#ifndef STATE_ROOT
+#define STATE_ROOT "/state"
+#endif
 #define SOCKET_PATH RUN_ROOT "/libraryd.sock"
 #define PIDFILE RUN_ROOT "/libraryd.pid"
 #define REGISTRY_PATH SHARE_ROOT "/systems.conf"
@@ -80,7 +87,7 @@
 #define MAX_SYSTEMS 128
 #define MAX_APPS 64
 #define MAX_SCAN_DEPTH 6
-#define RECENT_LIMIT 10
+#define RECENT_LIMIT 15
 /* A session longer than this is an emulator left running or a lost END:
  * count the cap, never unbounded phantom playtime (EPIC-020). */
 #define MAX_SESSION_SEC (12LL * 3600LL)
@@ -108,6 +115,11 @@ struct game {
 	long long added;
 	bool available;
 	bool seen; /* found by the scan being reconciled */
+	/* Metadata index (EPIC-015 store), refreshed by every scan:
+	 * release year (0 unknown), most players (0 unknown), genre. */
+	int year;
+	int players;
+	char *genre;
 };
 
 struct history_entry {
@@ -137,6 +149,9 @@ struct scan_item {
 	char *cover;
 	long long size;
 	long long mtime;
+	int year;
+	int players;
+	char *genre;
 };
 
 struct scan_result {
@@ -930,9 +945,65 @@ static void walk(struct scan_ctx *ctx, const char *sub, int depth, int folder_sy
 			.cover = NULL,
 			.size = (long long)st.st_size,
 			.mtime = (long long)st.st_mtime,
+			.year = 0,
+			.players = 0,
+			.genre = NULL,
 		};
 	}
 	closedir(dir);
+}
+
+/* Year, players and genre of a game's metadata file (scan thread). */
+static void read_meta_index(struct scan_item *it)
+{
+	const char *base = strrchr(it->rel, '/');
+	char stem[512];
+	char path[PATH_MAX];
+	char line[1024];
+	char *dot;
+	FILE *fp;
+
+	copy_text(stem, sizeof(stem), base ? base + 1 : it->rel);
+	dot = strrchr(stem, '.');
+	if (dot && dot != stem)
+		*dot = '\0';
+	if (!pathf(path, sizeof(path), METADATA_ROOT "/%s/%s.txt", systems[it->sys].id, stem))
+		return;
+	fp = fopen(path, "r");
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp)) {
+		line[strcspn(line, "\r\n")] = '\0';
+		if (!strncmp(line, "release=", 8)) {
+			/* "1994", "1994-11-21", "19941121T000000" */
+			char four[5];
+			int y;
+
+			memcpy(four, line + 8, 4);
+			four[4] = '\0';
+			y = atoi(four);
+			if (y > 1950 && y < 2100)
+				it->year = y;
+		} else if (!strncmp(line, "players=", 8)) {
+			/* "1", "1-4", "2" -> the largest number */
+			int most = 0;
+
+			for (const char *q = line + 8; *q; q++)
+				if (isdigit((unsigned char)*q)) {
+					int v = atoi(q);
+
+					if (v > most && v < 100)
+						most = v;
+					while (isdigit((unsigned char)q[1]))
+						q++;
+				}
+			it->players = most;
+		} else if (!strncmp(line, "genre=", 6) && line[6] && tsv_safe(line + 6)) {
+			free(it->genre);
+			it->genre = xstrdup(line + 6);
+		}
+	}
+	fclose(fp);
 }
 
 static void *scan_main(void *arg)
@@ -959,6 +1030,7 @@ static void *scan_main(void *arg)
 			continue;
 		}
 		it->cover = find_cover(it->sys, it->rel);
+		read_meta_index(it);
 		ctx.out->items[keep++] = *it;
 	}
 	ctx.out->count = keep;
@@ -1107,8 +1179,12 @@ static bool reconcile(struct scan_result *scan)
 			g->added = now;
 			g->available = true;
 			g->seen = true;
+			g->year = it->year;
+			g->players = it->players;
+			g->genre = it->genre;
 			it->rel = NULL;
 			it->cover = NULL;
+			it->genre = NULL;
 			added++;
 			continue;
 		}
@@ -1119,6 +1195,12 @@ static bool reconcile(struct scan_result *scan)
 			continue;
 		}
 		g->seen = true;
+		/* Metadata is not catalog state: refreshed silently. */
+		g->year = it->year;
+		g->players = it->players;
+		free(g->genre);
+		g->genre = it->genre;
+		it->genre = NULL;
 		if (strcmp(g->rel, it->rel)) {
 			/* Moved to another folder: same game, new location. */
 			free(g->rel);
@@ -1160,6 +1242,7 @@ static void free_scan(struct scan_result *scan)
 	for (size_t i = 0; i < scan->count; i++) {
 		free(scan->items[i].rel);
 		free(scan->items[i].cover);
+		free(scan->items[i].genre);
 	}
 	free(scan->items);
 	free(scan);
@@ -1422,14 +1505,6 @@ static int save_history(void)
 	return save_user_file("history.tsv", &b);
 }
 
-static int save_favorites(void)
-{
-	struct strbuf b = { 0 };
-
-	for (size_t i = 0; i < favorite_count; i++)
-		sb_append(&b, "%s\n", favorites[i]);
-	return save_user_file("favorites.txt", &b);
-}
 
 static int save_collections(void)
 {
@@ -1481,9 +1556,10 @@ static void append_game(struct strbuf *b, const char *key, const struct game *g)
 
 	sb_append(b, "%s=%s\t%s\t%s\t", key, g->id, s->id, g->title);
 	sb_append(b, "%s", g->cover ? g->cover : "");
-	sb_append(b, "\t%d\t%lld\t%lld\t%d\t%d\n", s->aspect,
+	/* Field 9 (the former favorite flag) stays for older clients: 0. */
+	sb_append(b, "\t%d\t%lld\t%lld\t%d\t0\t%d\t%d\t%s\n", s->aspect,
 		  h ? h->last : 0LL, h ? h->time : 0LL,
-		  g->available ? 1 : 0, is_favorite(g->id) ? 1 : 0);
+		  g->available ? 1 : 0, g->year, g->players, g->genre ? g->genre : "");
 }
 
 static int history_compare(const void *a, const void *b)
@@ -1520,6 +1596,50 @@ static void append_recent(struct strbuf *b, const char *key, size_t limit)
 	free(order);
 }
 
+/*
+ * Cover previews of a system (sys >= 0) or a collection: up to PREVIEW_COUNT
+ * covers of available games, most recently played first, then by title
+ * order of the catalog. Appended as extra tab fields, line ended here.
+ */
+#define PREVIEW_COUNT 4
+static void append_previews(struct strbuf *b, int sys, const struct collection *col)
+{
+	const struct game *pick[PREVIEW_COUNT] = { NULL };
+	long long when[PREVIEW_COUNT] = { 0 };
+	size_t n = 0;
+
+	for (size_t i = 0; i < game_count; i++) {
+		const struct game *g = &games[i];
+		const struct history_entry *h;
+		long long last;
+		size_t at;
+
+		if (!g->available || !g->cover)
+			continue;
+		if (sys >= 0 ? g->sys != sys : !id_list_has(col->games, col->count, g->id))
+			continue;
+		h = active_user[0] ? history_for(g->id, false) : NULL;
+		last = h ? h->last : 0;
+		/* Insertion into the short list sorted by last played. */
+		at = n;
+		while (at > 0 && when[at - 1] < last)
+			at--;
+		if (at >= PREVIEW_COUNT)
+			continue;
+		if (n < PREVIEW_COUNT)
+			n++;
+		for (size_t k = n - 1; k > at; k--) {
+			pick[k] = pick[k - 1];
+			when[k] = when[k - 1];
+		}
+		pick[at] = g;
+		when[at] = last;
+	}
+	for (size_t k = 0; k < n; k++)
+		sb_append(b, "\t%s", pick[k]->cover);
+	sb_append(b, "\n");
+}
+
 static void build_status(struct strbuf *b)
 {
 	size_t available = 0;
@@ -1535,16 +1655,23 @@ static void build_status(struct strbuf *b)
 		  scanning ? 1 : 0, available, scan_new);
 	if (active_user[0]) {
 		append_recent(b, "recent", RECENT_LIMIT);
-		sb_append(b, "collection=favorites\t\t%zu\n", favorite_count);
-		for (size_t i = 0; i < collection_count; i++)
-			sb_append(b, "collection=%s\t%s\t%zu\n", collections[i].id,
+		/* Favorites of an older nuubOS wait for the UI to name the
+		 * collection they become (MIGRATE_FAVORITES). */
+		if (favorite_count)
+			sb_append(b, "favorites_pending=%zu\n", favorite_count);
+		for (size_t i = 0; i < collection_count; i++) {
+			sb_append(b, "collection=%s\t%s\t%zu", collections[i].id,
 				  collections[i].name, collections[i].count);
+			append_previews(b, -1, &collections[i]);
+		}
 	}
 	for (int i = 0; i < system_count; i++)
-		if (per_system[i] > 0)
-			sb_append(b, "system=%s\t%s\t%d\t%d\t%s\t%s\n", systems[i].id,
+		if (per_system[i] > 0) {
+			sb_append(b, "system=%s\t%s\t%d\t%d\t%s\t%s", systems[i].id,
 				  systems[i].name, per_system[i], systems[i].aspect,
 				  systems[i].color, systems[i].icon);
+			append_previews(b, i, NULL);
+		}
 	for (int i = 0; i < app_count; i++)
 		sb_append(b, "app=%s\t%s\t%s\n", apps[i].id, apps[i].name, apps[i].icon);
 	sb_append(b, "end=1\n");
@@ -1580,11 +1707,6 @@ static bool keep_system(const struct game *g, const void *arg)
 	return g->sys == *(const int *)arg;
 }
 
-static bool keep_favorite(const struct game *g, const void *arg)
-{
-	(void)arg;
-	return is_favorite(g->id);
-}
 
 static bool keep_collection(const struct game *g, const void *arg)
 {
@@ -1593,7 +1715,7 @@ static bool keep_collection(const struct game *g, const void *arg)
 	return id_list_has(c->games, c->count, g->id);
 }
 
-/* GAMES <scope>: system:<id> | favorites | collection:<id> | recent */
+/* GAMES <scope>: system:<id> | collection:<id> | recent */
 static bool build_games(struct strbuf *b, const char *scope)
 {
 	const struct game **list = NULL;
@@ -1605,8 +1727,6 @@ static bool build_games(struct strbuf *b, const char *scope)
 		if (sys < 0)
 			return false;
 		list = sorted_games(keep_system, &sys, &n);
-	} else if (!strcmp(scope, "favorites")) {
-		list = sorted_games(keep_favorite, NULL, &n);
 	} else if (!strncmp(scope, "collection:", 11)) {
 		const struct collection *c = collection_by_id(scope + 11);
 
@@ -1625,6 +1745,195 @@ static bool build_games(struct strbuf *b, const char *scope)
 	free(list);
 	sb_append(b, "end=1\n");
 	return true;
+}
+
+/*
+ * SEARCH <filters>: "key=value" pairs separated by '|' (values never hold
+ * '|' or tabs): q (title words, all must match, case-insensitive),
+ * system=<id>, collection=<id>, year=<from>-<to>, genre=<text>
+ * (substring), players=<n>
+ * (at least n), unplayed=1, random=1 (one game picked at random from the
+ * matches). Only available games. Replies game= lines (like GAMES, title
+ * order) and end=1.
+ */
+struct search_filter {
+	char words[8][64];
+	int word_count;
+	int sys;
+	/* collection=: its games only; an unknown id matches nothing. */
+	const struct collection *col;
+	bool col_missing;
+	int year_from, year_to;
+	char genre[64];
+	int players;
+	bool unplayed;
+	bool random;
+};
+
+static bool contains_nocase(const char *hay, const char *needle)
+{
+	size_t n = strlen(needle);
+
+	if (!n)
+		return true;
+	for (; *hay; hay++)
+		if (!strncasecmp(hay, needle, n))
+			return true;
+	return false;
+}
+
+static bool keep_search(const struct game *g, const void *arg)
+{
+	const struct search_filter *f = arg;
+	const struct history_entry *h;
+
+	if (!g->available)
+		return false;
+	if (f->sys >= 0 && g->sys != f->sys)
+		return false;
+	if (f->col_missing || (f->col && !keep_collection(g, f->col)))
+		return false;
+	for (int i = 0; i < f->word_count; i++)
+		if (!contains_nocase(g->title, f->words[i]))
+			return false;
+	if (f->year_from && (g->year < f->year_from || g->year > f->year_to))
+		return false;
+	if (f->genre[0] && (!g->genre || !contains_nocase(g->genre, f->genre)))
+		return false;
+	if (f->players && g->players < f->players)
+		return false;
+	if (f->unplayed) {
+		h = active_user[0] ? history_for(g->id, false) : NULL;
+		if (h && h->last > 0)
+			return false;
+	}
+	return true;
+}
+
+static void parse_search(const char *spec, struct search_filter *f)
+{
+	char buf[MAX_LINE];
+	char *save = NULL;
+
+	memset(f, 0, sizeof(*f));
+	f->sys = -1;
+	copy_text(buf, sizeof(buf), spec);
+	for (char *kv = strtok_r(buf, "|", &save); kv; kv = strtok_r(NULL, "|", &save)) {
+		char *v = strchr(kv, '=');
+
+		if (!v)
+			continue;
+		*v++ = '\0';
+		if (!strcmp(kv, "q")) {
+			char *wsave = NULL;
+
+			for (char *w = strtok_r(v, " ", &wsave); w && f->word_count < 8; w = strtok_r(NULL, " ", &wsave))
+				copy_text(f->words[f->word_count++], sizeof(f->words[0]), w);
+		} else if (!strcmp(kv, "system")) {
+			f->sys = system_by_id(v);
+			if (f->sys < 0)
+				f->sys = -2; /* unknown system: nothing matches */
+		} else if (!strcmp(kv, "collection")) {
+			f->col = collection_by_id(v);
+			f->col_missing = !f->col;
+		} else if (!strcmp(kv, "year")) {
+			if (sscanf(v, "%d-%d", &f->year_from, &f->year_to) != 2)
+				f->year_from = f->year_to = 0;
+		} else if (!strcmp(kv, "genre")) {
+			copy_text(f->genre, sizeof(f->genre), v);
+		} else if (!strcmp(kv, "players")) {
+			f->players = atoi(v);
+		} else if (!strcmp(kv, "unplayed")) {
+			f->unplayed = !strcmp(v, "1");
+		} else if (!strcmp(kv, "random")) {
+			f->random = !strcmp(v, "1");
+		}
+	}
+}
+
+static void build_search(struct strbuf *b, const char *spec)
+{
+	struct search_filter f;
+	const struct game **list;
+	size_t n = 0;
+
+	parse_search(spec, &f);
+	list = sorted_games(keep_search, &f, &n);
+	if (f.random && n) {
+		struct timespec ts;
+
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+		srand((unsigned)(ts.tv_nsec ^ ts.tv_sec));
+		append_game(b, "game", list[(size_t)rand() % n]);
+	} else {
+		for (size_t i = 0; i < n; i++)
+			append_game(b, "game", list[i]);
+	}
+	free(list);
+	sb_append(b, "end=1\n");
+}
+
+/*
+ * FILTERS: what the Find page can offer, from available games only:
+ * decade=<first year>\t<count>, genre=<name>\t<count> (the first genre of
+ * each game, most common first, at most 24), players=<most> and
+ * unknown_year=<count>.
+ */
+static int genre_count_compare(const void *a, const void *b)
+{
+	const int *x = a, *y = b;
+
+	return y[1] - x[1];
+}
+
+static void build_filters(struct strbuf *b)
+{
+	int decades[16] = { 0 };
+	char names[64][48];
+	int counts[64][2];
+	int genre_n = 0;
+	int most_players = 0;
+
+	for (size_t i = 0; i < game_count; i++) {
+		const struct game *g = &games[i];
+
+		if (!g->available)
+			continue;
+		if (g->year >= 1950 && g->year < 2110)
+			decades[(g->year - 1950) / 10 < 16 ? (g->year - 1950) / 10 : 15]++;
+		if (g->players > most_players)
+			most_players = g->players;
+		if (g->genre && g->genre[0]) {
+			char first[48];
+			int k;
+
+			/* "Platform, Action" / "Platform / Action" -> "Platform" */
+			copy_text(first, sizeof(first), g->genre);
+			first[strcspn(first, ",/;")] = '\0';
+			trim(first);
+			if (!first[0])
+				continue;
+			for (k = 0; k < genre_n; k++)
+				if (!strcasecmp(names[k], first))
+					break;
+			if (k == genre_n) {
+				if (genre_n == 64)
+					continue;
+				copy_text(names[genre_n], sizeof(names[0]), first);
+				counts[genre_n][0] = genre_n;
+				counts[genre_n][1] = 0;
+				genre_n++;
+			}
+			counts[k][1]++;
+		}
+	}
+	for (int d = 0; d < 16; d++)
+		if (decades[d])
+			sb_append(b, "decade=%d\t%d\n", 1950 + d * 10, decades[d]);
+	qsort(counts, (size_t)genre_n, sizeof(counts[0]), genre_count_compare);
+	for (int k = 0; k < genre_n && k < 24; k++)
+		sb_append(b, "genre=%s\t%d\n", names[counts[k][0]], counts[k][1]);
+	sb_append(b, "players=%d\nend=1\n", most_players);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1647,11 +1956,39 @@ static void rom_stem(const char *rel, char *out, size_t size)
  * one line ("\n" escaped by the writer). Unknown keys are passed through as
  * meta_<key> so a new provider field needs no libraryd change.
  */
+/* The active user's interface language ("en" when unknown). */
+static void user_language(char out[8])
+{
+	char path[PATH_MAX];
+	char line[64];
+	FILE *fp;
+
+	copy_text(out, 8, "en");
+	if (!active_user[0] || !pathf(path, sizeof(path), STATE_ROOT "/users/%s/localization.conf", active_user))
+		return;
+	fp = fopen(path, "r");
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp)) {
+		trim(line);
+		if (!strncmp(line, "LANGUAGE=", 9) && strlen(line + 9) == 2)
+			copy_text(out, 8, line + 9);
+	}
+	fclose(fp);
+}
+
+/*
+ * Localized text is kept per language by the scraper ("description@it=");
+ * the user's language wins over the plain key (the last one fetched).
+ */
 static void append_metadata(struct strbuf *b, const struct game *g)
 {
+	static char line[16384];
 	char stem[512];
 	char path[PATH_MAX];
-	char line[16384];
+	char lang[8];
+	char tag[12];
+	bool have_desc = false, have_genre = false;
 	FILE *fp;
 
 	rom_stem(g->rel, stem, sizeof(stem));
@@ -1660,25 +1997,49 @@ static void append_metadata(struct strbuf *b, const struct game *g)
 	fp = fopen(path, "r");
 	if (!fp)
 		return;
-	while (fgets(line, sizeof(line), fp)) {
-		char *eq;
+	user_language(lang);
+	snprintf(tag, sizeof(tag), "@%s", lang);
+	/* Pass 1: the user's language; pass 2: everything else. */
+	for (int pass = 1; pass <= 2; pass++) {
+		rewind(fp);
+		while (fgets(line, sizeof(line), fp)) {
+			char *eq, *at;
 
-		/* An over-long line is dropped whole, never split into a
-		 * bogus second key. */
-		if (!strchr(line, '\n') && !feof(fp)) {
-			int c;
+			/* An over-long line is dropped whole, never split into a
+			 * bogus second key. */
+			if (!strchr(line, '\n') && !feof(fp)) {
+				int c;
 
-			while ((c = fgetc(fp)) != EOF && c != '\n')
-				;
-			continue;
+				while ((c = fgetc(fp)) != EOF && c != '\n')
+					;
+				continue;
+			}
+			line[strcspn(line, "\r\n")] = '\0';
+			if (line[0] == '#' || !(eq = strchr(line, '=')) || eq == line)
+				continue;
+			*eq++ = '\0';
+			if (!tsv_safe(eq))
+				continue;
+			at = strchr(line, '@');
+			if (at) {
+				if (pass != 1 || strcmp(at, tag))
+					continue;
+				*at = '\0';
+				if (!strcmp(line, "description"))
+					have_desc = true;
+				else if (!strcmp(line, "genre"))
+					have_genre = true;
+				else
+					continue;
+				sb_append(b, "meta_%s=%s\n", line, eq);
+				continue;
+			}
+			if (pass != 2 || strspn(line, "abcdefghijklmnopqrstuvwxyz_0123456789") != strlen(line))
+				continue;
+			if ((have_desc && !strcmp(line, "description")) || (have_genre && !strcmp(line, "genre")))
+				continue;
+			sb_append(b, "meta_%s=%s\n", line, eq);
 		}
-		line[strcspn(line, "\r\n")] = '\0';
-		if (line[0] == '#' || !(eq = strchr(line, '=')) || eq == line)
-			continue;
-		*eq++ = '\0';
-		if (!tsv_safe(eq) || strspn(line, "abcdefghijklmnopqrstuvwxyz_0123456789") != strlen(line))
-			continue;
-		sb_append(b, "meta_%s=%s\n", line, eq);
 	}
 	fclose(fp);
 }
@@ -1773,6 +2134,7 @@ static const char *delete_game(long idx)
 	free(g->rel);
 	free(g->title);
 	free(g->cover);
+	free(g->genre);
 	memmove(&games[idx], &games[idx + 1], (game_count - (size_t)idx - 1) * sizeof(*games));
 	game_count--;
 	save_catalog();
@@ -1890,8 +2252,20 @@ static void handle_command(struct client *c, char *line)
 			  ROMS_ROOT, games[idx].rel);
 		send_text(c, b.data, b.len);
 		free(b.data);
+	} else if (!strcmp(line, "SEARCH")) {
+		struct strbuf b = { 0 };
+
+		build_search(&b, arg ? arg : "");
+		send_text(c, b.data, b.len);
+		free(b.data);
+	} else if (!strcmp(line, "FILTERS")) {
+		struct strbuf b = { 0 };
+
+		build_filters(&b);
+		send_text(c, b.data, b.len);
+		free(b.data);
 	} else if (!active_user[0] &&
-		   (!strncmp(line, "SESSION_", 8) || !strncmp(line, "FAVORITE", 8) ||
+		   (!strncmp(line, "SESSION_", 8) || !strncmp(line, "MIGRATE_", 8) ||
 		    !strncmp(line, "COLLECTION_", 11) ||
 		    !strcmp(line, "STATS_RESET") || !strcmp(line, "DETAILS"))) {
 		reply(c, "ERR no active user\n");
@@ -1992,18 +2366,41 @@ static void handle_command(struct client *c, char *line)
 		h->sessions++;
 		reply(c, save_history() ? "ERR persistence\n" : "OK\n");
 		notify_all();
-	} else if (!strcmp(line, "FAVORITE") && arg && arg2) {
-		bool on = !strcmp(arg2, "1");
+	} else if (!strcmp(line, "MIGRATE_FAVORITES") && arg) {
+		/* The old favorites list becomes an ordinary collection named
+		 * by the UI in the user's language; favorites.txt goes away. */
+		char path[PATH_MAX];
+		char out[48];
+		struct collection *col;
+		static unsigned mcounter;
 
-		if (!known_game(arg) || (!on && strcmp(arg2, "0"))) {
-			reply(c, "ERR args\n");
+		if (!favorite_count) {
+			reply(c, "OK\n");
 			return;
 		}
-		if (on && !is_favorite(arg))
-			id_list_add(&favorites, &favorite_count, arg);
-		else if (!on)
-			id_list_remove(favorites, &favorite_count, arg);
-		reply(c, save_favorites() ? "ERR persistence\n" : "OK\n");
+		if (!arg[0] || strlen(arg) >= sizeof(col->name) || !tsv_safe(arg)) {
+			reply(c, "ERR name\n");
+			return;
+		}
+		collections = xrealloc(collections, (collection_count + 1) * sizeof(*collections));
+		col = &collections[collection_count++];
+		memset(col, 0, sizeof(*col));
+		snprintf(col->id, sizeof(col->id), "c%08llx",
+			 (unsigned long long)((wall_now() << 4) + 8 + (mcounter++ & 7)) & 0xffffffffULL);
+		copy_text(col->name, sizeof(col->name), arg);
+		for (size_t i = 0; i < favorite_count; i++)
+			id_list_add(&col->games, &col->count, favorites[i]);
+		if (save_collections()) {
+			reply(c, "ERR persistence\n");
+			return;
+		}
+		free(favorites);
+		favorites = NULL;
+		favorite_count = 0;
+		user_file("favorites.txt", path, sizeof(path));
+		unlink(path);
+		snprintf(out, sizeof(out), "OK %s\n", col->id);
+		reply(c, out);
 		notify_all();
 	} else if (!strcmp(line, "COLLECTION_CREATE") && arg) {
 		struct collection *col;

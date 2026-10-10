@@ -1,8 +1,8 @@
 /*
  * Home carousels and Game Library browsing (EPIC-001 Home, EPIC-011).
  *
- * nuubos-libraryd owns the catalog, play history, favorites, collections
- * and the application registry; this module only subscribes to its
+ * nuubos-libraryd owns the catalog, play history, collections, Find and
+ * the application registry; this module only subscribes to its
  * snapshot, turns it into HomeCard models and sends user commands back.
  * Pixel geometry lives in home.slint.
  *
@@ -12,7 +12,7 @@
  * part of a library grid are kept in memory.
  */
 
-use crate::{on_game_session, play_ui_sound, tr, tr_arg, HomeCard, HomeWindow};
+use crate::{on_game_session, play_ui_sound, tr, tr_arg, HomeCard, HomeSheetItem, HomeWindow};
 use slint::{Color, ComponentHandle, Image, Model, ModelRc, SharedPixelBuffer, Rgba8Pixel, Timer, VecModel};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -40,10 +40,17 @@ const APP_ASPECT: f32 = 1.0;
 const NOTICE_MS: u64 = 2500;
 
 const KIND_GAME: i32 = 0;
-const KIND_FAVORITES: i32 = 1;
+const KIND_NEW_COLLECTION: i32 = 1;
 const KIND_COLLECTION: i32 = 2;
 const KIND_SYSTEM: i32 = 3;
 const KIND_APP: i32 = 4;
+pub(crate) const KIND_RESULTS: i32 = 5;
+
+/* Home rows. */
+const ROW_RECENT: i32 = 0;
+const ROW_SYSTEMS: i32 = 1;
+const ROW_COLLECTIONS: i32 = 2;
+const ROW_APPS: i32 = 3;
 
 #[derive(Clone, Default)]
 struct LibGame {
@@ -55,7 +62,6 @@ struct LibGame {
     last: i64,
     time: i64,
     available: bool,
-    favorite: bool,
 }
 
 #[derive(Clone, Default)]
@@ -66,13 +72,15 @@ struct LibSystem {
     aspect: f32,
     color: String,
     icon: String,
+    previews: Vec<String>,
 }
 
 #[derive(Clone, Default)]
-struct LibCollection {
-    id: String,
-    name: String,
-    count: i64,
+pub(crate) struct LibCollection {
+    pub id: String,
+    pub name: String,
+    pub count: i64,
+    previews: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -88,6 +96,8 @@ struct LibSnapshot {
     scanning: bool,
     /* Games added or available again since the last requested scan. */
     scan_new: usize,
+    /* Favorites of an older nuubOS still to become a collection. */
+    favorites_pending: bool,
     recent: Vec<LibGame>,
     collections: Vec<LibCollection>,
     systems: Vec<LibSystem>,
@@ -106,6 +116,10 @@ struct LibraryState {
     /* Open grid: scope, title, aspect and its games. */
     grid_scope: String,
     grid: Vec<LibGame>,
+    /* Find view: the results strip and its search. */
+    find: Vec<LibGame>,
+    find_spec: String,
+    find_more: String,
     covers: HashMap<String, CoverState>,
     lru: VecDeque<String>,
     notice_serial: u64,
@@ -141,7 +155,8 @@ fn library_command(command: &str) -> std::io::Result<String> {
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     stream.write_all(command.as_bytes())?;
     stream.write_all(b"\n")?;
-    let multi = command.starts_with("GAMES") || command == "STATUS";
+    let multi = command.starts_with("GAMES") || command.starts_with("SEARCH") || command == "FILTERS"
+        || command.starts_with("DETAILS") || command == "STATUS";
     let mut reply = String::new();
     let mut reader = BufReader::new(stream);
     loop {
@@ -172,7 +187,6 @@ fn parse_game(value: &str) -> Option<LibGame> {
         last: f[5].parse().unwrap_or(0),
         time: f[6].parse().unwrap_or(0),
         available: f[7] == "1",
-        favorite: f[8] == "1",
     })
 }
 
@@ -185,13 +199,15 @@ fn parse_snapshot(reply: &str) -> LibSnapshot {
             "scanning" => s.scanning = value == "1",
             "scan_new" => s.scan_new = value.parse().unwrap_or(0),
             "recent" => s.recent.extend(parse_game(value)),
+            "favorites_pending" => s.favorites_pending = value != "0",
             "collection" => {
                 let f: Vec<&str> = value.split('\t').collect();
-                if f.len() >= 3 {
+                if f.len() >= 3 && f[0] != "favorites" {
                     s.collections.push(LibCollection {
                         id: f[0].into(),
                         name: f[1].into(),
                         count: f[2].parse().unwrap_or(0),
+                        previews: f[3..].iter().filter(|p| !p.is_empty()).map(|p| p.to_string()).collect(),
                     });
                 }
             }
@@ -205,6 +221,7 @@ fn parse_snapshot(reply: &str) -> LibSnapshot {
                         aspect: f[3].parse::<f32>().unwrap_or(1000.0) / 1000.0,
                         color: f[4].into(),
                         icon: f.get(5).map(|v| v.to_string()).unwrap_or_default(),
+                        previews: f.iter().skip(6).filter(|p| !p.is_empty()).map(|p| p.to_string()).collect(),
                     });
                 }
             }
@@ -258,7 +275,19 @@ fn duration_label(ui: &HomeWindow, seconds: i64) -> String {
 
 /* Local day boundaries come from the top-bar clock (statusd, local time),
  * so "today"/"yesterday" follow the user's timezone without a tz library. */
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 fn last_played_label(ui: &HomeWindow, last: i64) -> String {
+    tr_arg(ui, 409, "Last played {0}", &last_played_day(ui, last))
+}
+
+fn last_played_day(ui: &HomeWindow, last: i64) -> String {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let elapsed = (now - last).max(0);
     let since_midnight = ui
@@ -276,7 +305,7 @@ fn last_played_label(ui: &HomeWindow, last: i64) -> String {
             tr_arg(ui, 404, "{0} days ago", &days.to_string())
         }
     };
-    tr_arg(ui, 409, "Last played {0}", &day)
+    day
 }
 
 fn game_detail(ui: &HomeWindow, g: &LibGame, system_name: &str) -> String {
@@ -481,7 +510,8 @@ fn game_card(ui: &HomeWindow, snap: &LibSnapshot, g: &LibGame, load: bool) -> Ho
         kind: KIND_GAME,
         title: g.title.clone().into(),
         detail: game_detail(ui, g, &system_name).into(),
-        last_played: if g.last > 0 { last_played_label(ui, g.last) } else { tr(ui, 405, "Never played") }.into(),
+        /* The chip says only when ("Today"), user request 2026-10-10. */
+        last_played: if g.last > 0 { capitalized(&last_played_day(ui, g.last)) } else { tr(ui, 405, "Never played") }.into(),
         play_time: if g.last > 0 && g.time > 0 { duration_label(ui, g.time) } else { String::new() }.into(),
         system_name: system_name.into(),
         cover_path: g.cover.clone().into(),
@@ -491,9 +521,26 @@ fn game_card(ui: &HomeWindow, snap: &LibSnapshot, g: &LibGame, load: bool) -> Ho
         x_units: 0.0,
         accent,
         available: g.available,
-        favorite: g.favorite,
         focused: false,
+        ..Default::default()
     }
+}
+
+/* Cover previews of a system or collection card (small decode). */
+fn with_previews(ui: &HomeWindow, mut card: HomeCard, paths: &[String]) -> HomeCard {
+    let mut images: Vec<Image> = Vec::new();
+    for p in paths.iter().take(4) {
+        if let Some((img, _)) = request_cover(ui, p, true) {
+            images.push(img);
+        }
+    }
+    card.previews = images.len() as i32;
+    let mut it = images.into_iter();
+    card.p0 = it.next().unwrap_or_default();
+    card.p1 = it.next().unwrap_or_default();
+    card.p2 = it.next().unwrap_or_default();
+    card.p3 = it.next().unwrap_or_default();
+    card
 }
 
 fn with_x_units(mut cards: Vec<HomeCard>) -> Vec<HomeCard> {
@@ -521,50 +568,55 @@ fn build_home(ui: &HomeWindow) {
 
     let recent = with_x_units(snap.recent.iter().map(|g| game_card(ui, &snap, g, true)).collect());
 
-    let mut shelf = Vec::new();
-    if let Some(fav) = snap.collections.iter().find(|c| c.id == "favorites") {
-        if fav.count > 0 {
-            shelf.push(HomeCard {
-                key: "favorites".into(),
-                kind: KIND_FAVORITES,
-                title: tr(ui, 399, "Favorites").into(),
-                detail: count_label(ui, fav.count).into(),
+    let systems = with_x_units(
+        snap.systems
+            .iter()
+            .map(|s| {
+                let icon = request_cover(ui, &s.icon, true);
+                with_previews(ui, HomeCard {
+                    key: s.id.clone().into(),
+                    kind: KIND_SYSTEM,
+                    title: s.name.clone().into(),
+                    detail: count_label(ui, s.count).into(),
+                    cover_path: s.icon.clone().into(),
+                    has_cover: icon.is_some(),
+                    cover: icon.map(|(i, _)| i).unwrap_or_default(),
+                    aspect: SHELF_ASPECT,
+                    accent: parse_color(&s.color),
+                    available: true,
+                    ..Default::default()
+                }, &s.previews)
+            })
+            .collect(),
+    );
+    let mut collections: Vec<HomeCard> = snap
+        .collections
+        .iter()
+        .map(|c| {
+            with_previews(ui, HomeCard {
+                key: c.id.clone().into(),
+                kind: KIND_COLLECTION,
+                title: c.name.clone().into(),
+                detail: count_label(ui, c.count).into(),
                 aspect: SHELF_ASPECT,
-                accent: parse_color("#7a5a14"),
+                accent: parse_color("#2d3f66"),
                 available: true,
                 ..Default::default()
-            });
-        }
-    }
-    for c in snap.collections.iter().filter(|c| c.id != "favorites") {
-        shelf.push(HomeCard {
-            key: c.id.clone().into(),
-            kind: KIND_COLLECTION,
-            title: c.name.clone().into(),
-            detail: count_label(ui, c.count).into(),
+            }, &c.previews)
+        })
+        .collect();
+    /* The row always ends with New Collection: never empty. */
+    if !snap.user.is_empty() {
+        collections.push(HomeCard {
+            key: "new".into(),
+            kind: KIND_NEW_COLLECTION,
+            title: tr(ui, 538, "New Collection").into(),
             aspect: SHELF_ASPECT,
-            accent: parse_color("#2d3f66"),
             available: true,
             ..Default::default()
         });
     }
-    for s in &snap.systems {
-        let icon = request_cover(ui, &s.icon, true);
-        shelf.push(HomeCard {
-            key: s.id.clone().into(),
-            kind: KIND_SYSTEM,
-            title: s.name.clone().into(),
-            detail: count_label(ui, s.count).into(),
-            cover_path: s.icon.clone().into(),
-            has_cover: icon.is_some(),
-            cover: icon.map(|(i, _)| i).unwrap_or_default(),
-            aspect: SHELF_ASPECT,
-            accent: parse_color(&s.color),
-            available: true,
-            ..Default::default()
-        });
-    }
-    let shelf = with_x_units(shelf);
+    let collections = with_x_units(collections);
 
     let apps = with_x_units(
         snap.apps
@@ -593,7 +645,7 @@ fn build_home(ui: &HomeWindow) {
             .collect(),
     );
 
-    let counts = [recent.len() as i32, shelf.len() as i32, apps.len() as i32];
+    let counts = [recent.len() as i32, systems.len() as i32, collections.len() as i32, apps.len() as i32];
     /* A newly played game becomes the first recent: focus it, and bring the
      * focus back to Recently Played when that row appears. */
     let old_recent = ui.get_home_recent();
@@ -608,15 +660,19 @@ fn build_home(ui: &HomeWindow) {
     if let Some(m) = set_model(ui.get_home_recent(), recent) {
         ui.set_home_recent(m);
     }
-    if let Some(m) = set_model(ui.get_home_shelf(), shelf) {
-        ui.set_home_shelf(m);
+    if let Some(m) = set_model(ui.get_home_systems(), systems) {
+        ui.set_home_systems(m);
+    }
+    if let Some(m) = set_model(ui.get_home_collections(), collections) {
+        ui.set_home_collections(m);
     }
     if let Some(m) = set_model(ui.get_home_apps(), apps) {
         ui.set_home_apps(m);
     }
     ui.set_home_recent_index(ui.get_home_recent_index().clamp(0, (counts[0] - 1).max(0)));
-    ui.set_home_shelf_index(ui.get_home_shelf_index().clamp(0, (counts[1] - 1).max(0)));
-    ui.set_home_apps_index(ui.get_home_apps_index().clamp(0, (counts[2] - 1).max(0)));
+    ui.set_home_systems_index(ui.get_home_systems_index().clamp(0, (counts[1] - 1).max(0)));
+    ui.set_home_collections_index(ui.get_home_collections_index().clamp(0, (counts[2] - 1).max(0)));
+    ui.set_home_apps_index(ui.get_home_apps_index().clamp(0, (counts[3] - 1).max(0)));
     ui.set_library_scanning(snap.scanning);
     sync_focus(ui);
 }
@@ -628,10 +684,12 @@ fn build_home(ui: &HomeWindow) {
 fn sync_focus(ui: &HomeWindow) {
     let row = ui.get_home_row();
     let models = [
-        (ui.get_home_recent(), row == 0, ui.get_home_recent_index()),
-        (ui.get_home_shelf(), row == 1, ui.get_home_shelf_index()),
-        (ui.get_home_apps(), row == 2, ui.get_home_apps_index()),
+        (ui.get_home_recent(), row == ROW_RECENT, ui.get_home_recent_index()),
+        (ui.get_home_systems(), row == ROW_SYSTEMS, ui.get_home_systems_index()),
+        (ui.get_home_collections(), row == ROW_COLLECTIONS, ui.get_home_collections_index()),
+        (ui.get_home_apps(), row == ROW_APPS, ui.get_home_apps_index()),
         (ui.get_library_games(), true, ui.get_library_index()),
+        (ui.get_find_results(), ui.get_find_zone() == 2, ui.get_find_result_index()),
     ];
     for (model, active, index) in models {
         for i in 0..model.row_count() {
@@ -698,13 +756,27 @@ fn keep_visible_covers(ui: &HomeWindow) {
             keep.insert(cover_key(&c.cover_path, big));
         }
     }
-    for model in [ui.get_home_apps(), ui.get_home_shelf()] {
+    for model in [ui.get_home_apps(), ui.get_home_systems(), ui.get_home_collections()] {
         for i in 0..model.row_count() {
             if let Some(c) = model.row_data(i) {
                 keep.insert(cover_key(&c.cover_path, small));
             }
         }
     }
+    /* Showcase previews (paths from the snapshot). */
+    STATE.with(|st| {
+        let st = st.borrow();
+        for p in st.snap.systems.iter().flat_map(|s| s.previews.iter())
+            .chain(st.snap.collections.iter().flat_map(|c| c.previews.iter()))
+        {
+            keep.insert(cover_key(p, small));
+        }
+    });
+    STATE.with(|st| {
+        for g in st.borrow().find.iter() {
+            keep.insert(cover_key(&g.cover, big));
+        }
+    });
     if ui.get_library_open() {
         let (lo, hi) = grid_window(ui);
         let model = ui.get_library_games();
@@ -720,14 +792,22 @@ fn keep_visible_covers(ui: &HomeWindow) {
 /* A decoded cover arrived: refresh the cards that show it. Home rows are
  * rebuilt (their x-units depend on the cover shape); grid rows in place. */
 fn cover_arrived(ui: &HomeWindow, path: &str) {
-    let in_home = [ui.get_home_recent(), ui.get_home_shelf(), ui.get_home_apps()]
+    let in_home = [ui.get_home_recent(), ui.get_home_systems(), ui.get_home_collections(), ui.get_home_apps()]
         .iter()
-        .any(|m| (0..m.row_count()).any(|i| m.row_data(i).is_some_and(|c| c.cover_path == path)));
+        .any(|m| (0..m.row_count()).any(|i| m.row_data(i).is_some_and(|c| c.cover_path == path)))
+        || STATE.with(|st| {
+            let st = st.borrow();
+            st.snap.systems.iter().any(|s| s.previews.iter().any(|p| p == path))
+                || st.snap.collections.iter().any(|c| c.previews.iter().any(|p| p == path))
+        });
     if in_home {
         build_home(ui);
     }
     if ui.get_library_open() {
         refresh_grid_window(ui);
+    }
+    if ui.get_find_open() && STATE.with(|st| st.borrow().find.iter().any(|g| g.cover == path)) {
+        build_find(ui);
     }
 }
 
@@ -763,6 +843,14 @@ fn refresh_grid_window(ui: &HomeWindow) {
 
 fn apply_snapshot(ui: &HomeWindow, snap: LibSnapshot) {
     let scan = (snap.scanning, snap.scan_new);
+    if snap.favorites_pending {
+        /* Favorites are gone as a concept (user request 2026-10-09): an
+         * older list becomes a collection named in the user's language. */
+        let command = format!("MIGRATE_FAVORITES\t{}", tr(ui, 399, "Favorites").replace(['\t', '\n', '|'], " "));
+        thread::spawn(move || {
+            let _ = library_command(&command);
+        });
+    }
     let user_changed = STATE.with(|st| {
         let mut st = st.borrow_mut();
         let changed = st.snap.user != snap.user;
@@ -774,12 +862,16 @@ fn apply_snapshot(ui: &HomeWindow, snap: LibSnapshot) {
          * even while it is empty (user request 2026-10-08). */
         ui.set_home_row(0);
         ui.set_home_recent_index(0);
-        ui.set_home_shelf_index(0);
+        ui.set_home_systems_index(0);
+        ui.set_home_collections_index(0);
         ui.set_home_apps_index(0);
+        ui.set_home_sheet_open(false);
+        ui.set_find_open(false);
         close_grid(ui);
         pick_empty_variant(ui);
     }
     build_home(ui);
+    crate::findui::library_changed(ui);
     crate::gameui::library_scan_state(ui, scan.0, scan.1);
     let scope = STATE.with(|st| st.borrow().grid_scope.clone());
     if ui.get_library_open() && !scope.is_empty() {
@@ -830,6 +922,7 @@ fn press_game(ui: &HomeWindow, card: &HomeCard) {
         GAME_PRESS.with(|p| p.borrow_mut().take());
         let Some(ui) = weak.upgrade() else { return };
         if !held.available {
+            play_ui_sound("error");
             show_notice(&ui, tr(&ui, 434, "This game is not available"));
             return;
         }
@@ -916,6 +1009,7 @@ fn launch_session(ui: &HomeWindow, running: bool) {
 /* mode: resume | new | slot:N (nuubos-emud LAUNCH). */
 pub fn launch_with_mode(ui: &HomeWindow, id: &str, available: bool, mode: &str) {
     if !available {
+        play_ui_sound("error");
         show_notice(ui, tr(ui, 434, "This game is not available"));
         return;
     }
@@ -923,6 +1017,7 @@ pub fn launch_with_mode(ui: &HomeWindow, id: &str, available: bool, mode: &str) 
         return;
     }
     let command = format!("LAUNCH\t{}\t{}", id, mode);
+    play_ui_sound("launch");
     show_launch_screen(ui, id);
     let weak = ui.as_weak();
     thread::spawn(move || {
@@ -946,6 +1041,7 @@ pub fn launch_with_mode(ui: &HomeWindow, id: &str, available: bool, mode: &str) 
                 "unavailable" | "game" => tr(&ui, 434, "This game is not available"),
                 _ => tr(&ui, 431, "The game could not be started"),
             };
+            play_ui_sound("error");
             show_notice(&ui, text);
         });
     });
@@ -1032,7 +1128,11 @@ pub fn start_library_listener(ui: &HomeWindow) {
 fn fetch_grid(ui: &HomeWindow, scope: String, reset: bool) {
     let weak = ui.as_weak();
     thread::spawn(move || {
-        let Ok(reply) = library_command(&format!("GAMES\t{}", scope)) else { return };
+        let command = match scope.strip_prefix("search:") {
+            Some(spec) => format!("SEARCH\t{spec}"),
+            None => format!("GAMES\t{scope}"),
+        };
+        let Ok(reply) = library_command(&command) else { return };
         let games = parse_games(&reply);
         let _ = slint::invoke_from_event_loop(move || {
             let Some(ui) = weak.upgrade() else { return };
@@ -1046,15 +1146,15 @@ fn fetch_grid(ui: &HomeWindow, scope: String, reset: bool) {
     });
 }
 
-fn open_grid(ui: &HomeWindow, card: &HomeCard) {
+pub(crate) fn open_grid(ui: &HomeWindow, card: &HomeCard) {
     let snap = STATE.with(|st| st.borrow().snap.clone());
     let (scope, aspect) = match card.kind {
         KIND_SYSTEM => {
             let aspect = snap.systems.iter().find(|s| s.id == card.key.as_str()).map(|s| s.aspect).unwrap_or(0.75);
             (format!("system:{}", card.key), aspect)
         }
-        KIND_FAVORITES => ("favorites".to_owned(), 0.75),
         KIND_COLLECTION => (format!("collection:{}", card.key), 0.75),
+        KIND_RESULTS => (format!("search:{}", card.key), 0.75),
         _ => return,
     };
     STATE.with(|st| {
@@ -1099,6 +1199,11 @@ pub fn system_ids() -> Vec<String> {
     STATE.with(|st| st.borrow().snap.systems.iter().filter(|s| s.count > 0).map(|s| s.id.clone()).collect())
 }
 
+/* (id, name) of the systems with games, for the Find page. */
+pub fn system_names() -> Vec<(String, String)> {
+    STATE.with(|st| st.borrow().snap.systems.iter().filter(|s| s.count > 0).map(|s| (s.id.clone(), s.name.clone())).collect())
+}
+
 /* Home notice for other modules (e.g. after Delete Game). */
 pub fn notice(ui: &HomeWindow, text: String) {
     show_notice(ui, text);
@@ -1125,34 +1230,17 @@ fn focused_card(ui: &HomeWindow) -> Option<HomeCard> {
         return ui.get_library_games().row_data(ui.get_library_index().max(0) as usize);
     }
     match ui.get_home_row() {
-        0 => ui.get_home_recent().row_data(ui.get_home_recent_index().max(0) as usize),
-        1 => ui.get_home_shelf().row_data(ui.get_home_shelf_index().max(0) as usize),
+        ROW_RECENT => ui.get_home_recent().row_data(ui.get_home_recent_index().max(0) as usize),
+        ROW_SYSTEMS => ui.get_home_systems().row_data(ui.get_home_systems_index().max(0) as usize),
+        ROW_COLLECTIONS => ui.get_home_collections().row_data(ui.get_home_collections_index().max(0) as usize),
         _ => ui.get_home_apps().row_data(ui.get_home_apps_index().max(0) as usize),
     }
-}
-
-fn toggle_favorite(ui: &HomeWindow, card: &HomeCard) {
-    if card.kind != KIND_GAME {
-        return;
-    }
-    let command = format!("FAVORITE\t{}\t{}", card.key, if card.favorite { 0 } else { 1 });
-    /* Show the new state at once; the service snapshot confirms it. */
-    let mut updated = card.clone();
-    updated.favorite = !card.favorite;
-    let model = if ui.get_library_open() { ui.get_library_games() } else { ui.get_home_recent() };
-    let index = if ui.get_library_open() { ui.get_library_index() } else { ui.get_home_recent_index() };
-    model.set_row_data(index.max(0) as usize, updated);
-    thread::spawn(move || {
-        if let Err(e) = library_command(&command) {
-            eprintln!("home: favorite failed={}", e);
-        }
-    });
 }
 
 /* Every section is reachable, empty ones included (empty-state card). */
 fn move_row(ui: &HomeWindow, delta: i32) -> bool {
     let row = ui.get_home_row() + delta;
-    if !(0..3).contains(&row) {
+    if !(ROW_RECENT..=ROW_APPS).contains(&row) {
         return false;
     }
     ui.set_home_row(row);
@@ -1162,8 +1250,9 @@ fn move_row(ui: &HomeWindow, delta: i32) -> bool {
 
 fn move_column(ui: &HomeWindow, delta: i32) -> bool {
     let (count, index) = match ui.get_home_row() {
-        0 => (ui.get_home_recent().row_count(), ui.get_home_recent_index()),
-        1 => (ui.get_home_shelf().row_count(), ui.get_home_shelf_index()),
+        ROW_RECENT => (ui.get_home_recent().row_count(), ui.get_home_recent_index()),
+        ROW_SYSTEMS => (ui.get_home_systems().row_count(), ui.get_home_systems_index()),
+        ROW_COLLECTIONS => (ui.get_home_collections().row_count(), ui.get_home_collections_index()),
         _ => (ui.get_home_apps().row_count(), ui.get_home_apps_index()),
     };
     let next = index + delta;
@@ -1171,8 +1260,9 @@ fn move_column(ui: &HomeWindow, delta: i32) -> bool {
         return false;
     }
     match ui.get_home_row() {
-        0 => ui.set_home_recent_index(next),
-        1 => ui.set_home_shelf_index(next),
+        ROW_RECENT => ui.set_home_recent_index(next),
+        ROW_SYSTEMS => ui.set_home_systems_index(next),
+        ROW_COLLECTIONS => ui.set_home_collections_index(next),
         _ => ui.set_home_apps_index(next),
     }
     sync_focus(ui);
@@ -1197,6 +1287,14 @@ fn move_grid(ui: &HomeWindow, delta: i32) -> bool {
 
 /* Home / library navigation. Returns nothing: every press is consumed. */
 pub fn handle_home_action(ui: &HomeWindow, action: &str) {
+    if ui.get_home_sheet_open() {
+        sheet_action(ui, action);
+        return;
+    }
+    if ui.get_find_open() && !ui.get_library_open() {
+        crate::findui::find_action(ui, action);
+        return;
+    }
     let grid = ui.get_library_open();
     let cols = ui.get_library_columns().max(1);
     let moved = match action {
@@ -1215,7 +1313,8 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
             let Some(card) = focused_card(ui) else { return };
             play_ui_sound(action);
             match card.kind {
-                KIND_FAVORITES | KIND_COLLECTION | KIND_SYSTEM => open_grid(ui, &card),
+                KIND_COLLECTION | KIND_SYSTEM => open_grid(ui, &card),
+                KIND_NEW_COLLECTION => crate::findui::new_collection(ui, None),
                 KIND_GAME => press_game(ui, &card),
                 /* Built-in nuubUI applications (EPIC-025, EPIC-026). */
                 _ if card.key.as_str() == "moonlight" => {
@@ -1226,8 +1325,14 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
                     app_page_icon(ui, &card);
                     crate::steamlink::open(ui)
                 }
-                _ if card.key.as_str() == "files" => crate::filesui::open(ui),
-                _ if card.key.as_str() == "media" => crate::mediaui::open(ui),
+                _ if card.key.as_str() == "files" => {
+                    app_page_icon(ui, &card);
+                    crate::filesui::open(ui)
+                }
+                _ if card.key.as_str() == "media" => {
+                    app_page_icon(ui, &card);
+                    crate::mediaui::open(ui)
+                }
                 _ if card.key.as_str() == "web" => crate::webui::open(ui),
                 /* Other applications need the future application session
                  * service. */
@@ -1235,19 +1340,35 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
             }
             return;
         }
+        /* Game Details (EPIC-016, North since 2026-10-10; A still
+         * launches at once); on a collection: Manage. */
         "face_north" => {
-            if let Some(card) = focused_card(ui) {
-                play_ui_sound("menu_confirm");
-                toggle_favorite(ui, &card);
+            match focused_card(ui) {
+                Some(card) if card.kind == KIND_GAME => {
+                    play_ui_sound("menu_confirm");
+                    let cover = card.has_cover.then(|| card.cover.clone());
+                    crate::gameui::open_details(ui, card.key.as_str(), card.title.as_str(), cover);
+                }
+                Some(card) if card.kind == KIND_COLLECTION => {
+                    play_ui_sound("menu_confirm");
+                    open_manage_sheet(ui, &card);
+                }
+                _ => {}
             }
             return;
         }
-        /* Game Details (EPIC-016): A still launches at once. */
-        "face_west" => {
-            if let Some(card) = focused_card(ui).filter(|c| c.kind == KIND_GAME) {
-                play_ui_sound("menu_confirm");
-                let cover = card.has_cover.then(|| card.cover.clone());
-                crate::gameui::open_details(ui, card.key.as_str(), card.title.as_str(), cover);
+        /* Find a Game (EPIC-011 browsing); on a system or collection
+         * page, limited to it. A results grid goes back to its Find. */
+        "select" => {
+            play_ui_sound("menu_confirm");
+            let card = ui.get_library_card();
+            if !grid {
+                crate::findui::open(ui);
+            } else if card.kind == KIND_SYSTEM || card.kind == KIND_COLLECTION {
+                close_grid(ui);
+                crate::findui::open_scoped(ui, card.clone(), card.kind == KIND_SYSTEM);
+            } else {
+                close_grid(ui);
             }
             return;
         }
@@ -1257,4 +1378,217 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
         play_ui_sound(action);
         ui.set_home_notice("".into());
     }
+}
+
+/* ---------------------------------------------------------------- */
+/* Home sheet: Manage a collection (Rename, Delete)                 */
+/* ---------------------------------------------------------------- */
+
+#[derive(Clone, Default)]
+enum Sheet {
+    #[default]
+    None,
+    /* Collection id + name; rows = Rename, Delete. */
+    Manage(String, String),
+    /* Find filter: context, (value, label) options, current value. */
+    Choice(String, String, Vec<(String, String)>, String),
+}
+
+thread_local! {
+    static SHEET: RefCell<(Sheet, i32)> = RefCell::new((Sheet::None, -1));
+}
+
+pub(crate) fn collections() -> Vec<LibCollection> {
+    STATE.with(|st| st.borrow().snap.collections.clone())
+}
+
+fn show_sheet(ui: &HomeWindow, title: String, items: Vec<HomeSheetItem>, index: i32) {
+    let count = items.len() as i32;
+    ui.set_home_sheet_title(title.into());
+    ui.set_home_sheet_items(ModelRc::from(Rc::new(VecModel::from(items))));
+    let index = index.clamp(0, (count - 1).max(0));
+    ui.set_home_sheet_index(index);
+    let visible = ui.get_home_sheet_visible_rows().max(1);
+    ui.set_home_sheet_scroll((index - visible + 1).clamp(0, (count - visible).max(0)));
+    ui.set_home_sheet_open(true);
+}
+
+fn render_sheet(ui: &HomeWindow) {
+    let (sheet, armed) = SHEET.with(|s| s.borrow().clone());
+    let index = ui.get_home_sheet_index();
+    match sheet {
+        Sheet::Manage(_, name) => {
+            let items = vec![
+                HomeSheetItem { label: tr(ui, 843, "Rename Collection").into(), check: -1, ..Default::default() },
+                HomeSheetItem {
+                    label: tr(ui, 839, "Delete Collection").into(),
+                    detail: if armed == 1 { tr(ui, 290, "Press again to delete") } else { tr(ui, 850, "Games stay in your library; only the collection goes away") }.into(),
+                    check: -1,
+                    armed: armed == 1,
+                },
+            ];
+            show_sheet(ui, name, items, index);
+        }
+        Sheet::Choice(_, title, options, current) => {
+            let items = options
+                .iter()
+                .map(|(v, l)| HomeSheetItem { label: l.clone().into(), check: if *v == current { 1 } else { -1 }, ..Default::default() })
+                .collect();
+            show_sheet(ui, title, items, index);
+        }
+        Sheet::None => ui.set_home_sheet_open(false),
+    }
+}
+
+pub(crate) fn open_choice_sheet(ui: &HomeWindow, context: String, title: String, options: Vec<(String, String)>, current: String) {
+    let index = options.iter().position(|(v, _)| *v == current).unwrap_or(0) as i32;
+    SHEET.with(|s| *s.borrow_mut() = (Sheet::Choice(context, title, options, current), -1));
+    ui.set_home_sheet_index(index);
+    render_sheet(ui);
+}
+
+fn open_manage_sheet(ui: &HomeWindow, card: &HomeCard) {
+    SHEET.with(|s| *s.borrow_mut() = (Sheet::Manage(card.key.to_string(), card.title.to_string()), -1));
+    ui.set_home_sheet_index(0);
+    render_sheet(ui);
+}
+
+pub(crate) fn close_sheet(ui: &HomeWindow) {
+    SHEET.with(|s| *s.borrow_mut() = (Sheet::None, -1));
+    ui.set_home_sheet_open(false);
+}
+
+fn sheet_action(ui: &HomeWindow, action: &str) {
+    let count = ui.get_home_sheet_items().row_count() as i32;
+    match action {
+        "menu_up" | "menu_down" if count > 0 => {
+            play_ui_sound(action);
+            let next = (ui.get_home_sheet_index() + if action == "menu_up" { -1 } else { 1 }).rem_euclid(count);
+            ui.set_home_sheet_index(next);
+            SHEET.with(|s| s.borrow_mut().1 = -1);
+            render_sheet(ui);
+        }
+        "menu_back" => {
+            play_ui_sound(action);
+            close_sheet(ui);
+        }
+        "menu_confirm" => {
+            play_ui_sound(action);
+            let index = ui.get_home_sheet_index();
+            let (sheet, armed) = SHEET.with(|s| s.borrow().clone());
+            match sheet {
+                Sheet::Manage(cid, name) => match index {
+                    0 => {
+                        close_sheet(ui);
+                        crate::findui::rename_collection(ui, cid, name);
+                    }
+                    _ if armed == 1 => {
+                        close_sheet(ui);
+                        show_notice(ui, tr(ui, 848, "Collection deleted"));
+                        thread::spawn(move || {
+                            let _ = library_command(&format!("COLLECTION_DELETE\t{cid}"));
+                        });
+                    }
+                    _ => {
+                        SHEET.with(|s| s.borrow_mut().1 = 1);
+                        render_sheet(ui);
+                    }
+                },
+                Sheet::Choice(context, _, options, _) => {
+                    close_sheet(ui);
+                    if let Some((value, _)) = options.get(index as usize) {
+                        crate::findui::apply_choice(ui, &context, value.clone());
+                    }
+                }
+                Sheet::None => close_sheet(ui),
+            }
+        }
+        _ => {}
+    }
+}
+
+/* Find results / a picked game, opened from the Find page. */
+pub(crate) fn open_results(ui: &HomeWindow, spec: String, title: String) {
+    let card = HomeCard {
+        key: spec.into(),
+        kind: KIND_RESULTS,
+        title: title.into(),
+        available: true,
+        ..Default::default()
+    };
+    open_grid(ui, &card);
+}
+
+/* ---------------------------------------------------------------- */
+/* Find view results                                                */
+/* ---------------------------------------------------------------- */
+
+/* Covers in the strip: the first ones (the rest is in the grid). */
+const FIND_STRIP: usize = 40;
+
+pub(crate) fn set_find_results(ui: &HomeWindow, reply: &str, spec: &str, more: String) {
+    let games = parse_games(reply);
+    STATE.with(|st| {
+        let mut st = st.borrow_mut();
+        st.find = games.into_iter().take(FIND_STRIP).collect();
+        st.find_spec = spec.to_owned();
+        st.find_more = if reply.lines().filter(|l| l.starts_with("game=")).count() > 0 { more } else { String::new() };
+    });
+    ui.set_find_result_index(0);
+    build_find(ui);
+}
+
+fn build_find(ui: &HomeWindow) {
+    let (snap, games, more, spec) = STATE.with(|st| {
+        let st = st.borrow();
+        (st.snap.clone(), st.find.clone(), st.find_more.clone(), st.find_spec.clone())
+    });
+    let mut cards: Vec<HomeCard> = games.iter().map(|g| game_card(ui, &snap, g, true)).collect();
+    /* The last card opens every result in the library grid. */
+    if !more.is_empty() {
+        cards.push(HomeCard {
+            key: spec.into(),
+            kind: KIND_RESULTS,
+            title: more.into(),
+            aspect: 0.75,
+            available: true,
+            ..Default::default()
+        });
+    }
+    let n = cards.len() as i32;
+    let cards = with_x_units(cards);
+    if let Some(m) = set_model(ui.get_find_results(), cards) {
+        ui.set_find_results(m);
+    }
+    ui.set_find_result_index(ui.get_find_result_index().clamp(0, (n - 1).max(0)));
+    sync_focus(ui);
+}
+
+pub(crate) fn sync_find_focus(ui: &HomeWindow) {
+    sync_focus(ui);
+}
+
+fn find_card(ui: &HomeWindow) -> Option<HomeCard> {
+    ui.get_find_results().row_data(ui.get_find_result_index().max(0) as usize)
+}
+
+/* A on a result: play it; on the last card: every result in the grid. */
+pub(crate) fn find_confirm(ui: &HomeWindow) {
+    let Some(card) = find_card(ui) else { return };
+    if card.kind == KIND_RESULTS {
+        open_results(ui, card.key.to_string(), tr(ui, 837, "Results"));
+    } else {
+        launch_by_id(ui, card.key.as_str(), card.available);
+    }
+}
+
+pub(crate) fn find_details(ui: &HomeWindow) {
+    if let Some(card) = find_card(ui).filter(|c| c.kind == KIND_GAME) {
+        let cover = card.has_cover.then(|| card.cover.clone());
+        crate::gameui::open_details(ui, card.key.as_str(), card.title.as_str(), cover);
+    }
+}
+
+pub(crate) fn library_request(command: &str) -> String {
+    library_command(command).unwrap_or_default()
 }

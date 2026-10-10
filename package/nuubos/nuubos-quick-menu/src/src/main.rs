@@ -61,6 +61,7 @@ const SURFACE_FILE: &str = "/run/nuubos/quick-menu-surface";
 const STATE_FILE: &str = "/run/nuubos/quick-menu-state";
 const ACTION_LOG: &str = "/run/nuubos/quick-menu-action.log";
 const DISPLAYCTL: &str = "/usr/bin/nuubos-displayctl";
+const CONTROLLERSCTL: &str = "/usr/bin/nuubos-controllersctl";
 const STATUS_STATE: &str = "/run/nuubos/statusd.state";
 const STATUS_SOCKET: &str = "/run/nuubos/statusd.sock";
 const NOTIFY_SOCKET: &str = "/run/nuubos/notifyd.sock";
@@ -1803,6 +1804,20 @@ fn toast_view(ui: &QuickMenuWindow, n: &Notification) -> Option<ToastView> {
             n.text("version").to_owned(),
             -1,
         ),
+        "stream.steamlink.rolledback" => (
+            ICON_FAILED,
+            SEVERITY_WARNING,
+            tr(ui, 854, "The new version did not start"),
+            format_arg(&tr(ui, 855, "Version {0} restored"), n.text("version")),
+            -1,
+        ),
+        "stream.steamlink.restored" => (
+            ICON_DONE,
+            SEVERITY_SUCCESS,
+            tr(ui, 477, "Steam Link"),
+            format_arg(&tr(ui, 855, "Version {0} restored"), n.text("version")),
+            -1,
+        ),
         "stream.steamlink.failed" => (
             ICON_FAILED,
             SEVERITY_ERROR,
@@ -3240,7 +3255,11 @@ fn keyboard_action(ui: &QuickMenuWindow, kb: &mut WebKeyboard, action: &str) -> 
 fn selectable_menu_indices(ui: &QuickMenuWindow) -> Vec<i32> {
     let mut indices = Vec::new();
     if ui.get_game_section_visible() {
-        indices.extend_from_slice(&[8, 9, 10, 11, 12, 13, 18, 28, 14]);
+        indices.extend_from_slice(&[8, 9, 10, 11]);
+        if ui.get_players_visible() {
+            indices.push(PLAYERS_ROW);
+        }
+        indices.extend_from_slice(&[12, 13, 18, 28, 14]);
     }
     if ui.get_stream_section_visible() {
         indices.extend_from_slice(if ui.get_stream_steamlink() { &[15, 16] } else { &[15, 16, 17] });
@@ -3290,6 +3309,169 @@ fn move_menu_selection(ui: &QuickMenuWindow, delta: i32) {
     let next = (position + delta).rem_euclid(indices.len() as i32) as usize;
     ui.set_selected_index(indices[next]);
     ui.set_game_confirm_index(-1);
+}
+
+/* GAME → Player Assignment (EPIC-026), below State Slot while an external
+ * controller is connected: the same controllersd
+ * preference as Settings → Controllers & Input → Player Assignment, through
+ * nuubos-controllersctl (the Quick Menu has no D-Bus client). */
+const PLAYERS_ROW: i32 = 30;
+
+#[derive(Default)]
+struct PlayersState {
+    /* None = the list of players; Some(n) = controllers for player n. */
+    player: Option<i32>,
+    /* (player, controller id, controller name, available) */
+    players: Vec<(i32, String, String, bool)>,
+    /* (id, name, connected) of external and built-in controllers */
+    devices: Vec<(String, String, bool, bool)>,
+}
+
+thread_local! {
+    static PLAYERS: RefCell<PlayersState> = RefCell::new(PlayersState::default());
+}
+
+fn controllersctl(args: &[&str]) -> Vec<Vec<String>> {
+    let Ok(out) = Command::new(CONTROLLERSCTL).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_once('=').filter(|(k, _)| *k != "end").map(|(_, v)| v.split('\t').map(str::to_owned).collect()))
+        .collect()
+}
+
+fn refresh_players(ui: &QuickMenuWindow) {
+    let devices: Vec<(String, String, bool, bool)> = controllersctl(&["devices"])
+        .into_iter()
+        .filter(|f| f.len() >= 5)
+        .map(|f| (f[0].clone(), f[1].clone(), f[3] == "1", f[4] == "1"))
+        .collect();
+    let players: Vec<(i32, String, String, bool)> = controllersctl(&["players"])
+        .into_iter()
+        .filter(|f| f.len() >= 4)
+        .map(|f| (f[0].parse().unwrap_or(0), f[1].clone(), f[2].clone(), f[3] == "1"))
+        .filter(|p| p.0 > 0)
+        .collect();
+    let external = devices.iter().any(|(_, _, connected, builtin)| *connected && !*builtin);
+    let label = players
+        .iter()
+        .find(|p| p.0 == 1 && !p.2.is_empty())
+        .map(|p| format!("P1 • {}", p.2))
+        .unwrap_or_default();
+    ui.set_players_visible(external && ui.get_game_section_visible());
+    ui.set_players_label(label.into());
+    PLAYERS.with(|state| {
+        let mut state = state.borrow_mut();
+        state.players = players;
+        state.devices = devices;
+    });
+}
+
+fn show_players_level(ui: &QuickMenuWindow, player: Option<i32>, index: i32) {
+    let options: Vec<SharedString> = PLAYERS.with(|state| {
+        let mut state = state.borrow_mut();
+        state.player = player;
+        match player {
+            None => state
+                .players
+                .iter()
+                .map(|(n, _, name, available)| {
+                    let who = if name.is_empty() { tr(ui, 122, "Automatic") } else { name.clone() };
+                    let tail = if !name.is_empty() && !available { tr(ui, 221, " • unavailable") } else { String::new() };
+                    format!("{}{n} • {who}{tail}", tr(ui, 220, "Player ")).into()
+                })
+                .collect(),
+            Some(_) => std::iter::once(tr(ui, 122, "Automatic").into())
+                .chain(state.devices.iter().map(|(_, name, connected, _)| {
+                    if *connected { name.as_str().into() } else { format!("{name}{}", tr(ui, 221, " • unavailable")).into() }
+                }))
+                .collect(),
+        }
+    });
+    let count = options.len() as i32;
+    let title = match player {
+        None => tr(ui, 13, "Player Assignment"),
+        Some(n) => format!("{}{n}", tr(ui, 220, "Player ")),
+    };
+    let index = index.clamp(0, (count - 1).max(0));
+    let visible = ui.get_audio_output_dropdown_visible_rows().max(1);
+    ui.set_players_options(ModelRc::new(Rc::new(VecModel::from(options))));
+    ui.set_players_dropdown_title(title.into());
+    ui.set_players_dropdown_index(index);
+    ui.set_players_dropdown_scroll((index - visible + 1).clamp(0, (count - visible).max(0)));
+    ui.set_players_dropdown_open(count > 0);
+}
+
+fn open_players_dropdown(ui: &QuickMenuWindow) {
+    refresh_players(ui);
+    show_players_level(ui, None, 0);
+}
+
+fn move_players_dropdown(ui: &QuickMenuWindow, delta: i32) {
+    let count = ui.get_players_options().row_count() as i32;
+    if count <= 0 {
+        return;
+    }
+    let next = (ui.get_players_dropdown_index() + delta).rem_euclid(count);
+    ui.set_players_dropdown_index(next);
+    let visible = ui.get_audio_output_dropdown_visible_rows().max(1);
+    let mut scroll = ui.get_players_dropdown_scroll();
+    if next < scroll {
+        scroll = next;
+    } else if next >= scroll + visible {
+        scroll = next - visible + 1;
+    }
+    ui.set_players_dropdown_scroll(scroll.clamp(0, (count - visible).max(0)));
+}
+
+fn confirm_players_dropdown(ui: &QuickMenuWindow) {
+    let index = ui.get_players_dropdown_index();
+    let level = PLAYERS.with(|state| state.borrow().player);
+    match level {
+        None => {
+            let chosen = PLAYERS.with(|state| {
+                let state = state.borrow();
+                state.players.get(index as usize).map(|p| {
+                    /* Preselect the controller the player has now. */
+                    let current = state.devices.iter().position(|d| d.0 == p.1).map(|i| i as i32 + 1).unwrap_or(0);
+                    (p.0, current)
+                })
+            });
+            if let Some((player, current)) = chosen {
+                show_players_level(ui, Some(player), current);
+            }
+        }
+        Some(player) => {
+            let (id, name) = PLAYERS.with(|state| {
+                let state = state.borrow();
+                if index == 0 {
+                    (String::new(), String::new())
+                } else {
+                    state.devices.get(index as usize - 1).map(|d| (d.0.clone(), d.1.clone())).unwrap_or_default()
+                }
+            });
+            let player_arg = player.to_string();
+            let ok = Command::new(CONTROLLERSCTL)
+                .args(["assign", &player_arg, &id, &name])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            append_action_log(&format!("player-assignment player={player} controller={id} ok={ok}"));
+            refresh_players(ui);
+            show_players_level(ui, None, player - 1);
+        }
+    }
+}
+
+fn back_players_dropdown(ui: &QuickMenuWindow) {
+    match PLAYERS.with(|state| state.borrow().player) {
+        Some(player) => show_players_level(ui, None, player - 1),
+        None => ui.set_players_dropdown_open(false),
+    }
 }
 
 /* Quick Menu row of the BACKGROUND TASK section (Stop, second press). */
@@ -3523,6 +3705,7 @@ fn map_overlay(
     let (web, zoom) = read_web_state();
     apply_web_state(ui, web, zoom);
     ui.set_switch_user_visible(!game.running && !streaming && !web && switch_user_available());
+    refresh_players(ui);
     ui.set_selected_index(first_selectable_index(ui));
 
     state.create_overlay(qh, SurfaceKind::Full)?;
@@ -3815,6 +3998,7 @@ fn unmap_overlay(
     state.destroy_overlay();
     let _ = ui.hide();
     ui.set_game_slot_dropdown_open(false);
+    ui.set_players_dropdown_open(false);
     ui.set_power_osd_open(false);
     ui.set_power_osd_confirm(false);
     set_menu_capture(false);
@@ -4030,6 +4214,10 @@ fn activate_game_row(
             open_slot_dropdown(ui);
             return redraw_overlay(ui, queue, state, qh, conn);
         }
+        PLAYERS_ROW if ui.get_players_visible() => {
+            open_players_dropdown(ui);
+            return redraw_overlay(ui, queue, state, qh, conn);
+        }
         12 => game_action("RESET"),
         13 => {
             /* RetroArch's own menu takes over; it pauses the game. */
@@ -4175,6 +4363,18 @@ fn handle_event(
             "menu_down" => move_slot_dropdown(ui, 1),
             "menu_confirm" => apply_slot_dropdown(ui),
             "menu_back" => ui.set_game_slot_dropdown_open(false),
+            _ => {}
+        }
+        redraw_overlay(ui, queue, state, qh, conn)?;
+        return Ok(());
+    }
+
+    if *mapped && ui.get_players_dropdown_open() {
+        match event.action.as_str() {
+            "menu_up" => move_players_dropdown(ui, -1),
+            "menu_down" => move_players_dropdown(ui, 1),
+            "menu_confirm" => confirm_players_dropdown(ui),
+            "menu_back" => back_players_dropdown(ui),
             _ => {}
         }
         redraw_overlay(ui, queue, state, qh, conn)?;
@@ -4675,9 +4875,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             refresh_i18n(&ui);
                             match toast_view(&ui, &notification) {
-                                Some(view) => notifier
-                                    .toasts
-                                    .post(view, notification.verb == NotifyVerb::Update),
+                                Some(view) => {
+                                    /* Warnings/errors and screenshots have a cue
+                                     * (Notification Sounds); ordinary cards are
+                                     * silent (user request 2026-10-10: the chime
+                                     * was annoying), progress updates too. */
+                                    if notification.verb == NotifyVerb::Post && !view.live {
+                                        if notification.event == "game.screenshot.saved" {
+                                            play_named_sound("screenshot");
+                                        } else if view.severity >= SEVERITY_WARNING {
+                                            play_named_sound("error");
+                                        }
+                                    }
+                                    notifier
+                                        .toasts
+                                        .post(view, notification.verb == NotifyVerb::Update)
+                                }
                                 None => false,
                             }
                         };

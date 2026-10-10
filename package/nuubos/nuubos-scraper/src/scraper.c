@@ -4,10 +4,15 @@
  *
  *   game GAME [force|fill]   scrape one game (force: also a matched game,
  *                            new data first; fill: only what is missing)
- *   bulk all|missing|system:<id>
+ *   bulk all|missing[:SECONDS]|lang|system:<id>
  *                            all: games without metadata; missing: also
- *                            matched games that lack data the source can
- *                            give (a background job)
+ *                            matched games that lack any data the source
+ *                            can give (cover, screenshot, description,
+ *                            release, genre, developer, publisher,
+ *                            players), skipping games tried in the last
+ *                            SECONDS (<rom name>.tried); lang: matched
+ *                            games without text in the active user's
+ *                            language (a background job)
  *   search GAME              set the name used to look the game up (name on
  *                            stdin; empty = back to the file name)
  *   accept GAME              approve a match waiting for review
@@ -38,6 +43,11 @@
  * - libretro: covers and screenshots of thumbnails.libretro.com, matched by
  *   the No-Intro/Redump name, read directly; no account. The per-system
  *   name index is cached for a week.
+ *
+ * Languages: localized text (description, genre) is stored for every
+ * language it was fetched in ("description@it=", "genre@it="), the plain
+ * keys holding the latest one; libraryd shows the user's language when it
+ * is there. Fetching another language never loses the ones already kept.
  *
  * Matching: Skyscraper identifies the game (checksums for ScreenScraper,
  * its title matching otherwise); libretro by the dump name. An identified
@@ -112,6 +122,10 @@ enum mode { MODE_NEW, MODE_FORCE, MODE_FILL };
 enum outcome { SCRAPED, REVIEW, NOT_FOUND, SKIPPED, FAILED, STOP };
 
 static volatile sig_atomic_t cancelled;
+/* bulk lang: ask the source again instead of Skyscraper's cache. */
+static bool refresh_cache;
+/* bulk missing:SECONDS: games tried after this time are skipped. */
+static long long skip_tried_after;
 static bool as_job;
 static const char *stop_reason = "";
 static const char *skip_reason = "matched";
@@ -147,6 +161,10 @@ struct metadata {
 	char cover_url[1024];
 	char shot_url[1024];
 	char screenshot[PATH_MAX];
+	/* Language of description/genre (ScreenScraper/TheGamesDB runs). */
+	char lang[8];
+	/* "key@xx=value" lines of other languages, kept as they are. */
+	char other_langs[16384];
 	/* Not stored: a cover/screenshot file a source produced locally. */
 	char cover_file[PATH_MAX];
 	char shot_file[PATH_MAX];
@@ -860,7 +878,30 @@ static bool cover_exists(const struct game_info *g)
 #define META_FIELDS(X) \
 	X(provider) X(provider_id) X(match) X(search) X(title) X(description) \
 	X(release) X(developer) X(publisher) X(genre) X(players) X(rating) \
-	X(screenshot) X(cover_url) X(shot_url)
+	X(screenshot) X(cover_url) X(shot_url) X(lang)
+
+/* Localized fields kept per language. */
+static bool localized_key(const char *key, size_t len)
+{
+	return (len == 11 && !strncmp(key, "description", 11)) || (len == 5 && !strncmp(key, "genre", 5));
+}
+
+/* Keeps "key@xx=value" unless xx is `skip` (the language rewritten now). */
+static void keep_other_lang(struct metadata *m, const char *key, const char *lang, const char *value,
+			    const char *skip)
+{
+	size_t used = strlen(m->other_langs);
+	char probe[32];
+
+	if (skip && !strcmp(lang, skip))
+		return;
+	snprintf(probe, sizeof(probe), "%s@%s=", key, lang);
+	/* One value per key and language (the first kept). */
+	for (const char *at = strstr(m->other_langs, probe); at; at = strstr(at + 1, probe))
+		if (at == m->other_langs || at[-1] == '\n')
+			return;
+	snprintf(m->other_langs + used, sizeof(m->other_langs) - used, "%s@%s=%s\n", key, lang, value);
+}
 
 static bool read_metadata(const struct game_info *g, struct metadata *m)
 {
@@ -880,6 +921,15 @@ static bool read_metadata(const struct game_info *g, struct metadata *m)
 		if (line[0] == '#' || !(eq = strchr(line, '=')))
 			continue;
 		*eq++ = '\0';
+		{
+			char *at = strchr(line, '@');
+
+			if (at && localized_key(line, (size_t)(at - line)) && strlen(at + 1) == 2) {
+				*at = '\0';
+				keep_other_lang(m, line, at + 1, eq, NULL);
+				continue;
+			}
+		}
 #define READ(f) if (!strcmp(line, #f)) copy_text(m->f, sizeof(m->f), eq); else
 		META_FIELDS(READ) {}
 #undef READ
@@ -907,6 +957,28 @@ static int write_metadata(const struct game_info *g, const struct metadata *m)
 #define WRITE(f) if (m->f[0]) fprintf(fp, #f "=%s\n", m->f);
 	META_FIELDS(WRITE)
 #undef WRITE
+	/* This run's language, then the others already fetched. */
+	if (m->lang[0]) {
+		if (m->description[0])
+			fprintf(fp, "description@%s=%s\n", m->lang, m->description);
+		if (m->genre[0])
+			fprintf(fp, "genre@%s=%s\n", m->lang, m->genre);
+	}
+	{
+		char probe_d[24], probe_g[24];
+		const char *p = m->other_langs;
+
+		snprintf(probe_d, sizeof(probe_d), "description@%s=", m->lang);
+		snprintf(probe_g, sizeof(probe_g), "genre@%s=", m->lang);
+		while (*p) {
+			const char *nl = strchr(p, '\n');
+			size_t len = nl ? (size_t)(nl - p) : strlen(p);
+
+			if (!m->lang[0] || (strncmp(p, probe_d, strlen(probe_d)) && strncmp(p, probe_g, strlen(probe_g))))
+				fprintf(fp, "%.*s\n", (int)len, p);
+			p += len + (nl ? 1 : 0);
+		}
+	}
 	if (ferror(fp))
 		rc = -1;
 	if (fclose(fp) != 0)
@@ -936,7 +1008,10 @@ static bool missing_data(const struct game_info *g, const struct metadata *m, in
 		return true;
 	if (provider == PROV_LIBRETRO)
 		return false;
-	return !m->description[0] || !m->release[0] || !m->genre[0];
+	/* Any field a text source can give (user request 2026-10-10: a
+	 * cover alone is not complete). */
+	return !m->description[0] || !m->release[0] || !m->genre[0] ||
+	       !m->developer[0] || !m->publisher[0] || !m->players[0];
 }
 
 /* Install media: files a source produced (Skyscraper) or references
@@ -1019,6 +1094,10 @@ static int sky_prepare(void)
 		"brackets=\"false\"\n"
 		"theInFront=\"true\"\n"
 		"maxLength=\"4000\"\n"
+		/* A checksum match is right even when the file name carries
+		 * another year (user report 2026-10-10: famous games missed,
+		 * e.g. "(1993)" vs 1994 in ScreenScraper). */
+		"ignoreYearInFilename=\"true\"\n"
 		"lang=\"%s\"\n", lang);
 	if (a.user[0]) {
 		char creds[200];
@@ -1282,6 +1361,12 @@ static enum outcome sky_lookup(int provider, const struct system_map *s, struct 
 	argv[argc++] = ROMS_ROOT;
 	argv[argc++] = "--flags";
 	argv[argc++] = "unattend,nowheels,nomarquees,notextures";
+	/* Another language: Skyscraper's cache holds the text of the last
+	 * one, so the source is asked again. */
+	if (refresh_cache) {
+		argv[argc++] = "--cache";
+		argv[argc++] = "refresh";
+	}
 	if (exts[0]) {
 		argv[argc++] = "--addext";
 		argv[argc++] = exts;
@@ -1338,11 +1423,18 @@ static enum outcome sky_lookup(int provider, const struct system_map *s, struct 
 	(void)sky_run(argv, 0, 0);
 	snprintf(pegasus, sizeof(pegasus), "%s/metadata.pegasus.txt", outdir);
 	pegasus_read(pegasus, items, count);
-	for (size_t i = 0; i < count; i++)
-		if (items[i].found) {
-			copy_text(items[i].m.match, sizeof(items[i].m.match), "auto");
-			copy_text(items[i].m.provider, sizeof(items[i].m.provider), provider_ids[provider]);
-		}
+	{
+		char lang[8];
+
+		user_language(lang, sizeof(lang));
+		for (size_t i = 0; i < count; i++)
+			if (items[i].found) {
+				copy_text(items[i].m.match, sizeof(items[i].m.match), "auto");
+				copy_text(items[i].m.provider, sizeof(items[i].m.provider), provider_ids[provider]);
+				if (items[i].m.description[0] || items[i].m.genre[0])
+					copy_text(items[i].m.lang, sizeof(items[i].m.lang), lang);
+			}
+	}
 	/* The scratch folder (and its media) goes once the batch is applied:
 	 * the caller calls sky_done(). */
 	return cancelled ? STOP : SCRAPED;
@@ -1559,6 +1651,29 @@ static enum outcome libretro_lookup(const struct game_info *g, const char *name,
 /* Scraping                                                            */
 /* ------------------------------------------------------------------ */
 
+/* Last attempt at a game (any outcome): <rom name>.tried, its mtime. */
+static void mark_tried(const struct game_info *g)
+{
+	char path[PATH_MAX], dir[PATH_MAX];
+
+	snprintf(dir, sizeof(dir), META_ROOT "/%s", g->system);
+	if (mkdir_p(dir, 0755) != 0)
+		return;
+	meta_path(g, "tried", path, sizeof(path));
+	(void)write_file(path, "", false);
+}
+
+static bool tried_recently(const struct game_info *g)
+{
+	char path[PATH_MAX];
+	struct stat st;
+
+	if (skip_tried_after <= 0)
+		return false;
+	meta_path(g, "tried", path, sizeof(path));
+	return stat(path, &st) == 0 && (long long)st.st_mtime >= skip_tried_after;
+}
+
 /* Whether a game takes part in this run; reads its current metadata. */
 static bool wanted(const struct game_info *g, enum mode mode, int provider, struct metadata *old)
 {
@@ -1579,6 +1694,10 @@ static bool wanted(const struct game_info *g, enum mode mode, int provider, stru
 		return false;
 	if (mode == MODE_FILL && matched && !missing_data(g, old, provider)) {
 		skip_reason = "complete";
+		return false;
+	}
+	if (tried_recently(g)) {
+		skip_reason = "recent";
 		return false;
 	}
 	return true;
@@ -1615,6 +1734,17 @@ static enum outcome apply(const struct game_info *g, enum mode mode, struct meta
 		if (!strcmp(m.match, "auto"))
 			install_media(g, &m, mode == MODE_FORCE, mode == MODE_FORCE);
 	}
+	/* Languages already fetched stay (a cache: switching back costs no
+	 * request); the previous plain text becomes its own language. */
+	copy_text(m.other_langs, sizeof(m.other_langs), old->other_langs);
+	if (old->lang[0] && strcmp(old->lang, m.lang)) {
+		if (old->description[0])
+			keep_other_lang(&m, "description", old->lang, old->description, m.lang);
+		if (old->genre[0])
+			keep_other_lang(&m, "genre", old->lang, old->genre, m.lang);
+	}
+	if (!m.lang[0] && old->lang[0] && !strcmp(m.description, old->description))
+		copy_text(m.lang, sizeof(m.lang), old->lang);
 	if (cancelled)
 		return STOP;
 	if (write_metadata(g, &m) != 0)
@@ -1651,6 +1781,8 @@ static void scrape_batch(int provider, const struct game_info *games, size_t cou
 			o = libretro_lookup(&games[i], name, &fresh);
 			if (o == SCRAPED)
 				o = apply(&games[i], mode, &olds[n], &fresh);
+			if (o != STOP)
+				mark_tried(&games[i]);
 			if (o == SCRAPED || o == REVIEW)
 				(*scraped)++;
 			if (single)
@@ -1678,6 +1810,8 @@ static void scrape_batch(int provider, const struct game_info *games, size_t cou
 			(void)sky_lookup(provider, s, &one, 1, old.search[0] ? old.search : NULL, offset + i, total);
 			if (one.found && apply(one.g, mode, &old, &one.m) != FAILED)
 				(*scraped)++;
+			if (!stop_reason[0])
+				mark_tried(one.g);
 			sky_done();
 		}
 		return;
@@ -1688,6 +1822,10 @@ static void scrape_batch(int provider, const struct game_info *games, size_t cou
 		enum outcome o = !items[i].found ? (stop_reason[0] ? STOP : NOT_FOUND)
 			: apply(items[i].g, mode, &olds[i], &items[i].m);
 
+		/* Found now, or not found and about to get its second chance;
+		 * games a stop left untouched are not marked. */
+		if (o != STOP)
+			mark_tried(items[i].g);
 		if (o == SCRAPED || o == REVIEW)
 			(*scraped)++;
 		if (single)
@@ -1718,6 +1856,21 @@ static void scrape_batch(int provider, const struct game_info *games, size_t cou
 			if (one.found)
 				o = apply(one.g, mode, &olds[i], &one.m);
 			sky_done();
+		}
+		/* TheGamesDB by name: description, dates and genre where
+		 * ScreenScraper has nothing (user report 2026-10-10: games found
+		 * by libretro had a cover and nothing else). */
+		if (o == NOT_FOUND && !stop_reason[0] && provider == PROV_SCREENSCRAPER &&
+		    system_supported(PROV_THEGAMESDB, items[i].g->system)) {
+			one = items[i];
+			memset(&one.m, 0, sizeof(one.m));
+			one.found = false;
+			(void)sky_lookup(PROV_THEGAMESDB, s, &one, 1, clean[0] ? clean : items[i].g->stem, offset + i, total);
+			if (one.found)
+				o = apply(one.g, mode, &olds[i], &one.m);
+			sky_done();
+			/* TheGamesDB's failures never stop the run. */
+			stop_reason = "";
 		}
 		if (o == NOT_FOUND && !stop_reason[0] && s->libretro[0]) {
 			memset(&fresh, 0, sizeof(fresh));
@@ -1776,6 +1929,22 @@ static int cmd_game(const char *id, enum mode mode)
 	}
 }
 
+/* A ScreenScraper/TheGamesDB match without text in the user's language. */
+static bool needs_language(const char *id)
+{
+	struct game_info g;
+	struct metadata m;
+	char lang[8], probe[24];
+
+	if (!game_details(id, &g) || !read_metadata(&g, &m) || !m.match[0] || !strcmp(m.provider, "libretro"))
+		return false;
+	user_language(lang, sizeof(lang));
+	if (!strcmp(m.lang, lang))
+		return false;
+	snprintf(probe, sizeof(probe), "description@%s=", lang);
+	return strstr(m.other_langs, probe) == NULL;
+}
+
 static int cmd_bulk(const char *scope)
 {
 	static char status[262144];
@@ -1784,17 +1953,30 @@ static int cmd_bulk(const char *scope)
 	static char systems_of[MAX_BATCH][32];
 	static struct game_info games[MAX_BATCH];
 	int provider = active_provider();
-	enum mode mode = !strcmp(scope, "missing") ? MODE_FILL : MODE_NEW;
+	enum mode mode = !strncmp(scope, "missing", 7) ? MODE_FILL : !strcmp(scope, "lang") ? MODE_FORCE : MODE_NEW;
 	size_t count = 0, scraped = 0, done = 0;
 	char *line, *save = NULL;
 
-	if (strcmp(scope, "all") && strcmp(scope, "missing") && strncmp(scope, "system:", 7)) {
+	if (!strncmp(scope, "missing:", 8)) {
+		long long seconds = atoll(scope + 8);
+
+		if (seconds > 0)
+			skip_tried_after = (long long)time(NULL) - seconds;
+	} else if (strcmp(scope, "all") && strcmp(scope, "missing") && strcmp(scope, "lang") &&
+		   strncmp(scope, "system:", 7)) {
 		job_error("scope");
 		return 1;
 	}
 	if (!provider_ready(provider)) {
 		job_error("unavailable");
 		return 1;
+	}
+	if (!strcmp(scope, "lang")) {
+		if (provider == PROV_LIBRETRO) {
+			job_error("unavailable");
+			return 1;
+		}
+		refresh_cache = true;
 	}
 	if (library_request("STATUS\n", status, sizeof(status)) != 0) {
 		job_error("library");
@@ -1834,6 +2016,9 @@ static int cmd_bulk(const char *scope)
 				continue;
 			snprintf(ids[count], 17, "%.16s", l2 + 5);
 			copy_text(systems_of[count], sizeof(systems_of[count]), system);
+			/* lang: matched games whose text is not in this language. */
+			if (!strcmp(scope, "lang") && !needs_language(ids[count]))
+				continue;
 			count++;
 		}
 	}

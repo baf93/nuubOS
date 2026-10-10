@@ -1,5 +1,13 @@
 #!/bin/sh
+#
+# Automatic network time (only with Automatic Time on; a manual date/time
+# turns it off). No argument: the hourly/boot check, syncs when the last
+# sync is 6 h old or more. "online": the device just came online (Wi-Fi
+# connected, boot): waits up to 30 s for a default route and working DNS
+# (right after CONNECTED the old lease/route may still be there) and syncs
+# unless the last sync is less than 10 min old (reconnect flapping).
 
+MODE="${1:-}"
 VALID_AFTER=1577836800
 LOCKDIR=/run/nuubos/status-time-sync.lock
 LOG=/run/nuubos/status-time-sync.log
@@ -33,12 +41,13 @@ automatic_time_enabled()
 
 last_sync_recent()
 {
+    WINDOW="$1"
     FILE=/state/time/last-sync
     [ -r "$FILE" ] || return 1
     LAST="$(sed -n 's/^LAST_NTP_SYNC=//p' "$FILE" | tail -1)"
     NOW="$(date +%s 2>/dev/null)"
     case "$LAST:$NOW" in *[!0-9:]*|:*) return 1 ;; esac
-    [ $((NOW - LAST)) -lt 21600 ]
+    [ $((NOW - LAST)) -lt "$WINDOW" ]
 }
 
 wifi_connected()
@@ -60,9 +69,25 @@ mkdir -p /run/nuubos
 
 automatic_time_enabled || exit 0
 
-if clock_valid && last_sync_recent; then
+if [ "$MODE" = online ]; then
+    WINDOW=600
+else
+    WINDOW=21600
+fi
+
+if clock_valid && last_sync_recent "$WINDOW"; then
     signal_statusd
     exit 0
+fi
+
+if [ "$MODE" = online ]; then
+    TRIES=30
+    while ! ip route 2>/dev/null | grep -q '^default ' ||
+          ! nslookup pool.ntp.org >/dev/null 2>&1; do
+        TRIES=$((TRIES - 1))
+        [ "$TRIES" -gt 0 ] || exit 0
+        sleep 1
+    done
 fi
 
 wifi_connected || exit 0
@@ -79,7 +104,7 @@ cleanup()
 trap cleanup EXIT INT TERM
 
 {
-    echo "time-sync-start=$(date +%s 2>/dev/null || echo 0)"
+    echo "time-sync-start=$(date +%s 2>/dev/null || echo 0) mode=${MODE:-periodic}"
     /usr/sbin/nuubos-timectl sync
     RC=$?
     echo "time-sync-rc=$RC"

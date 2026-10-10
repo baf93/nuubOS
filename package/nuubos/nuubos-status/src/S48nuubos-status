@@ -58,7 +58,7 @@ start_wpa_listener()
 request_time_sync()
 {
     [ -x "$TIME_SYNC" ] || return 0
-    "$TIME_SYNC" >/dev/null 2>&1 &
+    "$TIME_SYNC" online >/dev/null 2>&1 &
 }
 
 start_service()

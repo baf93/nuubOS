@@ -97,6 +97,13 @@
 #define STEAMLINK_GET "/usr/lib/nuubos/nuubos-steamlink-get"
 #define STEAMLINK_ROOT "/userdata/steamlink"
 #define STEAMLINK_APP STEAMLINK_ROOT "/app"
+/* The build before the last update (rollback). */
+#define STEAMLINK_PREVIOUS STEAMLINK_ROOT "/previous"
+/* nuubOS settings of the shared application (AUTO_UPDATE=0|1). */
+#define STEAMLINK_CONF STEAMLINK_ROOT "/nuubos.conf"
+/* A freshly updated build that fails this soon after its start is rolled
+ * back automatically. */
+#define SL_FRESH_FAIL_MS 30000
 #define STEAMLINK_QT "/usr/lib/steamlink-runtime/qt5"
 #define STEAMLINK_QT_VALVE STEAMLINK_APP "/Qt-5.14.1"
 #define STEAMLINK_TMP "/tmp/steamlink"
@@ -160,6 +167,7 @@ enum job_kind {
 	JOB_SL_CHECK,   /* nuubos-steamlink-get check */
 	JOB_SL_INSTALL, /* nuubos-steamlink-get install */
 	JOB_SL_REMOVE,  /* nuubos-steamlink-get remove */
+	JOB_SL_ROLLBACK, /* nuubos-steamlink-get rollback */
 	JOB_SL_SESSION, /* Steam Link itself */
 };
 
@@ -228,6 +236,14 @@ static char setting_resolution[16] = DEFAULT_RESOLUTION;
 static int setting_fps = DEFAULT_FPS;
 static char setting_codec[8] = DEFAULT_CODEC;
 static int setting_bitrate = DEFAULT_BITRATE;
+/* Like Moonlight's own settings (user request 2026-10-10): audio channels
+ * (stereo | 5.1 | 7.1), sound on the PC instead of the console, let
+ * GeForce Experience / Sunshine optimize the game's settings, quit the
+ * PC application when the stream ends. */
+static char setting_audio[8] = "stereo";
+static bool setting_local_audio;
+static bool setting_optimize = true;
+static bool setting_quit_app;
 
 static int mdns_fd = -1;
 static long long mdns_deadline_ms;
@@ -237,6 +253,13 @@ static char steamlink_version[32];  /* installed build, "" when absent */
 static char steamlink_latest[32];   /* Valve's current build, once checked */
 static int steamlink_progress = -1; /* download percent while installing */
 static char steamlink_error[16];    /* last install failure */
+static char steamlink_previous[32]; /* build kept for a rollback, "" when none */
+static bool steamlink_auto_update = true; /* install newer builds on check */
+/* The installed build came from an automatic update and has not run
+ * successfully yet: a quick failure rolls it back. */
+static bool steamlink_fresh;
+static bool steamlink_auto_rollback; /* the running rollback was automatic */
+static long long steamlink_session_start_ms;
 
 static long long monotonic_ms(void)
 {
@@ -451,8 +474,10 @@ static void save_settings(void)
 
 	if (!user[0])
 		return;
-	snprintf(data, sizeof(data), "RESOLUTION=%s\nFPS=%d\nCODEC=%s\nBITRATE=%d\n",
-		 setting_resolution, setting_fps, setting_codec, setting_bitrate);
+	snprintf(data, sizeof(data), "RESOLUTION=%s\nFPS=%d\nCODEC=%s\nBITRATE=%d\nAUDIO=%s\n"
+		 "LOCAL_AUDIO=%d\nOPTIMIZE=%d\nQUIT_APP=%d\n",
+		 setting_resolution, setting_fps, setting_codec, setting_bitrate, setting_audio,
+		 setting_local_audio ? 1 : 0, setting_optimize ? 1 : 0, setting_quit_app ? 1 : 0);
 	snprintf(path, sizeof(path), "%s/settings.conf", user_dir);
 	if (mkdir_p(user_dir) != 0 || write_file_atomic(path, data) != 0)
 		log_msg("streamd: could not write %s", path);
@@ -466,6 +491,11 @@ static bool valid_resolution(const char *v)
 static bool valid_codec(const char *v)
 {
 	return !strcmp(v, "h264") || !strcmp(v, "hevc");
+}
+
+static bool valid_audio(const char *v)
+{
+	return !strcmp(v, "stereo") || !strcmp(v, "5.1") || !strcmp(v, "7.1");
 }
 
 static void load_user_state(void)
@@ -482,6 +512,10 @@ static void load_user_state(void)
 	setting_fps = DEFAULT_FPS;
 	copy_text(setting_codec, sizeof(setting_codec), DEFAULT_CODEC);
 	setting_bitrate = DEFAULT_BITRATE;
+	copy_text(setting_audio, sizeof(setting_audio), "stereo");
+	setting_local_audio = false;
+	setting_optimize = true;
+	setting_quit_app = false;
 	if (!user[0])
 		return;
 
@@ -522,6 +556,14 @@ static void load_user_state(void)
 			copy_text(setting_codec, sizeof(setting_codec), line + 6);
 		else if (!strncmp(line, "BITRATE=", 8) && atoi(line + 8) >= 0)
 			setting_bitrate = atoi(line + 8);
+		else if (!strncmp(line, "AUDIO=", 6) && valid_audio(line + 6))
+			copy_text(setting_audio, sizeof(setting_audio), line + 6);
+		else if (!strncmp(line, "LOCAL_AUDIO=", 12))
+			setting_local_audio = line[12] == '1';
+		else if (!strncmp(line, "OPTIMIZE=", 9))
+			setting_optimize = line[9] != '0';
+		else if (!strncmp(line, "QUIT_APP=", 9))
+			setting_quit_app = line[9] == '1';
 	}
 	if (fp)
 		fclose(fp);
@@ -611,11 +653,17 @@ static char *build_status(size_t *len_out)
 	APPEND("steamlink_job=%s\n", steamlink_job_name());
 	APPEND("steamlink_progress=%d\n", steamlink_progress);
 	APPEND("steamlink_error=%s\n", steamlink_error);
+	APPEND("steamlink_previous=%s\n", steamlink_previous);
+	APPEND("steamlink_auto_update=%d\n", steamlink_auto_update ? 1 : 0);
 	APPEND("user=%d\n", user[0] ? 1 : 0);
 	APPEND("resolution=%s\n", setting_resolution);
 	APPEND("fps=%d\n", setting_fps);
 	APPEND("codec=%s\n", setting_codec);
 	APPEND("bitrate=%d\n", setting_bitrate);
+	APPEND("audio=%s\n", setting_audio);
+	APPEND("local_audio=%d\n", setting_local_audio ? 1 : 0);
+	APPEND("optimize=%d\n", setting_optimize ? 1 : 0);
+	APPEND("quit_app=%d\n", setting_quit_app ? 1 : 0);
 	APPEND("discovering=%d\n", mdns_fd >= 0 ? 1 : 0);
 	APPEND("pairing_host=%s\n", pairing_host);
 	APPEND("pairing_pin=%s\n", pairing_pin);
@@ -991,7 +1039,7 @@ static const char *launch_stream(const char *host_id, const char *app_name)
 {
 	struct host *h = find_host(host_id);
 	char width[16], height[16], fps[16], bitrate[16];
-	char *extra[24];
+	char *extra[32];
 	int n = 0;
 	int w, hh;
 	int slot;
@@ -1034,6 +1082,16 @@ static const char *launch_stream(const char *host_id, const char *app_name)
 		extra[n++] = (char *)"-bitrate";
 		extra[n++] = bitrate;
 	}
+	if (strcmp(setting_audio, "stereo")) {
+		extra[n++] = (char *)"-surround";
+		extra[n++] = setting_audio;
+	}
+	if (setting_local_audio)
+		extra[n++] = (char *)"-localaudio";
+	if (!setting_optimize)
+		extra[n++] = (char *)"-nosops";
+	if (setting_quit_app)
+		extra[n++] = (char *)"-quitappafter";
 	extra[n] = NULL;
 
 	stream.input_fd = input_gamepads_on();
@@ -1162,12 +1220,83 @@ static void read_steamlink_version(void)
 	fclose(fp);
 }
 
-/* The download, check or removal in progress (one at a time). */
+static void read_steamlink_previous(void)
+{
+	char line[64] = "";
+	FILE *fp;
+
+	steamlink_previous[0] = '\0';
+	if (access(STEAMLINK_PREVIOUS "/bin/shell", X_OK) != 0)
+		return;
+	fp = fopen(STEAMLINK_PREVIOUS "/version.txt", "r");
+	if (!fp)
+		return;
+	if (fgets(line, sizeof(line), fp)) {
+		trim(line);
+		sanitize(line);
+		copy_text(steamlink_previous, sizeof(steamlink_previous), line);
+	}
+	fclose(fp);
+}
+
+static void load_steamlink_conf(void)
+{
+	char line[64];
+	FILE *fp = fopen(STEAMLINK_CONF, "r");
+
+	steamlink_auto_update = true;
+	if (!fp)
+		return;
+	while (fgets(line, sizeof(line), fp))
+		if (!strncmp(line, "AUTO_UPDATE=", 12))
+			steamlink_auto_update = line[12] != '0';
+	fclose(fp);
+}
+
+static int save_steamlink_conf(void)
+{
+	char tmp[] = STEAMLINK_CONF ".tmp";
+	FILE *fp;
+
+	(void)mkdir(STEAMLINK_ROOT, 0755);
+	fp = fopen(tmp, "w");
+	if (!fp)
+		return -1;
+	fprintf(fp, "AUTO_UPDATE=%d\n", steamlink_auto_update ? 1 : 0);
+	if (fclose(fp) != 0 || rename(tmp, STEAMLINK_CONF) != 0) {
+		unlink(tmp);
+		return -1;
+	}
+	return 0;
+}
+
+/* "1.3.32.316" > "1.3.9.300", numerically per component. */
+static bool version_newer(const char *a, const char *b)
+{
+	while (*a || *b) {
+		long x = strtol(a, (char **)&a, 10);
+		long y = strtol(b, (char **)&b, 10);
+
+		if (x != y)
+			return x > y;
+		if (*a == '.')
+			a++;
+		if (*b == '.')
+			b++;
+		if (!*a && !*b)
+			break;
+		if ((*a && !isdigit((unsigned char)*a)) || (*b && !isdigit((unsigned char)*b)))
+			break;
+	}
+	return false;
+}
+
+/* The download, check, removal or rollback in progress (one at a time). */
 static int steamlink_job(void)
 {
 	for (int i = 0; i < MAX_JOBS; i++)
 		if (jobs[i].kind == JOB_SL_CHECK || jobs[i].kind == JOB_SL_INSTALL ||
-		    jobs[i].kind == JOB_SL_REMOVE)
+		    jobs[i].kind == JOB_SL_REMOVE || jobs[i].kind == JOB_SL_ROLLBACK)
 			return i;
 	return -1;
 }
@@ -1183,6 +1312,8 @@ static const char *steamlink_job_name(void)
 		return "checking";
 	case JOB_SL_INSTALL:
 		return "installing";
+	case JOB_SL_ROLLBACK:
+		return "rolling-back";
 	default:
 		return "removing";
 	}
@@ -1329,6 +1460,11 @@ static bool start_steamlink_job(enum job_kind kind)
 		argv[2] = (char *)STEAMLINK_ROOT;
 		timeout = SL_REMOVE_TIMEOUT_MS;
 		break;
+	case JOB_SL_ROLLBACK:
+		argv[1] = (char *)"rollback";
+		argv[2] = (char *)STEAMLINK_ROOT;
+		timeout = SL_REMOVE_TIMEOUT_MS;
+		break;
 	default:
 		return false;
 	}
@@ -1367,6 +1503,7 @@ static const char *launch_steamlink(void)
 	stream.steamlink = true;
 	stream.started = true;
 	stream.power_client = -1;
+	steamlink_session_start_ms = monotonic_ms();
 	log_msg("streamd: steamlink %s locale=%s user=%s", steamlink_version, locale, user);
 	return NULL;
 }
@@ -1440,6 +1577,7 @@ static void handle_job_line(int slot, char *line)
 	case JOB_SL_CHECK:
 	case JOB_SL_INSTALL:
 	case JOB_SL_REMOVE:
+	case JOB_SL_ROLLBACK:
 		if (!strncmp(line, "@progress ", 10)) {
 			int percent = atoi(line + 10);
 
@@ -1582,13 +1720,43 @@ static void finish_job(int slot, int status)
 	case JOB_SL_CHECK:
 		if (j->ok && exited_ok)
 			copy_text(steamlink_latest, sizeof(steamlink_latest), j->result);
+		/* Automatic Updates: a newer build installs right away (never
+		 * under a running session); its predecessor stays for a
+		 * rollback. */
+		if (j->ok && exited_ok && steamlink_auto_update && steamlink_version[0] &&
+		    version_newer(steamlink_latest, steamlink_version) &&
+		    stream.state == STREAM_IDLE) {
+			if (start_steamlink_job(JOB_SL_INSTALL)) {
+				steamlink_progress = 0;
+				steamlink_error[0] = '\0';
+				log_msg("streamd: steamlink automatic update %s -> %s",
+					steamlink_version, steamlink_latest);
+			}
+		}
+		break;
+	case JOB_SL_ROLLBACK:
+		read_steamlink_version();
+	read_steamlink_previous();
+	load_steamlink_conf();
+		read_steamlink_previous();
+		steamlink_fresh = false;
+		if (j->ok && exited_ok)
+			notify_event(steamlink_auto_rollback ? "stream.steamlink.rolledback"
+							     : "stream.steamlink.restored",
+				     "version", steamlink_version);
+		steamlink_auto_rollback = false;
+		log_msg("streamd: steamlink rollback status=%d version=%s", status,
+			steamlink_version[0] ? steamlink_version : "-");
 		break;
 	case JOB_SL_INSTALL:
 		steamlink_progress = -1;
 		read_steamlink_version();
+		read_steamlink_previous();
 		if (j->ok && exited_ok) {
 			copy_text(steamlink_latest, sizeof(steamlink_latest), j->result);
 			steamlink_error[0] = '\0';
+			/* Any installed update must prove itself on its first run. */
+			steamlink_fresh = steamlink_previous[0] != '\0';
 			notify_event("stream.steamlink.installed", "version", steamlink_version);
 		} else if (strcmp(j->error, "cancelled") != 0) {
 			copy_text(steamlink_error, sizeof(steamlink_error), j->error[0] ? j->error : "write");
@@ -1599,18 +1767,32 @@ static void finish_job(int slot, int status)
 		break;
 	case JOB_SL_REMOVE:
 		read_steamlink_version();
+		read_steamlink_previous();
+		steamlink_fresh = false;
 		log_msg("streamd: steamlink removed status=%d", status);
 		break;
 	case JOB_SL_SESSION: {
 		bool clean = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+		bool quick = monotonic_ms() - steamlink_session_start_ms < SL_FRESH_FAIL_MS;
+		bool failed = !stream.user_quit && !clean;
 
 		log_msg("streamd: steamlink exited status=%d user_quit=%d", status, stream.user_quit ? 1 : 0);
-		/* Leaving from Valve's interface is a clean exit; anything else
-		 * the user did not ask for is a failure they must see. */
-		if (!stream.user_quit && !clean)
-			notify_stream_failed("steamlink", "");
 		reset_stream();
 		finish_power_wait();
+		/* A fresh update that breaks at once goes back to the build that
+		 * worked; otherwise it has proven itself. */
+		if (failed && quick && steamlink_fresh && steamlink_previous[0]) {
+			steamlink_auto_rollback = start_steamlink_job(JOB_SL_ROLLBACK);
+			log_msg("streamd: steamlink %s failed at start: automatic rollback to %s",
+				steamlink_version, steamlink_previous);
+			break;
+		}
+		if (!failed || !quick)
+			steamlink_fresh = false;
+		/* Leaving from Valve's interface is a clean exit; anything else
+		 * the user did not ask for is a failure they must see. */
+		if (failed)
+			notify_stream_failed("steamlink", "");
 		break;
 	}
 	default:
@@ -1949,6 +2131,26 @@ static void handle_command(struct client *c, char *line)
 		notify_subscribers();
 		return;
 	}
+	if (!strcmp(line, "STEAMLINK_ROLLBACK")) {
+		if (steamlink_job() >= 0 || (stream.state != STREAM_IDLE && stream.steamlink)) {
+			reply(c, "ERR busy\n");
+			return;
+		}
+		if (!steamlink_previous[0] || !start_steamlink_job(JOB_SL_ROLLBACK)) {
+			reply(c, "ERR unavailable\n");
+			return;
+		}
+		steamlink_auto_rollback = false;
+		reply(c, "OK\n");
+		notify_subscribers();
+		return;
+	}
+	if (!strcmp(line, "STEAMLINK_AUTO_UPDATE") && argc == 1) {
+		steamlink_auto_update = strcmp(args[0], "0") != 0;
+		reply(c, save_steamlink_conf() == 0 ? "OK\n" : "ERR write\n");
+		notify_subscribers();
+		return;
+	}
 	if (!strcmp(line, "STEAMLINK_CANCEL")) {
 		int i = steamlink_job();
 
@@ -2078,6 +2280,14 @@ static void handle_command(struct client *c, char *line)
 			copy_text(setting_codec, sizeof(setting_codec), args[1]);
 		else if (!strcmp(args[0], "bitrate") && atoi(args[1]) >= 0 && atoi(args[1]) <= 150000)
 			setting_bitrate = atoi(args[1]);
+		else if (!strcmp(args[0], "audio") && valid_audio(args[1]))
+			copy_text(setting_audio, sizeof(setting_audio), args[1]);
+		else if (!strcmp(args[0], "local_audio"))
+			setting_local_audio = !strcmp(args[1], "1");
+		else if (!strcmp(args[0], "optimize"))
+			setting_optimize = strcmp(args[1], "0") != 0;
+		else if (!strcmp(args[0], "quit_app"))
+			setting_quit_app = !strcmp(args[1], "1");
 		else {
 			reply(c, "ERR setting\n");
 			return;

@@ -68,20 +68,11 @@ define NUUBOS_AUDIO_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/nuubos-audio-wav-player
 	$(INSTALL) -D -m 0755 $(@D)/nuubos-audio-mp3-player \
 		$(TARGET_DIR)/usr/bin/nuubos-audio-mp3-player
-	$(INSTALL) -D -m 0644 $(@D)/assets/system/boot.wav \
-		$(TARGET_DIR)/usr/share/nuubos/audio/system/boot.wav
-	$(INSTALL) -D -m 0644 $(@D)/assets/system/poweroff.wav \
-		$(TARGET_DIR)/usr/share/nuubos/audio/system/poweroff.wav
-	$(INSTALL) -D -m 0644 $(@D)/assets/system/restart.wav \
-		$(TARGET_DIR)/usr/share/nuubos/audio/system/restart.wav
-	$(INSTALL) -D -m 0644 $(@D)/assets/system/select.wav \
-		$(TARGET_DIR)/usr/share/nuubos/audio/system/select.wav
-	$(INSTALL) -D -m 0644 $(@D)/assets/system/back.wav \
-		$(TARGET_DIR)/usr/share/nuubos/audio/system/back.wav
-	$(INSTALL) -D -m 0644 $(@D)/assets/system/navigation.wav \
-		$(TARGET_DIR)/usr/share/nuubos/audio/system/navigation.wav
-	$(INSTALL) -D -m 0644 $(@D)/assets/system/quick-settings.wav \
-		$(TARGET_DIR)/usr/share/nuubos/audio/system/quick-settings.wav
+	for cue in boot poweroff restart select back navigation quick-settings \
+		launch error screenshot; do \
+		$(INSTALL) -D -m 0644 $(@D)/assets/system/$$cue.wav \
+			$(TARGET_DIR)/usr/share/nuubos/audio/system/$$cue.wav || exit 1; \
+	done
 	$(INSTALL) -D -m 0644 $(@D)/nuubos-alsa.conf \
 		$(TARGET_DIR)/usr/share/nuubos/audio/alsa.conf
 	$(INSTALL) -D -m 0755 $(@D)/nuubos-pipewire-runtime \

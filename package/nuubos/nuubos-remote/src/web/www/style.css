@@ -11,7 +11,7 @@ h2 { margin: 0 0 12px; font-size: 17px; }
 dt { color: var(--dim); } dd { margin: 0; }
 label { display: block; margin: 8px 0; }
 select, input[type=file] { max-width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
-button { background: var(--blue); color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font-weight: 600; cursor: pointer; margin: 6px 0; }
+button { background: var(--blue); color: var(--on-accent, #fff); border: 0; border-radius: 6px; padding: 8px 14px; font-weight: 600; cursor: pointer; margin: 6px 0; }
 button.danger { background: transparent; color: var(--red); border: 1px solid var(--red); padding: 4px 10px; }
 button:disabled { opacity: .5; cursor: default; }
 progress { width: 100%; }

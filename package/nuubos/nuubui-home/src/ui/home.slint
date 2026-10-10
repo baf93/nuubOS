@@ -102,6 +102,14 @@ export struct ControllerEntry {
 }
 
 /* Connected external controller shown in the top bar. */
+/* Settings → Power, CONNECTED DEVICES: kind = controller | headphones |
+ * device; battery -1 = not reported. */
+export struct PowerDevice {
+    name: string,
+    kind: string,
+    battery: int,
+}
+
 export struct TopbarController {
     player: int,
     battery: int,
@@ -146,6 +154,11 @@ export struct SettingsChoiceEntry {
 export struct UserProfileEntry {
     id: string, name: string, avatar-spec: string, avatar-path: string, avatar: image, active: bool, default-user: bool,
 }
+/* One wheel of the manual Date & Time picker: above = value + 1. */
+export struct DateTimeField {
+    label: string, above: string, value: string, below: string,
+}
+
 export struct AvatarChoiceEntry {
     spec: string, label: string, path: string, avatar: image,
 }
@@ -476,6 +489,48 @@ component SettingsToggle inherits Rectangle {
     }
 }
 
+/* M3 slider (identical copy of the Quick Menu's MaterialSlider): thick
+ * rounded track split by a bar handle with a small gap on each side;
+ * active part primary, inactive part tonal. */
+component MaterialSlider inherits Rectangle {
+    in property <float> fraction: 0.0;
+
+    property <length> track-h: 8px;
+    property <length> gap: 3px;
+    property <length> handle-x: (root.width - 4px) * root.fraction;
+
+    height: 18px;
+    background: #00000000;
+
+    Rectangle {
+        x: 0;
+        y: (parent.height - root.track-h) / 2;
+        width: max(0px, root.handle-x - root.gap);
+        height: root.track-h;
+        border-radius: root.track-h / 2;
+        background: Theme.primary;
+        visible: self.width > 0px;
+    }
+    Rectangle {
+        x: root.handle-x + 4px + root.gap;
+        y: (parent.height - root.track-h) / 2;
+        width: max(0px, parent.width - self.x);
+        height: root.track-h;
+        border-radius: root.track-h / 2;
+        background: Theme.surface-container-highest;
+        visible: self.width > 0px;
+    }
+
+    Rectangle {
+        x: root.handle-x;
+        y: 0px;
+        width: 4px;
+        height: parent.height;
+        border-radius: 2px;
+        background: Theme.primary;
+    }
+}
+
 component SettingsSelectableRow inherits Rectangle {
     in property <string> title: "";
     in property <string> detail: "";
@@ -503,8 +558,15 @@ component SettingsSelectableRow inherits Rectangle {
      * row turns to the error roles and its detail line carries the prompt
      * (value and switch step aside), never a note beside the title. */
     in property <bool> armed: false;
+    /* Level setting: the Quick Menu slider between title and value; the
+     * value keeps a fixed slot so sliders line up row to row. */
+    in property <bool> show-slider: false;
+    in property <float> slider-fraction: 0.0;
 
     property <string> shown-value: root.armed ? "" : root.value;
+    property <bool> slider-shown: root.show-slider && !root.armed;
+    property <length> slider-width: min(root.width * 0.34, 240px);
+    property <length> slider-value-slot: 64px;
 
     property <bool> has-detail: root.detail != "";
     property <length> accessory-width: root.armed ? 0px : root.toggle ? 42px
@@ -592,9 +654,18 @@ component SettingsSelectableRow inherits Rectangle {
         }
     }
 
+    MaterialSlider {
+        x: root.value-right - root.slider-value-slot - 12px - self.width;
+        y: (parent.height - self.height) / 2;
+        width: root.slider-width;
+        fraction: max(0.0, min(1.0, root.slider-fraction));
+        visible: root.slider-shown;
+    }
+
     value-text := MarqueeText {
         width: root.shown-value == ""
             ? 0px
+            : root.slider-shown ? root.slider-value-slot
             : min(self.content-width + 4px,
                   root.value-right * (0.97 - root.title-fraction));
         x: root.value-right - self.width;
@@ -612,7 +683,8 @@ component SettingsSelectableRow inherits Rectangle {
     title-text := MarqueeText {
         x: 14px;
         y: root.has-detail ? parent.height * 0.08 : 0px;
-        width: root.shown-value == ""
+        width: root.slider-shown ? max(0px, root.value-right - root.slider-value-slot - root.slider-width - 12px - 20px - 14px)
+            : root.shown-value == ""
             ? max(0px, root.value-right - 14px)
             : max(0px, value-text.x - 20px);
         height: root.has-detail ? parent.height * 0.50 : parent.height;
@@ -730,6 +802,7 @@ component SettingsHint inherits Text {
 }
 
 component StartActionHint inherits Rectangle {
+    in property <string> label: "START";
     width: 50px;
     height: 26px;
     border-radius: Shape.small;
@@ -742,7 +815,7 @@ component StartActionHint inherits Rectangle {
         height: parent.height;
         horizontal-alignment: center;
         vertical-alignment: center;
-        text: "START";
+        text: root.label;
         color: Theme.text;
         font-size: 11px;
         font-weight: 800;
@@ -814,6 +887,7 @@ component ActionHint inherits HorizontalLayout {
         alignment: center;
         if root.kind == "nav": NavigationHint { }
         if root.kind == "start": StartActionHint { }
+        if root.kind == "select": StartActionHint { label: "SELECT"; width: 58px; }
         if root.kind == "menu": MenuActionHint { }
         if root.kind == "face": FaceButtonHint { active-position: root.face-position; }
     }
@@ -1051,12 +1125,26 @@ component ControllerTesterVisual inherits Rectangle {
  *
  * One entry model for every Home row and the library grid. Rust fills it
  * from the nuubos-libraryd snapshot; Slint owns every pixel position.
- *   kind: 0 game, 1 favorites, 2 custom collection, 3 system, 4 application
+ *   kind: 0 game, 1 New Collection, 2 custom collection, 3 system,
+ *         4 application, 5 Find results (library grid header only)
  *   aspect: card width / height (real cover proportions when the cover is
  *           loaded, the system box-art shape otherwise)
  *   accent: system colour from the registry (not painted by the minimal Home)
  *   x-units: sum of the aspects of the cards before this one in its row,
  *            so variable-width rows are positioned without layout passes. */
+/* Find a Game filter chip: label shows the choice ("Genre • Platform"). */
+export struct FindChip {
+    label: string,
+    active: bool,
+}
+
+export struct HomeSheetItem {
+    label: string,
+    detail: string,
+    check: int,
+    armed: bool,
+}
+
 export struct HomeCard {
     key: string,
     kind: int,
@@ -1073,21 +1161,27 @@ export struct HomeCard {
     x-units: float,
     accent: color,
     available: bool,
-    favorite: bool,
+    /* Systems and collections: covers of up to four of their games (most
+     * recently played first), shown as a fanned stack. */
+    p0: image,
+    p1: image,
+    p2: image,
+    p3: image,
+    previews: int,
     /* Focus of a cached card, set by Rust only on the cards that change
      * (library.rs sync_focus): a binding on the shared index would mark
      * every card layer dirty on every move. */
     focused: bool,
 }
 
-/* Five-point star, own geometry (no third-party icon). */
-component HomeStar inherits Path {
-    viewbox-width: 24;
-    viewbox-height: 24;
-    commands: "M12 1.6 L15.2 8.5 L22.6 9.3 L17.1 14.3 L18.6 21.6 L12 17.9 L5.4 21.6 L6.9 14.3 L1.4 9.3 L8.8 8.5 Z";
-    fill: #ffc94a;
-    stroke: Theme.background;
-    stroke-width: 1px;
+/* Plus sign (New Collection), own geometry. */
+component HomePlusGlyph inherits Rectangle {
+    in property <color> ink: #c9d6ff;
+    background: #00000000;
+    Rectangle { x: (parent.width - self.width) / 2; y: 0; width: parent.width * 0.16; height: parent.height;
+        border-radius: self.width / 2; background: root.ink; }
+    Rectangle { x: 0; y: (parent.height - self.height) / 2; width: parent.width; height: parent.height * 0.16;
+        border-radius: self.height / 2; background: root.ink; }
 }
 
 /* Stacked-cards glyph for custom collections, drawn from rectangles. */
@@ -1203,10 +1297,6 @@ component HomeCardView inherits Rectangle {
         }
 
         /* Tile icon. */
-        if root.card.kind == 1: HomeStar {
-            x: (parent.width - root.icon-size) / 2; y: parent.height * 0.14;
-            width: root.icon-size; height: root.icon-size;
-        }
         if root.card.kind == 2: HomeCollectionGlyph {
             x: (parent.width - root.icon-size * 0.86) / 2; y: parent.height * 0.14 + root.icon-size * 0.07;
             width: root.icon-size * 0.86; height: root.icon-size * 0.80;
@@ -1246,12 +1336,6 @@ component HomeCardView inherits Rectangle {
         image-fit: fill;
     }
 
-    if !root.tile && root.card.favorite: HomeStar {
-        x: parent.width - self.width - max(4px, parent.width * 0.04);
-        y: max(4px, parent.width * 0.04);
-        width: max(14px, min(parent.width, parent.height) * 0.14);
-        height: self.width;
-    }
 
     /* UNAVAILABLE: entry kept, clearly marked (EPIC-011) with a compact
      * badge in the top-left corner over the faded art. */
@@ -1330,10 +1414,6 @@ component HomeTileView inherits Rectangle {
             background: root.card.kind == 3 ? root.card.accent.transparentize(root.focused ? 0.35 : 0.55)
                 : root.focused ? Theme.primary-container : Theme.surface-container-highest;
 
-            if root.card.kind == 1: HomeStar {
-                x: (parent.width - root.icon-size) / 2; y: (parent.height - root.icon-size) / 2;
-                width: root.icon-size; height: root.icon-size;
-            }
             if root.card.kind == 2: HomeCollectionGlyph {
                 x: (parent.width - root.icon-size * 0.86) / 2; y: (parent.height - root.icon-size * 0.8) / 2;
                 width: root.icon-size * 0.86; height: root.icon-size * 0.80;
@@ -1391,6 +1471,144 @@ component HomeTileView inherits Rectangle {
     }
 }
 
+/* Showcase card of the Systems and Collections rows (user request
+ * 2026-10-10: the content first). The games themselves, as a fanned stack
+ * of up to three covers on the right over a wash of the system colour
+ * (collections: the primary colour); name and count on the left over a
+ * fade of the card face. Without covers the platform glyph stands in.
+ * New Collection (kind 1) is a tonal card with a plus. Cached in a layer
+ * like the other cards: nothing in here animates. */
+component HomeShowcaseView inherits Rectangle {
+    in property <HomeCard> card;
+    in property <bool> focused: false;
+    in property <float> s: 1.0;
+
+    property <length> radius: Shape.large;
+    property <color> tint: root.card.kind == 3 ? root.card.accent : Theme.primary;
+    property <color> face: root.focused ? Theme.secondary-container : Theme.surface-container;
+    property <length> pad: 12px * root.s;
+    property <length> cover-h: root.height - 2 * root.pad;
+    property <length> cover-w: root.cover-h * 0.76;
+    property <length> step: root.cover-w * 0.5;
+    property <length> front-x: root.width - root.pad - root.cover-w;
+    property <color> ink: root.focused ? Theme.on-secondary-container : Theme.text;
+
+    background: #00000000;
+
+    Rectangle {
+        width: parent.width; height: parent.height;
+        border-radius: root.radius;
+        background: root.face;
+        clip: true;
+
+        /* Colour wash from the top right. */
+        Rectangle {
+            width: parent.width; height: parent.height;
+            background: @linear-gradient(225deg, root.tint.transparentize(root.card.kind == 1 ? 0.88 : 0.42) 0%,
+                root.tint.transparentize(0.86) 55%, root.tint.transparentize(1.0) 100%);
+        }
+
+        /* The stack: back covers first, each a little smaller and lower,
+         * dimmed by a scrim. */
+        if root.card.previews > 2: Rectangle {
+            x: root.front-x - 2 * root.step; y: root.pad + root.cover-h * 0.12;
+            width: root.cover-w * 0.84; height: root.cover-h * 0.84;
+            Image { width: parent.width; height: parent.height; source: root.card.p2; image-fit: contain; vertical-alignment: bottom; }
+            Rectangle { width: parent.width; height: parent.height; border-radius: Shape.medium; background: root.face.transparentize(0.6); }
+        }
+        if root.card.previews > 1: Rectangle {
+            x: root.front-x - root.step; y: root.pad + root.cover-h * 0.06;
+            width: root.cover-w * 0.92; height: root.cover-h * 0.92;
+            Image { width: parent.width; height: parent.height; source: root.card.p1; image-fit: contain; vertical-alignment: bottom; }
+            Rectangle { width: parent.width; height: parent.height; border-radius: Shape.medium; background: root.face.transparentize(0.82); }
+        }
+        if root.card.previews > 0: Image {
+            x: root.front-x; y: root.pad;
+            width: root.cover-w; height: root.cover-h;
+            source: root.card.p0;
+            image-fit: contain;
+            vertical-alignment: bottom;
+        }
+        /* No covers yet: the platform glyph / collection stack / plus. */
+        if root.card.previews == 0 && root.card.kind == 3: Image {
+            property <length> d: root.cover-h * 0.62;
+            x: root.width - root.pad - self.d - root.cover-w * 0.12; y: (parent.height - self.d) / 2;
+            width: self.d; height: self.d;
+            source: root.card.has-cover ? root.card.cover : @image-url("assets/icons/gamepad.svg");
+            image-fit: contain;
+            colorize: root.tint.transparentize(0.25);
+        }
+        if root.card.previews == 0 && root.card.kind == 2: HomeCollectionGlyph {
+            property <length> d: root.cover-h * 0.5;
+            x: root.width - root.pad - self.d - root.cover-w * 0.18; y: (parent.height - self.d) / 2;
+            width: self.d; height: self.d * 0.92;
+            ink: root.tint.transparentize(0.25);
+        }
+        if root.card.kind == 1: Rectangle {
+            property <length> d: min(root.cover-h * 0.56, 72px * root.s);
+            x: root.width - root.pad - self.d - root.cover-w * 0.15; y: (parent.height - self.d) / 2;
+            width: self.d; height: self.d;
+            border-radius: self.d / 2;
+            background: root.focused ? Theme.primary : Theme.primary-container;
+            HomePlusGlyph {
+                x: parent.width * 0.3; y: parent.height * 0.3;
+                width: parent.width * 0.4; height: parent.height * 0.4;
+                ink: root.focused ? Theme.on-primary : Theme.on-primary-container;
+            }
+        }
+
+        /* Fade of the face under the text. */
+        Rectangle {
+            width: parent.width * 0.58; height: parent.height;
+            background: @linear-gradient(90deg, root.face.transparentize(0.05) 0%, root.face.transparentize(0.35) 50%, root.face.transparentize(1.0) 100%);
+            visible: root.card.previews > 0;
+        }
+
+        /* Identity: icon well, then name and count at the bottom. */
+        if root.card.kind == 3 || root.card.kind == 2: Rectangle {
+            x: root.pad; y: root.pad;
+            width: 30px * root.s; height: self.width;
+            border-radius: Shape.medium;
+            background: root.tint.transparentize(root.focused ? 0.15 : 0.35);
+            if root.card.kind == 3 && root.card.has-cover: Image {
+                x: parent.width * 0.18; y: parent.height * 0.18;
+                width: parent.width * 0.64; height: parent.height * 0.64;
+                source: root.card.cover;
+                image-fit: contain;
+                colorize: #ffffff;
+            }
+            if root.card.kind == 2: HomeCollectionGlyph {
+                x: parent.width * 0.22; y: parent.height * 0.24;
+                width: parent.width * 0.56; height: parent.height * 0.52;
+                ink: #ffffff;
+            }
+        }
+        VerticalLayout {
+            x: root.pad; y: parent.height * 0.42;
+            width: (root.card.previews > 0 ? root.front-x - root.step : root.width * 0.62) - root.pad;
+            height: parent.height * 0.58 - root.pad * 0.6;
+            alignment: end;
+            spacing: 1px;
+            Text {
+                text: root.card.title;
+                wrap: word-wrap;
+                overflow: elide;
+                max-height: 2 * 23px * root.s;
+                vertical-alignment: bottom;
+                color: root.ink;
+                font-size: 18px * root.s;
+                font-weight: 700;
+            }
+            if root.card.detail != "": Text {
+                text: root.card.detail;
+                overflow: elide;
+                color: root.focused ? Theme.on-secondary-container.transparentize(0.2) : Theme.text-secondary;
+                font-size: 14px * root.s;
+            }
+        }
+    }
+}
+
 /* Section title; the selected section carries the nuubOS blue bar. */
 component HomeSectionTitle inherits Rectangle {
     in property <string> label;
@@ -1442,9 +1660,13 @@ component HomeInfoChip inherits Rectangle {
     in property <float> s: 1.0;
 
     property <color> ink: root.warn ? Theme.warning : root.dimmed ? Theme.text-secondary : Theme.text;
+    property <length> lead: (root.has-icon || root.has-dot ? 28px : 11px) * root.s;
     height: 30px * root.s;
-    /* Same margin right as left of the content (11 px). */
-    width: label.preferred-width + (root.has-icon || root.has-dot ? 39px : 22px) * root.s;
+    /* Same margin right as left of the content (11 px); a row too narrow
+     * for every chip shrinks them down to min-width, eliding the label. */
+    preferred-width: measure.preferred-width + root.lead + 11px * root.s;
+    min-width: min(self.preferred-width, root.lead + 56px * root.s);
+    max-width: self.preferred-width;
     border-radius: self.height / 2;
     background: root.warn ? Theme.warning.transparentize(0.86) : Theme.surface-container-high.transparentize(0.2);
 
@@ -1461,14 +1683,22 @@ component HomeInfoChip inherits Rectangle {
         colorize: root.warn ? Theme.warning : Theme.text-secondary;
         image-fit: contain;
     }
-    label := Text {
-        x: (root.has-icon || root.has-dot ? 28px : 11px) * root.s;
+    measure := Text {
+        visible: false;
+        text: root.text;
+        font-size: 14px * root.s;
+        font-weight: 500;
+    }
+    Text {
+        x: root.lead;
         y: 0; height: parent.height;
+        width: max(0px, parent.width - self.x - 11px * root.s);
         text: root.text;
         color: root.ink;
         font-size: 14px * root.s;
         font-weight: 500;
         vertical-alignment: center;
+        overflow: elide;
     }
 }
 
@@ -1481,40 +1711,34 @@ component HomeInfoPanel inherits Rectangle {
     in property <string> unavailable-label;
     in property <float> s: 1.0;
     in property <bool> dimmed: false;
-    /* One line (library grid, user request 2026-10-09: more room for the
-     * covers): title on the left, chips or notice right-aligned. */
-    in property <bool> compact: false;
     property <length> line-h: 30px * root.s;
-    property <length> side-w: min(chip-row.preferred-width, root.width * 0.62);
 
     background: #00000000;
     MarqueeText {
-        x: 0;
-        y: root.compact ? (parent.height - self.height) / 2 : 0;
-        width: root.compact ? max(0px, parent.width - root.side-w - 16px * root.s) : parent.width;
-        height: root.compact ? 28px * root.s : 32px * root.s;
+        x: 0; y: 0;
+        width: parent.width;
+        height: 32px * root.s;
         label: root.card.title;
         active: !root.dimmed;
         text-color: root.dimmed ? Theme.text-secondary : Theme.text;
-        text-size: root.compact ? 20px * root.s : 24px * root.s;
+        text-size: 24px * root.s;
         text-weight: 700;
     }
     if root.notice != "": MarqueeText {
-        x: root.compact ? parent.width - self.width : 0;
-        y: root.compact ? (parent.height - root.line-h) / 2 : 38px * root.s;
-        width: root.compact ? root.width * 0.5 : parent.width; height: root.line-h;
-        align-right: root.compact;
+        x: 0; y: 38px * root.s;
+        width: parent.width; height: root.line-h;
         label: root.notice;
         active: true;
         text-color: #ffc94a;
         text-size: 15px * root.s;
         text-weight: 500;
     }
+    /* Chips shrink (eliding their label) instead of being cut when a
+     * long system name does not leave room for all of them. */
     Rectangle {
         visible: root.notice == "";
-        x: root.compact ? parent.width - self.width : 0;
-        y: root.compact ? (parent.height - root.line-h) / 2 : 38px * root.s;
-        width: root.compact ? root.side-w : parent.width; height: root.line-h;
+        x: 0; y: 38px * root.s;
+        width: parent.width; height: root.line-h;
         clip: true;
         chip-row := HorizontalLayout {
             alignment: start;
@@ -1656,6 +1880,8 @@ component HomeRow inherits Rectangle {
     in property <bool> active: false;
     in property <length> card-h;
     in property <length> chip-w: 0px;
+    /* Systems / Collections: showcase cards of this width. */
+    in property <length> show-w: 0px;
     in property <length> label-h;
     in property <length> info-h: 0px;
     in property <length> pad;
@@ -1670,12 +1896,14 @@ component HomeRow inherits Rectangle {
     in property <int> empty-icon: 0;
 
     property <bool> empty: root.cards.length == 0;
-    property <bool> chips: root.chip-w > 0px;
-    property <length> focus-x: root.chips ? root.index * (root.chip-w + root.gap)
+    property <bool> show: root.show-w > 0px;
+    property <bool> chips: root.chip-w > 0px || root.show;
+    property <length> slot-w: root.show ? root.show-w : root.chip-w;
+    property <length> focus-x: root.chips ? root.index * (root.slot-w + root.gap)
         : root.cards[root.index].x-units * root.card-h + root.index * root.gap;
     property <HomeCard> last: root.cards[root.cards.length - 1];
     property <HomeCard> focused: root.cards[root.index];
-    property <length> total-w: root.chips ? root.cards.length * (root.chip-w + root.gap) - root.gap
+    property <length> total-w: root.chips ? root.cards.length * (root.slot-w + root.gap) - root.gap
         : (root.last.x-units + root.last.aspect) * root.card-h + (root.cards.length - 1) * root.gap;
     property <length> h-scroll: max(0px, min(root.focus-x, root.total-w - (root.width - 2 * root.pad)));
     /* Info shows in the title bar when this row has no info panel. */
@@ -1705,9 +1933,9 @@ component HomeRow inherits Rectangle {
             animate x { duration: 260ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
 
             for card[i] in root.cards: Rectangle {
-                x: root.chips ? i * (root.chip-w + root.gap) : card.x-units * root.card-h + i * root.gap;
+                x: root.chips ? i * (root.slot-w + root.gap) : card.x-units * root.card-h + i * root.gap;
                 y: 0;
-                width: root.chips ? root.chip-w : card.aspect * root.card-h;
+                width: root.chips ? root.slot-w : card.aspect * root.card-h;
                 height: root.card-h;
                 background: #00000000;
 
@@ -1725,7 +1953,14 @@ component HomeRow inherits Rectangle {
                     focused: card.focused;
                     unavailable-label: root.unavailable-label;
                 }
-                if root.chips: HomeTileView {
+                if root.show: HomeShowcaseView {
+                    width: parent.width; height: parent.height;
+                    cache-rendering-hint: true;
+                    card: card;
+                    focused: card.focused;
+                    s: root.s;
+                }
+                if root.chips && !root.show: HomeTileView {
                     width: parent.width; height: parent.height;
                     cache-rendering-hint: true;
                     draw-ring: false;
@@ -1806,7 +2041,9 @@ export struct DetailChip {
  * 1 star, 2 collections, 3 settings, 4 get metadata, 5 update metadata,
  * 6 accept, 7 reject, 8 BIOS, 9 reset, 10 delete, 11 players, 12 time,
  * 13 warning, 14 star outline, 15 more, 16 working, 17 search; nuubOS
- * own geometry: 18 PC, 19 add. */
+ * own geometry: 18 PC, 19 add; Font Awesome again: 20 folder, 21 file,
+ * 22 image, 23 music, 24 film, 25 hard drive, 26 network, 27 SD card,
+ * 28 archive, 29 palette, 30 new folder, 31 paste, 32 server, 33 TV. */
 component DetailIcon inherits Image {
     in property <int> icon;
     in property <color> ink;
@@ -1829,6 +2066,20 @@ component DetailIcon inherits Image {
         : root.icon == 17 ? @image-url("assets/icons/magnifying-glass.svg")
         : root.icon == 18 ? @image-url("assets/icons/desktop.svg")
         : root.icon == 19 ? @image-url("assets/icons/plus.svg")
+        : root.icon == 20 ? @image-url("assets/icons/folder.svg")
+        : root.icon == 21 ? @image-url("assets/icons/file.svg")
+        : root.icon == 22 ? @image-url("assets/icons/image.svg")
+        : root.icon == 23 ? @image-url("assets/icons/music.svg")
+        : root.icon == 24 ? @image-url("assets/icons/film.svg")
+        : root.icon == 25 ? @image-url("assets/icons/hard-drive.svg")
+        : root.icon == 26 ? @image-url("assets/icons/network-wired.svg")
+        : root.icon == 27 ? @image-url("assets/icons/sd-card.svg")
+        : root.icon == 28 ? @image-url("assets/icons/box-archive.svg")
+        : root.icon == 29 ? @image-url("assets/icons/palette.svg")
+        : root.icon == 30 ? @image-url("assets/icons/folder-plus.svg")
+        : root.icon == 31 ? @image-url("assets/icons/paste.svg")
+        : root.icon == 32 ? @image-url("assets/icons/server.svg")
+        : root.icon == 33 ? @image-url("assets/icons/tv.svg")
         : @image-url("assets/icons/circle-notch.svg");
     colorize: root.ink;
     image-fit: contain;
@@ -1847,7 +2098,7 @@ component DetailActionButton inherits Rectangle {
     property <color> ink: !root.action.enabled ? Theme.text-disabled
         : root.action.armed ? Theme.on-error-container
         : root.action.primary ? (root.focused ? Theme.on-primary : Theme.on-primary-container)
-        : root.action.on ? #ffc94a
+        : root.action.on ? Theme.primary
         : root.focused ? Theme.on-secondary-container
         : Theme.text-secondary;
 
@@ -2300,13 +2551,18 @@ component AppPage inherits Rectangle {
             y: 12px - root.list-scroll;
             width: parent.width; height: root.entries.length * root.row-step;
             animate y { duration: 260ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
-            for entry[i] in root.entries: AppEntryRow {
+            /* Only rows near the focus exist: a Files folder can hold
+             * hundreds of entries (cards keep their layer until destroyed). */
+            for entry[i] in root.entries: Rectangle {
                 x: root.pad; y: i * root.row-step;
                 width: parent.width - 2 * root.pad; height: root.row-h;
-                cache-rendering-hint: true;
-                entry: entry;
-                focused: root.entry-focus == i;
-                s: root.s;
+                if abs(i - max(0, root.entry-focus)) <= ceil(root.list-h / root.row-step) + 1: AppEntryRow {
+                    width: parent.width; height: parent.height;
+                    cache-rendering-hint: true;
+                    entry: entry;
+                    focused: root.entry-focus == i;
+                    s: root.s;
+                }
             }
         }
     }
@@ -2412,7 +2668,7 @@ export component HomeWindow inherits Window {
     callback splash-size-changed();
     changed width => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
     changed height => { if (root.curtain-progress < 0.999) { root.splash-size-changed(); } }
-    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Automatic Backup", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Back Up Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Back Up to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores power, display, audio, backup and controller mapping settings to their defaults.", "Games, BIOS, saves, users and network settings are kept.", "Press again to reset system settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Solid", "Breathing", "Orbit", "Aurora", "Spectrum", "Battery Level", "Console Colors", "Speed", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Effect", "Brightness", "Color", "SYSTEM SIGNALS", "LIGHTING", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "Slow", "Normal", "Fast", "Startup & Sleep", "Connections", "Games", "Tasks", "Welcome, sleep, wake and power off", "Low battery, charging and full charge", "Controllers, headphones, Wi-Fi and USB drives", "Save states, screenshots and errors", "Downloads, backups and failures", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Theme", "Default theme", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch Advanced", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Save Diagnostic Report", "Saving diagnostic report…", "Report saved", "The report could not be saved", "Useful for getting help. It contains no games, saves, passwords or Wi-Fi keys and is saved in the diagnostics folder.", "Repair Settings", "Check complete", "The operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Full Factory Reset", "Finds and fixes damaged settings files. Games and saves are not touched.", "Resets the current user's preferences, controls and app settings. Saves are kept. The console restarts.", "Erases users, settings, Wi-Fi networks and Bluetooth pairings, then starts the initial setup. Games and BIOS are kept.", "Like Factory Reset, and also erases every user's saves, states, screenshots and app data. Games and BIOS are kept.", "Press again to confirm • the console restarts", "Press once more to also erase all saves", "Safe Mode", "The interface closed unexpectedly several times. nuubOS started with the default theme so you can fix the problem.", "Restart Normally", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Integer Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Diagnostic report", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in as root with the device password", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Theme", "Theme installed", "This is not a valid nuubOS theme", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY", "Connect with WPS", "Cancel WPS", "Press the WPS button on your router…", "WPS timed out. Press the router button and try again.", "Several routers are in WPS mode. Try again in a few minutes.", "WPS failed: {0}", "WPS connection failed", "Leaves safe mode and restarts with your theme and settings.", "Connect to Wi-Fi or turn on Remote Services to get help remotely. Back returns here.", "Nothing played yet", "Your adventure log is a blank page. Pick a game and write chapter one!", "Fresh save file", "No games played so far. The controller is warmed up and ready.", "Player 1, ready?", "Your recently played games will appear here. Go make some history!", "Zero high scores… for now", "Start any game and it will be waiting right here for you.", "This shelf is gathering dust", "Insert coin… or better, some games", "The arcade is quiet. Too quiet.", "Nothing to launch yet", "Applications you add will appear here.", "SERVICES", "DISPLAY", "AUDIO", "SOUNDS", "POWER", "STORAGE & SOFTWARE", "TROUBLESHOOTING", "CONTROLLERS", "RUMBLE & LIGHTING", "Saved Backups", "Backup deleted", "The backup could not be deleted", "Network name (SSID)", "Press together to exit", "Lights up only for system signals", "One steady color", "Slowly fades in and out", "A comet of light circles the stick", "Soft shades drift around the ring", "Every color, slowly turning", "Charge left at a glance, pulses while charging", "The color of the system you are playing", "Theme Color", "Cyan", "Mint", "Lime", "Amber", "Orange", "Red", "Pink", "Violet", "White", "Custom", "YOUR SYSTEMS", "OTHER SYSTEMS", "Start Game", "Continue", "Start from the Beginning", "Automatic Save", "Saved {0}", "Console Boot Screens", "Shows the console's start-up logo when its BIOS is available", "Save State Slots", "Rotate Save Slots", "Each save goes to the next slot, then starts again from slot 0", "Game Hotkeys", "Hold Hotkey and press a button", "Performance Overlay", "Bezels", "Frames the game when it does not fill the screen", "CRT Effect", "Scanlines for consoles played on TVs", "Next Slot", "Previous Slot", "Fast Forward", "Show Overlay", "Frame Rate", "Temperature", "Power Draw", "Battery", "Clock", "Empty", "{0}%", "The metadata service is busy, try again later", "Uppercase", "Metadata Source", "Covers, screenshots, descriptions and ratings in your language. A free ScreenScraper account gives more requests.", "Covers, screenshots and descriptions in English. A free private API key gives more requests.", "Covers and screenshots only. No account needed.", "TheGamesDB API Key", "Not set", "Fill Missing Data", "Adds only what is missing, such as covers or descriptions. What is already there is kept.", "Search Name", "Searched as \"{0}\". Change it if the game is not found or the match is wrong.", "Source: {0}", "Optional: more requests per day", "Scan for New Games", "Finds games copied to the SD card since the last scan", "New games found: {0}", "No new games found", "BACKGROUND TASK", "Stop", "Stopping…", "Starting game…"];
+    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Automatic Backup", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Back Up Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Back Up to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores power, display, audio, backup and controller mapping settings to their defaults.", "Games, BIOS, saves, users and network settings are kept.", "Press again to reset system settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Solid", "Breathing", "Orbit", "Aurora", "Spectrum", "Battery Level", "Console Colors", "Speed", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Effect", "Brightness", "Color", "SYSTEM SIGNALS", "LIGHTING", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "Slow", "Normal", "Fast", "Startup & Sleep", "Connections", "Games", "Tasks", "Welcome, sleep, wake and power off", "Low battery, charging and full charge", "Controllers, headphones, Wi-Fi and USB drives", "Save states, screenshots and errors", "Downloads, backups and failures", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Mood", "Default mood", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Save Diagnostic Report", "Saving diagnostic report…", "Report saved", "The report could not be saved", "Useful for getting help. It contains no games, saves, passwords or Wi-Fi keys and is saved in the diagnostics folder.", "Repair Settings", "Check complete", "The operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Full Factory Reset", "Finds and fixes damaged settings files. Games and saves are not touched.", "Resets the current user's preferences, controls and app settings. Saves are kept. The console restarts.", "Erases users, settings, Wi-Fi networks and Bluetooth pairings, then starts the initial setup. Games and BIOS are kept.", "Like Factory Reset, and also erases every user's saves, states, screenshots and app data. Games and BIOS are kept.", "Press again to confirm • the console restarts", "Press once more to also erase all saves", "Safe Mode", "The interface closed unexpectedly several times. nuubOS started with the default theme so you can fix the problem.", "Restart Normally", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Integer Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Diagnostic report", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in as root with the device password", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Mood", "Mood installed", "This is not a valid nuubOS mood", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY", "Connect with WPS", "Cancel WPS", "Press the WPS button on your router…", "WPS timed out. Press the router button and try again.", "Several routers are in WPS mode. Try again in a few minutes.", "WPS failed: {0}", "WPS connection failed", "Leaves safe mode and restarts with your theme and settings.", "Connect to Wi-Fi or turn on Remote Services to get help remotely. Back returns here.", "Nothing played yet", "Your adventure log is a blank page. Pick a game and write chapter one!", "Fresh save file", "No games played so far. The controller is warmed up and ready.", "Player 1, ready?", "Your recently played games will appear here. Go make some history!", "Zero high scores… for now", "Start any game and it will be waiting right here for you.", "This shelf is gathering dust", "Insert coin… or better, some games", "The arcade is quiet. Too quiet.", "Nothing to launch yet", "Applications you add will appear here.", "SERVICES", "DISPLAY", "AUDIO", "SOUNDS", "POWER", "STORAGE & SOFTWARE", "TROUBLESHOOTING", "CONTROLLERS", "RUMBLE & LIGHTING", "Saved Backups", "Backup deleted", "The backup could not be deleted", "Network name (SSID)", "Press together to exit", "Lights up only for system signals", "One steady color", "Slowly fades in and out", "A comet of light circles the stick", "Soft shades drift around the ring", "Every color, slowly turning", "Charge left at a glance, pulses while charging", "The color of the system you are playing", "Mood Color", "Cyan", "Mint", "Lime", "Amber", "Orange", "Red", "Pink", "Violet", "White", "Custom", "YOUR SYSTEMS", "OTHER SYSTEMS", "Start Game", "Continue", "Start from the Beginning", "Automatic Save", "Saved {0}", "Console Boot Screens", "Shows the console's start-up logo when its BIOS is available", "Save State Slots", "Rotate Save Slots", "Each save goes to the next slot, then starts again from slot 0", "Game Hotkeys", "Hold Hotkey and press a button", "Performance Overlay", "Bezels", "Frames the game when it does not fill the screen", "CRT Effect", "Scanlines for consoles played on TVs", "Next Slot", "Previous Slot", "Fast Forward", "Show Overlay", "Frame Rate", "Temperature", "Power Draw", "Battery", "Clock", "Empty", "{0}%", "The metadata service is busy, try again later", "Uppercase", "Metadata Source", "Covers, screenshots, descriptions and ratings in your language. A free ScreenScraper account gives more requests.", "Covers, screenshots and descriptions in English. A free private API key gives more requests.", "Covers and screenshots only. No account needed.", "TheGamesDB API Key", "Not set", "Fill Missing Data", "Adds only what is missing, such as covers or descriptions. What is already there is kept.", "Search Name", "Searched as \"{0}\". Change it if the game is not found or the match is wrong.", "Source: {0}", "Optional: more requests per day", "Scan for New Games", "Finds games copied to the SD card since the last scan", "New games found: {0}", "No new games found", "BACKGROUND TASK", "Stop", "Stopping…", "Starting game…", "Muted", "Power", "BATTERY", "ACCESSORY BATTERIES", "Charge", "Battery Health", "Discharging", "Not charging", "Good", "Overheating", "Too cold", "Worn out", "Check the battery", "No accessories connected", "ENERGY SAVING", "Find a Game", "Find", "Random Game", "Random Unplayed Game", "Title", "Decade", "Any", "Never Played Only", "Show Results ({0})", "No games match these filters", "Results", "Add to Collection", "Delete Collection", "Systems", "SURPRISE ME", "SEARCH", "Rename Collection", "Clear Filters", "Picks one of your games for you", "Added to {0}", "Removed from {0}", "Collection deleted", "Manage", "Games stay in your library; only the collection goes away", "Notification Sounds", "Automatic Updates", "Restore Version {0}", "The new version did not start", "Version {0} restored", "New versions install when you open Steam Link; one that does not start is undone automatically", "VIDEO", "PC", "Audio Channels", "Stereo", "5.1 Surround", "7.1 Surround", "Play Audio on the PC", "Optimize Game Settings", "Lets the PC adapt the game to the stream resolution", "Quit the App on the PC After Streaming", "Left and right change it", "Metadata in Your Language", "Gets descriptions and genres in your language; the languages already downloaded stay saved", "Every game with missing data", "Not tried in the last hour", "Not tried in the last day", "Not tried in the last week", "Not tried in the last month", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Day", "Month", "Year", "Hour", "Minute"];
 
     in-out property <string> topbar-time: "--:--";
     in-out property <string> current-user-name: root.i18n-strings[204];
@@ -2421,6 +2677,8 @@ export component HomeWindow inherits Window {
     in-out property <string> wifi-state: "disconnected";
     in-out property <int> battery-percent: -1;
     in-out property <string> battery-state: "unknown";
+    /* statusd BATTERY_HEALTH (power_supply health, lowercase-dashed). */
+    in-out property <string> battery-health: "unknown";
     in-out property <string> battery-label: "--%";
     /* Connected external controllers in player order (Controllers service). */
     in-out property <[TopbarController]> topbar-controllers: [];
@@ -2429,15 +2687,39 @@ export component HomeWindow inherits Window {
     in-out property <bool> settings-open: false;
 
     /* Home (EPIC-001) and Game Library browsing (EPIC-011), fed by
-     * nuubos-libraryd. home-row: 0 Recently Played, 1 Systems &
-     * Collections, 2 Applications; each row remembers its own position. */
+     * nuubos-libraryd. home-row: 0 Recently Played, 1 Systems,
+     * 2 Collections (ends with New Collection), 3 Applications; each row
+     * remembers its own position. */
     in-out property <[HomeCard]> home-recent: [];
-    in-out property <[HomeCard]> home-shelf: [];
+    in-out property <[HomeCard]> home-systems: [];
+    in-out property <[HomeCard]> home-collections: [];
     in-out property <[HomeCard]> home-apps: [];
     in-out property <int> home-row: 0;
     in-out property <int> home-recent-index: 0;
-    in-out property <int> home-shelf-index: 0;
+    in-out property <int> home-systems-index: 0;
+    in-out property <int> home-collections-index: 0;
     in-out property <int> home-apps-index: 0;
+    /* Home modal sheet (Add to Collection, Manage): a list of choices,
+     * check = -1 none, 0 off, 1 on; armed = waiting for the confirming
+     * press (prompt in detail). */
+    /* Find a Game (Select on Home, user request 2026-10-10): a Home view,
+     * zones 0 search bar, 1 filter chips, 2 results strip, 3 surprise
+     * buttons. findui.rs owns the state. */
+    in-out property <bool> find-open: false;
+    in-out property <int> find-zone: 0;
+    in-out property <string> find-query: "";
+    in-out property <[FindChip]> find-chips: [];
+    in-out property <int> find-chip-index: 0;
+    in-out property <[HomeCard]> find-results: [];
+    in-out property <int> find-result-index: 0;
+    in-out property <string> find-status: "";
+    in-out property <int> find-surprise-index: 0;
+    in-out property <bool> home-sheet-open: false;
+    in-out property <string> home-sheet-title: "";
+    in-out property <[HomeSheetItem]> home-sheet-items: [];
+    in-out property <int> home-sheet-index: 0;
+    in-out property <int> home-sheet-scroll: 0;
+    out property <int> home-sheet-visible-rows: max(3, min(7, floor((root.height - 200px) / 52px)));
     in-out property <bool> library-scanning: false;
     /* Picks the playful message of empty Home sections (Rust, per session
      * / user switch). */
@@ -2490,22 +2772,33 @@ export component HomeWindow inherits Window {
          - root.home-bottom-pad) / 2));
     property <length> home-chip-w: max(200px * root.home-s, min(300px * root.home-s,
         (root.width - 2 * root.home-pad) / 2.3));
+    /* Systems and Collections showcase cards: the games inside take most
+     * of the card (user request 2026-10-10). */
+    property <length> home-show-h: max(110px, min(root.home-rows-h * 0.42, 260px * root.home-s));
+    property <length> home-show-w: min(root.home-show-h * 1.75, (root.width - 2 * root.home-pad) * 0.86);
     property <length> home-y1: root.home-label-h + root.home-big-h + root.home-info-h + root.home-section-gap;
-    property <length> home-y2: root.home-y1 + root.home-label-h + root.home-chip-h + root.home-section-gap;
-    property <length> home-total-h: root.home-y2 + root.home-label-h + root.home-chip-h + root.home-bottom-pad;
+    property <length> home-y2: root.home-y1 + root.home-label-h + root.home-show-h + root.home-section-gap;
+    property <length> home-y3: root.home-y2 + root.home-label-h + root.home-show-h + root.home-section-gap;
+    property <length> home-total-h: root.home-y3 + root.home-label-h + root.home-chip-h + root.home-bottom-pad;
     property <length> home-max-scroll: max(0px, root.home-total-h - root.home-rows-h);
+    /* A section stops one edge fade below the top, so the fade never
+     * dims its title (it covers the end of the section above). */
+    property <length> home-fade-h: 20px * root.home-s;
     property <length> home-v-scroll: root.home-row == 0 ? 0px
-        : min(root.home-row == 1 ? root.home-y1 : root.home-y2, root.home-max-scroll);
+        : max(0px, min((root.home-row == 1 ? root.home-y1 : root.home-row == 2 ? root.home-y2 : root.home-y3)
+            - root.home-fade-h, root.home-max-scroll));
     /* System / collection page: a header with the platform's identity. */
-    /* Compact header and one-line info bar (user request 2026-10-09:
-     * they took too much of the grid's height). */
-    property <length> library-head-h: 44px * root.home-s;
-    property <length> library-info-h: 46px * root.home-s;
-    property <length> library-view-h: root.home-rows-h - root.library-head-h - root.library-info-h;
+    /* Compact header; the info panel (title and chips on two lines like
+     * the Home) opens right under the focused row, the rows below move
+     * down by library-info-h (user request 2026-10-10). */
+    property <length> library-head-h: 42px * root.home-s;
+    property <length> library-info-h: 78px * root.home-s;
+    property <length> library-view-h: root.home-rows-h - root.library-head-h;
     /* Grid density: about one column per 320 logical px (2 on handhelds,
-     * up to 5 on wide screens); a cover uses up to 82 % of the grid height. */
+     * up to 5 on wide screens); a cover uses up to 82 % of the height
+     * left by the info panel, so the next row peeks in. */
     property <int> library-target-columns: max(2, min(5, round(root.width / 320px)));
-    property <length> library-cell-h: max(110px, min(root.library-view-h * 0.82,
+    property <length> library-cell-h: max(110px, min((root.library-view-h - root.library-info-h) * 0.82,
         ((root.width - 2 * root.home-pad + root.home-gap) / root.library-target-columns - root.home-gap)
         / root.library-aspect));
     property <length> library-cell-w: root.library-cell-h * root.library-aspect;
@@ -2517,12 +2810,16 @@ export component HomeWindow inherits Window {
     out property <int> library-visible-rows: max(1, ceil(root.library-view-h
         / (root.library-cell-h + root.home-gap)));
     property <HomeCard> home-focused: root.library-open ? root.library-games[root.library-index]
+        : root.find-open ? root.find-results[root.find-result-index]
         : root.home-row == 0 ? root.home-recent[root.home-recent-index]
-        : root.home-row == 1 ? root.home-shelf[root.home-shelf-index]
+        : root.home-row == 1 ? root.home-systems[root.home-systems-index]
+        : root.home-row == 2 ? root.home-collections[root.home-collections-index]
         : root.home-apps[root.home-apps-index];
     property <bool> home-focus-valid: root.library-open ? root.library-games.length > 0
+        : root.find-open ? root.find-zone == 2 && root.find-results.length > 0
         : root.home-row == 0 ? root.home-recent.length > 0
-        : root.home-row == 1 ? root.home-shelf.length > 0
+        : root.home-row == 1 ? root.home-systems.length > 0
+        : root.home-row == 2 ? root.home-collections.length > 0
         : root.home-apps.length > 0;
     in-out property <int> settings-selected-index: 0;
     in-out property <int> general-index: 0;
@@ -2570,6 +2867,11 @@ export component HomeWindow inherits Window {
     in-out property <bool> automatic-time: true;
     in-out property <string> manual-date-label: "---- -- --";
     in-out property <string> manual-time-label: "--:--";
+    /* Manual Date & Time picker (datetime.rs): Day, Month, Year, Hour, Minute. */
+    in-out property <bool> datetime-picker-open: false;
+    in-out property <int> datetime-field-index: 0;
+    in-out property <[DateTimeField]> datetime-fields: [];
+    in-out property <string> datetime-preview: "";
     in-out property <string> keyboard-layout-code: "us";
     in-out property <string> keyboard-layout-label: "English (US)";
     in-out property <string> last-time-sync-label: "Never";
@@ -2703,6 +3005,7 @@ export component HomeWindow inherits Window {
     in-out property <int> system-sounds-volume: 60;
     in-out property <bool> navigation-sounds-enabled: true;
     in-out property <bool> power-sounds-enabled: true;
+    in-out property <bool> notify-sounds-enabled: true;
     in-out property <int> home-music-volume: 60;
     in-out property <int> display-audio-scroll-offset: 0;
     /* Display & Audio sections (user request 2026-10-08): DISPLAY
@@ -2718,20 +3021,24 @@ export component HomeWindow inherits Window {
      * rendered while the category rail owns focus and after entering it. */
     in-out property <int> system-index: 0;
     in-out property <int> system-scroll-offset: 0;
-    /* System sections: POWER (0-4), STORAGE & SOFTWARE (5 Storage,
-     * 6 Software Update, 7 System Information) and TROUBLESHOOTING
-     * (8 Diagnostics, 9 Recovery, 10 Reset System Settings). */
-    out property <int> system-storage-start: 5;
-    out property <int> system-support-start: 8;
+    /* System sections: STORAGE & SOFTWARE (0 Storage, 1 Software Update,
+     * 2 System Information) and TROUBLESHOOTING (3 Diagnostics, 4 Recovery).
+     * Power has its own category (settings-view 69). */
+    out property <int> system-storage-start: 0;
+    out property <int> system-support-start: 3;
+    /* Power (category 5, settings-view 69): POWER (0-2), BATTERY (3-4),
+     * CONNECTED DEVICES (from 5; one "none" row when empty). */
+    in-out property <int> power-index: 0;
+    in-out property <int> power-scroll-offset: 0;
+    in-out property <[PowerDevice]> power-devices: [];
+    out property <int> power-battery-start: 3;
+    out property <int> power-devices-start: 5;
     in-out property <string> system-version: root.i18n-strings[205];
     in-out property <string> system-build: root.i18n-strings[205];
     in-out property <string> system-profile: "auto";
     in-out property <string> system-effective-profile: "auto";
     in-out property <int> system-auto-battery-threshold: 0;
-    in-out property <int> system-screensaver-after-min: 0;
     in-out property <int> system-sleep-after-min: 0;
-    in-out property <int> system-poweroff-after-min: 0;
-    in-out property <bool> system-rtc-wakeup: false;
     in-out property <string> system-cpu-clock: root.i18n-strings[205];
     in-out property <string> system-gpu-clock: root.i18n-strings[205];
     in-out property <string> system-cpu-temperature: root.i18n-strings[205];
@@ -2759,7 +3066,6 @@ export component HomeWindow inherits Window {
     in-out property <string> system-storage-job-action: "none";
     in-out property <int> system-storage-job-exit: 0;
     in-out property <bool> system-storage-confirm: false;
-    in-out property <bool> system-reset-confirm: false;
     /* Diagnostics (27) and Recovery (28): the product service is
      * nuubos-recoveryctl / nuubos-diag, the UI only requests actions.
      * recovery-armed is the row waiting for its confirming press (-1 none);
@@ -2786,6 +3092,9 @@ export component HomeWindow inherits Window {
     in-out property <bool> details-active: false;
     /* Game Details page (settings-view 50): see GameDetailsPage. */
     out property <bool> details-page: root.details-active && root.settings-view == 50;
+    /* Generic-row pages: 50-67, 70 Find a Game and 71 Collections. */
+    property <bool> gen-view: (root.settings-view >= 50 && root.settings-view <= 67)
+        || root.settings-view == 70 || root.settings-view == 71;
     in-out property <string> details-meta: "";
     in-out property <image> details-backdrop;
     in-out property <bool> details-has-backdrop: false;
@@ -2853,6 +3162,11 @@ export component HomeWindow inherits Window {
     in-out property <string> moonlight-fps-label: "";
     in-out property <string> moonlight-codec-label: "";
     in-out property <string> moonlight-bitrate-label: "";
+    in-out property <float> moonlight-bitrate-fraction: 0;
+    in-out property <string> moonlight-audio-label: "";
+    in-out property <bool> moonlight-local-audio: false;
+    in-out property <bool> moonlight-optimize: true;
+    in-out property <bool> moonlight-quit-app: false;
     /* Row of Remove PC on page 41 (Rust uses the same order). */
     property <int> moonlight-remove-row: root.moonlight-host.paired ? root.moonlight-apps.length : 1;
 
@@ -2886,13 +3200,24 @@ export component HomeWindow inherits Window {
     in-out property <string> app-page-pin;
     in-out property <float> app-page-progress: -1;
     in-out property <string> app-page-progress-label;
-    property <bool> app-page-shown: (root.moonlight-active && (root.settings-view == 40 || root.settings-view == 41))
-        || (root.steamlink-active && root.settings-view == 45);
+    /* Files (58, 60) and Media (65) drawn as application pages from
+     * their generic rows (apppage::gen_page). */
+    in-out property <bool> app-page-gen: false;
+    /* settings-title-view: the page stays behind the keyboard it opened. */
+    property <bool> app-page-shown: (root.moonlight-active && (root.settings-title-view == 40 || root.settings-title-view == 41))
+        || (root.steamlink-active && root.settings-title-view == 45)
+        || (root.app-page-gen && (root.settings-title-view == 58 || root.settings-title-view == 60 || root.settings-title-view == 65));
+    /* Application settings drawn with the Settings rows (Moonlight Stream
+     * Settings 42, Web 67) are full screen like the application page: no
+     * rail, the app's colour and name above the page title (user request
+     * 2026-10-10). */
+    property <bool> app-shell: root.settings-open
+        && ((root.moonlight-active && root.settings-title-view == 42)
+            || (root.details-active && root.details-shell-title != "" && root.settings-title-view == 67));
+    property <string> app-shell-kicker: root.moonlight-active ? root.i18n-strings[435] : root.details-shell-title;
+    property <string> app-shell-meta: root.moonlight-active ? "" : root.details-description;
 
     /* Global lifecycle overlays. Business logic remains in nuubos-systemd. */
-    in-out property <bool> screensaver-active: false;
-    in-out property <int> screensaver-x-permille: 110;
-    in-out property <int> screensaver-y-permille: 170;
 
     /* Settings navigation depth:
      * 0 categories, 1 Connectivity, 2 Wi-Fi connect/scan,
@@ -2923,8 +3248,9 @@ export component HomeWindow inherits Window {
      * has an action for the currently focused row. */
     property <bool> settings-select-hint-visible: root.settings-open && (
         root.settings-choice-open ? true
-        : root.settings-view >= 50 && root.settings-view <= 67 ? root.gen-select
+        : root.gen-view ? root.gen-select
         : root.settings-view == 68 ? root.gaming-select
+        : root.settings-view == 69 ? root.power-index < root.power-battery-start
         : root.settings-view >= 30 ? true
         : root.settings-view == 23 ? true
         : root.settings-view == 24 ? true
@@ -2994,12 +3320,14 @@ export component HomeWindow inherits Window {
         root.layout-class == 2 ? max(220px, min(300px, root.width / 5))
         : root.layout-class == 1 ? max(198px, min(260px, root.width * 0.245))
         : max(198px, min(280px, root.width * 0.31));
-    property <length> settings-pane-x: root.settings-rail-width + 32px;
+    property <length> settings-pane-x: root.app-shell ? 0px : root.settings-rail-width + 32px;
     /* Page column: full pane on handhelds, capped on wide/TV outputs so
-     * titles and values stay close together and next to the rail. */
+     * titles and values stay close together and next to the rail; a full
+     * screen application page centres its wider column. */
     property <length> settings-pane-width: root.width - root.settings-pane-x;
-    property <length> settings-content-width: min(root.settings-pane-width - 44px, 860px);
-    property <length> settings-content-x: 22px;
+    property <length> settings-content-width: root.app-shell ? min(root.width - 44px, 1100px)
+        : min(root.settings-pane-width - 44px, 860px);
+    property <length> settings-content-x: root.app-shell ? (root.width - root.settings-content-width) / 2 : 22px;
 
     /* Settings grid. One set of metrics for every page, rail and dropdown:
      * rows grow with the logical height (42px at 480 lines, 60px cap), the
@@ -3009,8 +3337,9 @@ export component HomeWindow inherits Window {
     property <length> settings-row-height: max(42px, min(60px, root.height * 0.0875));
     property <length> settings-row-gap: 8px;
     property <length> settings-row-step: root.settings-row-height + root.settings-row-gap;
-    property <length> settings-section-y: 62px;
-    property <length> settings-content-y: 88px;
+    /* An application header's meta line needs one more band. */
+    property <length> settings-section-y: !root.app-shell || root.app-shell-meta == "" ? 62px : 78px;
+    property <length> settings-content-y: root.settings-section-y + 26px;
     property <length> settings-section-gap: 26px;
     property <length> settings-notice-height: 16px;
     property <length> settings-choice-list-y: 46px;
@@ -3068,7 +3397,8 @@ export component HomeWindow inherits Window {
     property <bool> page-controllers: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
     property <bool> page-gaming: root.settings-view == 68 || (root.settings-view == 0 && root.settings-selected-index == 3);
     property <bool> page-display-audio: root.settings-view == 18 || (root.settings-view == 0 && root.settings-selected-index == 4);
-    property <bool> page-system: root.settings-view == 19 || (root.settings-view == 0 && root.settings-selected-index == 5);
+    property <bool> page-power: root.settings-view == 69 || (root.settings-view == 0 && root.settings-selected-index == 5);
+    property <bool> page-system: root.settings-view == 19 || (root.settings-view == 0 && root.settings-selected-index == 6);
     property <bool> controllers-group: root.page-controllers || (root.settings-view >= 11 && root.settings-view <= 17);
 
     property <string> settings-section-label:
@@ -3084,10 +3414,11 @@ export component HomeWindow inherits Window {
         : root.settings-view == 32 ? root.i18n-strings[334]
         : root.settings-view == 40 ? root.i18n-strings[436]
         : root.settings-view == 41 ? (root.moonlight-host.paired ? root.i18n-strings[135] : root.i18n-strings[436])
-        : root.settings-view == 42 ? root.i18n-strings[473]
+        : root.settings-view == 42 ? (root.moonlight-scroll >= 6 ? root.i18n-strings[858]
+            : root.moonlight-scroll >= 4 ? root.i18n-strings[729] : root.i18n-strings[857])
         : root.settings-view == 45 ? root.i18n-strings[477]
         : root.settings-view == 28 && root.safe-mode ? root.i18n-strings[518]
-        : root.settings-view >= 50 && root.settings-view <= 67
+        : root.gen-view
             ? (root.gen-split > 0 && root.gen-scroll >= root.gen-split ? root.gen-split-label : root.gen-section)
         : root.page-gaming ? (root.gaming-scroll-offset >= root.gaming-split ? root.i18n-strings[704] : root.i18n-strings[703])
         : root.page-connectivity ? (root.connectivity-scroll-offset >= 6 ? root.i18n-strings[727]
@@ -3101,10 +3432,11 @@ export component HomeWindow inherits Window {
         : root.settings-view == 17 ? (root.lighting-scroll-offset >= 4 ? root.i18n-strings[129] : root.i18n-strings[130])
         : root.page-display-audio ? (root.display-audio-scroll-offset >= root.da-sounds-start ? root.i18n-strings[730]
             : root.display-audio-scroll-offset >= root.da-audio-start ? root.i18n-strings[729] : root.i18n-strings[728])
-        : root.page-system ? (root.system-scroll-offset >= root.system-support-start ? root.i18n-strings[733]
-            : root.system-scroll-offset >= root.system-storage-start ? root.i18n-strings[732] : root.i18n-strings[731])
+        : root.page-power ? (root.power-scroll-offset >= root.power-devices-start ? root.i18n-strings[815]
+            : root.power-scroll-offset >= root.power-battery-start ? root.i18n-strings[814] : root.i18n-strings[826])
+        : root.page-system ? (root.system-scroll-offset >= root.system-support-start ? root.i18n-strings[733] : root.i18n-strings[732])
         : root.settings-view == 20 || root.settings-view == 21 ? root.i18n-strings[732]
-        : root.settings-view == 22 || root.settings-view == 27 || root.settings-view == 28 ? root.i18n-strings[733]
+        : root.settings-view == 27 || root.settings-view == 28 ? root.i18n-strings[733]
         : "";
     /* Ownership chip. General and the user pages are split purely by
      * ownership, so they show the USER/DEVICE chip alone. */
@@ -3118,7 +3450,7 @@ export component HomeWindow inherits Window {
         : root.settings-view == 45 ? root.i18n-strings[313]
         /* A game's details and settings and achievements are the user's;
          * BIOS files and the ScreenScraper account are device-wide. */
-        : root.settings-view == 50 || root.settings-view == 51 || (root.settings-view >= 54 && root.settings-view <= 57) || root.settings-view == 62 || root.settings-view == 66 || root.settings-view == 67 ? root.i18n-strings[312]
+        : root.settings-view == 50 || root.settings-view == 51 || (root.settings-view >= 54 && root.settings-view <= 57) || root.settings-view == 62 || root.settings-view == 66 || root.settings-view == 67 || root.settings-view == 70 || root.settings-view == 71 ? root.i18n-strings[312]
         : root.settings-view == 52 || root.settings-view == 53 ? root.i18n-strings[313]
         : root.page-gaming ? (root.gaming-scroll-offset >= root.gaming-split ? root.i18n-strings[313] : root.i18n-strings[312])
         : root.settings-section-label == "" ? ""
@@ -3133,7 +3465,7 @@ export component HomeWindow inherits Window {
              * still says it is searching. */
             : root.settings-view == 2 && root.wifi-scanning && root.wifi-networks.length > 0 ? root.i18n-strings[164]
             : "")
-        : root.settings-view >= 50 && root.settings-view <= 67 ? root.gen-notice
+        : root.gen-view ? root.gen-notice
         : root.settings-view == 68 ? root.gen-notice
         : root.settings-view == 31 ? (root.wifi-notice != "" ? root.wifi-notice : root.oob-notice)
         : root.settings-view >= 30 ? root.oob-notice
@@ -3466,7 +3798,7 @@ export component HomeWindow inherits Window {
                 width: parent.width;
                 height: root.home-rows-h;
                 clip: true;
-                visible: !root.library-open;
+                visible: !root.library-open && !root.find-open;
 
               /* The column glides to the selected section. */
               home-column := Rectangle {
@@ -3495,15 +3827,15 @@ export component HomeWindow inherits Window {
                 }
                 HomeRow {
                     x: 0; y: root.home-y1; width: parent.width;
-                    label: root.i18n-strings[1];
-                    cards: root.home-shelf;
-                    index: root.home-shelf-index;
+                    label: root.i18n-strings[840];
+                    cards: root.home-systems;
+                    index: root.home-systems-index;
                     active: root.home-row == 1;
-                    card-h: root.home-chip-h;
-                    chip-w: root.home-chip-w;
+                    card-h: root.home-show-h;
+                    show-w: root.home-show-w;
                     label-h: root.home-label-h;
                     pad: root.home-pad;
-                    gap: root.home-gap * 0.8;
+                    gap: root.home-gap;
                     s: root.home-s;
                     notice: root.home-notice;
                     status: home-view.status;
@@ -3514,10 +3846,29 @@ export component HomeWindow inherits Window {
                 }
                 HomeRow {
                     x: 0; y: root.home-y2; width: parent.width;
+                    label: root.i18n-strings[537];
+                    cards: root.home-collections;
+                    index: root.home-collections-index;
+                    active: root.home-row == 2;
+                    card-h: root.home-show-h;
+                    show-w: root.home-show-w;
+                    label-h: root.home-label-h;
+                    pad: root.home-pad;
+                    gap: root.home-gap;
+                    s: root.home-s;
+                    notice: root.home-notice;
+                    status: home-view.status;
+                    unavailable-label: root.i18n-strings[205];
+                    empty-headline: "";
+                    empty-body: "";
+                    empty-icon: 1;
+                }
+                HomeRow {
+                    x: 0; y: root.home-y3; width: parent.width;
                     label: root.i18n-strings[135];
                     cards: root.home-apps;
                     index: root.home-apps-index;
-                    active: root.home-row == 2;
+                    active: root.home-row == 3;
                     card-h: root.home-chip-h;
                     chip-w: root.home-chip-w;
                     label-h: root.home-label-h;
@@ -3536,7 +3887,7 @@ export component HomeWindow inherits Window {
                 /* Edges of the column fade under the bars while there is
                  * more above or below. */
                 Rectangle {
-                    y: 0; width: parent.width; height: 20px * root.home-s;
+                    y: 0; width: parent.width; height: root.home-fade-h;
                     background: @linear-gradient(180deg, Theme.background 0%, Theme.background.transparentize(1.0) 100%);
                     opacity: root.home-v-scroll > 0px ? 1.0 : 0.0;
                     animate opacity { duration: 200ms; }
@@ -3546,6 +3897,159 @@ export component HomeWindow inherits Window {
                     background: @linear-gradient(180deg, Theme.background.transparentize(1.0) 0%, Theme.background 100%);
                     opacity: root.home-v-scroll < root.home-max-scroll ? 1.0 : 0.0;
                     animate opacity { duration: 200ms; }
+                }
+            }
+
+            /* Find a Game: search bar, filter chips, live results, surprise. */
+            find-view := Rectangle {
+                x: 0; y: 0; width: parent.width; height: parent.height;
+                visible: root.find-open && !root.library-open;
+                property <float> s: root.home-s;
+                property <length> pad: root.home-pad;
+                /* One vertical rhythm: the same gap between search bar,
+                 * chips, results and the Surprise buttons; every block on
+                 * the Home side margins. */
+                property <length> gap: 16px * self.s;
+                property <length> top: 14px * self.s;
+                property <length> bar-h: 50px * self.s;
+                property <length> chip-h: 36px * self.s;
+                property <length> pill-h: 46px * self.s;
+                property <length> chips-y: self.top + self.bar-h + self.gap;
+                property <length> results-y: self.chips-y + self.chip-h + self.gap - 6px * self.s;
+                property <length> pills-y: self.height - self.top - self.pill-h;
+                property <length> label-h: 34px * self.s;
+                /* HomeRow: label, then 12 px of glow room above the covers. */
+                property <length> card-h: max(80px, self.pills-y - self.gap - self.results-y - self.label-h - 12px);
+
+                /* A wash of the accent behind the search. */
+                Rectangle {
+                    x: 0; y: 0;
+                    width: parent.width; height: parent.height * 0.45;
+                    background: @linear-gradient(180deg, Theme.primary.transparentize(0.86) 0%, Theme.background.transparentize(1.0) 100%);
+                }
+
+                /* M3 search bar. */
+                Rectangle {
+                    x: find-view.pad; y: find-view.top;
+                    width: parent.width - 2 * find-view.pad; height: find-view.bar-h;
+                    HomeFocusRing { width: parent.width; height: parent.height; radius: parent.height / 2; shown: root.find-zone == 0; }
+                    Rectangle {
+                        width: parent.width; height: parent.height;
+                        border-radius: self.height / 2;
+                        background: root.find-zone == 0 ? Theme.secondary-container : Theme.surface-container-high;
+                        Image {
+                            x: 18px * find-view.s; y: (parent.height - self.height) / 2;
+                            width: parent.height * 0.40; height: self.width;
+                            source: @image-url("assets/icons/magnifying-glass.svg");
+                            colorize: root.find-zone == 0 ? Theme.on-secondary-container : Theme.text-secondary;
+                        }
+                        Text {
+                            x: 18px * find-view.s + parent.height * 0.40 + 14px * find-view.s;
+                            width: parent.width - self.x - 18px * find-view.s; height: parent.height;
+                            text: root.find-query != "" ? root.find-query : root.i18n-strings[831];
+                            overflow: elide;
+                            vertical-alignment: center;
+                            color: root.find-query != "" ? Theme.text : Theme.text-faint;
+                            font-size: 18px * find-view.s;
+                            font-weight: root.find-query != "" ? 600 : 400;
+                        }
+                    }
+                }
+
+                /* Filter chips, scrolled to keep the focused one visible. */
+                Rectangle {
+                    x: 0; y: find-view.chips-y - 6px;
+                    width: parent.width; height: find-view.chip-h + 12px;
+                    clip: true;
+                    chip-strip := HorizontalLayout {
+                        x: find-view.pad - min(max(0, root.find-chip-index - 1) * 120px * find-view.s,
+                            max(0px, self.preferred-width - (parent.width - 2 * find-view.pad)));
+                        y: 6px; height: find-view.chip-h;
+                        spacing: 8px * find-view.s;
+                        animate x { duration: 220ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
+                        for chip[i] in root.find-chips: chip-box := Rectangle {
+                            property <bool> sel: root.find-zone == 1 && i == root.find-chip-index;
+                            width: chip-text.preferred-width + (chip.active ? 40px : 28px) * find-view.s;
+                            border-radius: Shape.small;
+                            background: chip.active ? Theme.secondary-container : Theme.outline-variant;
+                            HomeFocusRing { width: parent.width; height: parent.height; radius: Shape.small; shown: parent.sel; }
+                            Rectangle {
+                                x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px;
+                                border-radius: Shape.small;
+                                background: chip.active || parent.sel ? Theme.secondary-container : Theme.background;
+                                if chip.active: Image {
+                                    x: 12px * find-view.s; y: (parent.height - self.height) / 2;
+                                    width: 14px * find-view.s; height: self.width;
+                                    source: @image-url("assets/icons/check.svg");
+                                    colorize: Theme.on-secondary-container;
+                                }
+                                chip-text := Text {
+                                    x: (chip.active ? 30px : 14px) * find-view.s;
+                                    height: parent.height;
+                                    text: chip.label;
+                                    vertical-alignment: center;
+                                    color: chip.active || chip-box.sel ? Theme.on-secondary-container : Theme.text-secondary;
+                                    font-size: 14px * find-view.s;
+                                    font-weight: 600;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                /* Live results: the covers themselves. */
+                HomeRow {
+                    x: 0; y: find-view.results-y; width: parent.width;
+                    label: root.i18n-strings[837];
+                    cards: root.find-results;
+                    index: root.find-result-index;
+                    active: root.find-zone == 2;
+                    card-h: find-view.card-h;
+                    label-h: find-view.label-h;
+                    pad: find-view.pad;
+                    gap: root.home-gap;
+                    s: find-view.s;
+                    status: root.find-status;
+                    unavailable-label: root.i18n-strings[205];
+                    empty-headline: root.find-status;
+                    empty-body: "";
+                    empty-icon: 1;
+                }
+
+                /* Surprise me. */
+                HorizontalLayout {
+                    x: find-view.pad; y: find-view.pills-y;
+                    width: parent.width - 2 * find-view.pad; height: find-view.pill-h;
+                    spacing: 12px * find-view.s;
+                    /* Both buttons the same width (user request 2026-10-10). */
+                    for label[i] in [root.i18n-strings[829], root.i18n-strings[830]]: pill := Rectangle {
+                        property <bool> sel: root.find-zone == 3 && i == root.find-surprise-index;
+                        width: (find-view.width - 2 * find-view.pad - 12px * find-view.s) / 2;
+                        HomeFocusRing { width: parent.width; height: parent.height; radius: parent.height / 2; shown: parent.sel; }
+                        Rectangle {
+                            width: parent.width; height: parent.height;
+                            border-radius: self.height / 2;
+                            background: parent.sel ? Theme.primary : Theme.surface-container-high;
+                            HorizontalLayout {
+                                alignment: center;
+                                spacing: 10px * find-view.s;
+                                Image {
+                                    width: find-view.pill-h * 0.38;
+                                    source: @image-url("assets/icons/rotate.svg");
+                                    colorize: pill.sel ? Theme.on-primary : Theme.primary;
+                                    image-fit: contain;
+                                }
+                                Text {
+                                    text: label;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    color: pill.sel ? Theme.on-primary : Theme.text;
+                                    font-size: 15px * find-view.s;
+                                    font-weight: 600;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -3563,28 +4067,44 @@ export component HomeWindow inherits Window {
                 property <length> step: root.library-cell-h + root.home-gap;
                 property <int> focus-row: floor(root.library-index / root.library-columns);
                 property <int> row-count: ceil(root.library-games.length / root.library-columns);
+                property <length> content-h: self.row-count * self.step - root.home-gap + root.library-info-h;
                 property <length> v-scroll: max(0px, min(self.focus-row * self.step,
-                    self.row-count * self.step - root.home-gap + 8px - root.library-view-h));
-                property <length> grid-x: (self.width - root.library-columns * (root.library-cell-w + root.home-gap)
-                    + root.home-gap) / 2;
+                    self.content-h + 8px - root.library-view-h));
+                property <length> grid-w: root.library-columns * (root.library-cell-w + root.home-gap) - root.home-gap;
+                property <length> grid-x: (self.width - self.grid-w) / 2;
+                /* The game the info panel shows: it follows the focus once
+                 * the rows have moved (the panel hides at once and fades
+                 * in), so it never slides across the covers; the same on
+                 * a sideways move (user request 2026-10-10). */
+                property <int> info-index: 0;
+                Timer {
+                    interval: 170ms;
+                    running: library-grid.info-index != root.library-index;
+                    triggered => { library-grid.info-index = root.library-index; }
+                }
 
-                /* Header: a wash of the system colour, the icon in its
-                 * tinted well, the name and the game count. */
+                /* Header: a light wash of the system colour and the platform
+                 * silhouette, both clipped to the header (user request
+                 * 2026-10-10: the earlier, stronger and taller ones
+                 * distracted), the icon in its tinted well, name and count. */
                 Rectangle {
                     x: 0; y: -root.home-top-pad; width: parent.width;
-                    height: root.library-head-h + root.home-top-pad - 12px;
-                    background: @linear-gradient(180deg,
-                        (root.library-card.kind == 3 ? root.library-card.accent : Theme.primary).transparentize(0.72) 0%,
-                        Theme.background.transparentize(1.0) 100%);
-                }
-                /* The platform silhouette as a faint watermark. */
-                if root.library-card.kind == 3 && root.library-card.has-cover: Image {
-                    property <length> d: root.library-head-h * 1.5;
-                    x: parent.width - self.d * 0.82; y: -root.home-top-pad - self.d * 0.18;
-                    width: self.d; height: self.d;
-                    source: root.library-card.cover;
-                    image-fit: contain;
-                    colorize: root.library-card.accent.transparentize(0.78);
+                    height: root.library-head-h + root.home-top-pad - 6px * root.home-s;
+                    clip: true;
+                    Rectangle {
+                        width: parent.width; height: parent.height;
+                        background: @linear-gradient(180deg,
+                            (root.library-card.kind == 3 ? root.library-card.accent : Theme.primary).transparentize(0.84) 0%,
+                            Theme.background.transparentize(1.0) 100%);
+                    }
+                    if root.library-card.kind == 3 && root.library-card.has-cover: Image {
+                        property <length> d: parent.height * 1.7;
+                        x: parent.width - self.d * 0.9 - root.home-pad; y: (parent.height - self.d) / 2;
+                        width: self.d; height: self.d;
+                        source: root.library-card.cover;
+                        image-fit: contain;
+                        colorize: root.library-card.accent.transparentize(0.86);
+                    }
                 }
                 lib-well := Rectangle {
                     property <length> d: 30px * root.home-s;
@@ -3594,9 +4114,11 @@ export component HomeWindow inherits Window {
                     border-radius: Shape.medium;
                     background: root.library-card.kind == 3 ? root.library-card.accent.transparentize(0.3)
                         : Theme.primary-container;
-                    if root.library-card.kind == 1: HomeStar {
-                        x: (parent.width - parent.icon) / 2; y: (parent.height - parent.icon) / 2;
-                        width: parent.icon; height: parent.icon;
+                    if root.library-card.kind == 5: Image {
+                        x: (parent.width - parent.icon * 0.8) / 2; y: (parent.height - parent.icon * 0.8) / 2;
+                        width: parent.icon * 0.8; height: parent.icon * 0.8;
+                        source: @image-url("assets/icons/magnifying-glass.svg");
+                        colorize: Theme.on-primary-container;
                     }
                     if root.library-card.kind == 2: HomeCollectionGlyph {
                         x: (parent.width - parent.icon * 0.86) / 2; y: (parent.height - parent.icon * 0.8) / 2;
@@ -3646,8 +4168,8 @@ export component HomeWindow inherits Window {
                         x: 0;
                         y: 12px - library-grid.v-scroll;
                         width: parent.width;
-                        height: library-grid.row-count * library-grid.step;
-                        animate y { duration: 280ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
+                        height: library-grid.content-h;
+                        animate y { duration: 180ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
 
                         /* Only rows near the visible ones instantiate a card:
                          * a system can hold hundreds of games, and every card
@@ -3656,7 +4178,10 @@ export component HomeWindow inherits Window {
                         for card[i] in root.library-games: cell := Rectangle {
                             property <int> grid-row: floor(i / root.library-columns);
                             x: library-grid.grid-x + mod(i, root.library-columns) * (root.library-cell-w + root.home-gap);
-                            y: self.grid-row * library-grid.step;
+                            /* Rows under the focused one make room for the info. */
+                            y: self.grid-row * library-grid.step
+                                + (self.grid-row > library-grid.focus-row ? root.library-info-h : 0px);
+                            animate y { duration: 180ms; easing: cubic-bezier(0.2, 0.0, 0.0, 1.0); }
                             width: root.library-cell-w;
                             height: root.library-cell-h;
                             background: #00000000;
@@ -3683,6 +4208,23 @@ export component HomeWindow inherits Window {
                                 }
                             }
                         }
+                        /* Under the focused cover, kept inside the grid. */
+                        if root.home-focus-valid: HomeInfoPanel {
+                            /* Always on the screen's side margin, like the
+                             * header (user request 2026-10-10), whatever the
+                             * column, cover shape or grid centring. */
+                            x: root.home-pad;
+                            y: library-grid.focus-row * library-grid.step + root.library-cell-h + 10px * root.home-s;
+                            visible: library-grid.info-index == root.library-index;
+                            opacity: library-grid.info-index == root.library-index ? 1.0 : 0.0;
+                            animate opacity { duration: 120ms; }
+                            width: parent.width - 2 * root.home-pad;
+                            height: root.library-info-h - 10px * root.home-s;
+                            card: root.home-focused;
+                            notice: root.home-notice;
+                            unavailable-label: root.i18n-strings[205];
+                            s: root.home-s;
+                        }
                     }
                     Rectangle {
                         y: 0; width: parent.width; height: 22px * root.home-s;
@@ -3691,20 +4233,76 @@ export component HomeWindow inherits Window {
                         animate opacity { duration: 200ms; }
                     }
                 }
-
-                if root.home-focus-valid: HomeInfoPanel {
-                    x: root.home-pad;
-                    y: root.library-head-h + root.library-view-h + 8px * root.home-s;
-                    width: parent.width - 2 * root.home-pad;
-                    height: root.library-info-h - 8px * root.home-s;
-                    compact: true;
-                    card: root.home-focused;
-                    notice: root.home-notice;
-                    unavailable-label: root.i18n-strings[205];
-                    s: root.home-s;
-                }
             }
 
+        }
+
+        /* Home modal sheet (Add to Collection, Manage a collection): M3
+         * dialog surface over a scrim; rows like the Settings dropdown,
+         * a check box for multiple choices, armed rows in the error roles. */
+        if root.home-sheet-open && !root.settings-open: Rectangle {
+            x: 0; y: 50px; width: parent.width; height: parent.height - 102px;
+            background: #000000a0;
+            sheet := Rectangle {
+                property <length> row-h: 46px;
+                property <length> step: 52px;
+                property <int> shown: min(root.home-sheet-items.length, root.home-sheet-visible-rows);
+                width: min(parent.width - 48px, 460px);
+                height: 58px + self.shown * self.step + 6px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                background: Theme.surface-container-high;
+                border-radius: Shape.extra-large;
+                clip: true;
+                MarqueeText {
+                    x: 22px; y: 14px; width: parent.width - 44px; height: 30px;
+                    label: root.home-sheet-title;
+                    text-color: Theme.text; text-size: 19px; text-weight: 700;
+                    active: true;
+                }
+                for item[i] in root.home-sheet-items: sheet-row := Rectangle {
+                    property <bool> sel: i == root.home-sheet-index;
+                    x: 10px; y: 54px + (i - root.home-sheet-scroll) * sheet.step;
+                    width: parent.width - 20px; height: sheet.row-h;
+                    visible: i >= root.home-sheet-scroll && i < root.home-sheet-scroll + root.home-sheet-visible-rows;
+                    border-radius: Shape.medium;
+                    background: item.armed ? Theme.error-container : self.sel ? Theme.secondary-container : #00000000;
+                    if item.check >= 0: Rectangle {
+                        x: 14px; y: (parent.height - self.height) / 2;
+                        width: 20px; height: 20px;
+                        border-radius: 5px;
+                        background: item.check == 1 ? Theme.primary : Theme.outline;
+                        Rectangle {
+                            x: 2px; y: 2px; width: 16px; height: 16px; border-radius: 3px;
+                            background: item.check == 1 ? Theme.primary : Theme.surface-container-high;
+                        }
+                        if item.check == 1: Image {
+                            x: 3px; y: 3px; width: 14px; height: 14px;
+                            source: @image-url("assets/icons/check.svg");
+                            colorize: Theme.on-primary;
+                        }
+                    }
+                    VerticalLayout {
+                        x: item.check >= 0 ? 46px : 16px;
+                        width: parent.width - self.x - 16px;
+                        alignment: center;
+                        MarqueeText {
+                            height: 22px;
+                            label: item.label;
+                            text-color: item.armed ? Theme.on-error-container : sheet-row.sel ? Theme.on-secondary-container : Theme.text;
+                            text-size: 16px; text-weight: sheet-row.sel ? 600 : 500;
+                            active: sheet-row.sel;
+                        }
+                        if item.detail != "": MarqueeText {
+                            height: 16px;
+                            label: item.detail;
+                            text-color: item.armed ? Theme.on-error-container : Theme.text-dim;
+                            text-size: 12px;
+                            active: sheet-row.sel;
+                        }
+                    }
+                }
+            }
         }
 
         /* Settings shell: thematic categories only, no fake functionality. */
@@ -3720,54 +4318,36 @@ export component HomeWindow inherits Window {
                 x: 18px;
                 y: 14px;
                 text: root.oob-active ? root.i18n-strings[386]
-                    : root.moonlight-active ? root.i18n-strings[435]
-                    : root.steamlink-active ? root.i18n-strings[477]
                     : root.details-active ? (root.details-shell-title != "" ? root.details-shell-title : root.i18n-strings[522])
                     : root.i18n-strings[3];
                 color: Theme.text;
                 font-size: 28px;
                 font-weight: 600;
+                visible: !root.app-shell;
             }
 
             Rectangle {
                 x: 18px;
                 y: 54px;
                 width: root.settings-rail-width;
+                visible: !root.app-shell;
                 height: parent.height - 70px;
                 background: Theme.surface-container-low;
                 border-radius: Shape.large;
                 clip: true;
+                /* Seven categories do not fit at 640x480: the rail scrolls
+                 * just enough to keep the selected one visible. */
+                property <int> rail-visible: max(1, floor((self.height - 16px + root.settings-row-step - root.settings-row-height) / root.settings-row-step));
+                property <int> rail-scroll: max(0, min(7 - self.rail-visible, root.settings-selected-index - self.rail-visible + 1));
 
-                for category[i] in [4, 5, 6, 702, 7, 8]: SettingsCategory {
+                for category[i] in [4, 5, 6, 702, 7, 813, 8]: SettingsCategory {
                     x: 8px;
-                    y: 8px + i * root.settings-row-step;
+                    y: 8px + (i - parent.rail-scroll) * root.settings-row-step;
                     width: parent.width - 16px;
                     height: root.settings-row-height;
                     label: root.i18n-strings[category];
                     selected: root.settings-selected-index == i;
                     visible: !root.oob-active && !root.moonlight-active && !root.steamlink-active && !root.details-active;
-                }
-
-                /* Moonlight: where the user is; it never takes focus. */
-                for item[i] in [436, 437]: SettingsCategory {
-                    x: 8px;
-                    y: 8px + i * root.settings-row-step;
-                    width: parent.width - 16px;
-                    height: root.settings-row-height;
-                    label: root.i18n-strings[item];
-                    selected: (root.settings-view == 42 ? 1 : 0) == i;
-                    visible: root.moonlight-active;
-                }
-
-                /* Steam Link: one page. */
-                SettingsCategory {
-                    x: 8px;
-                    y: 8px;
-                    width: parent.width - 16px;
-                    height: root.settings-row-height;
-                    label: root.i18n-strings[477];
-                    selected: true;
-                    visible: root.steamlink-active;
                 }
 
                 /* Game Details: the game itself (cover, title, system and the
@@ -3794,15 +4374,19 @@ export component HomeWindow inherits Window {
                         font-weight: 700;
                         wrap: word-wrap;
                     }
+                    /* Long system names wrap in the narrow rail. */
                     Text {
                         text: root.details-subtitle;
-                        color: #4f8fff;
+                        color: Theme.primary;
                         font-size: 13px;
                         font-weight: 600;
+                        wrap: word-wrap;
                     }
+                    /* Game Settings and Start Game: title and platform only
+                     * (user request 2026-10-10). */
                     Text {
-                        text: root.details-description;
-                        color: #9aa0a8;
+                        text: root.settings-view == 51 || root.settings-view == 57 ? "" : root.details-description;
+                        color: Theme.text-secondary;
                         font-size: 13px;
                         wrap: word-wrap;
                         vertical-stretch: 1;
@@ -3831,12 +4415,39 @@ export component HomeWindow inherits Window {
                 background: Theme.background;
                 clip: true;
 
+                /* Full screen application page: the app's colour washes down
+                 * from the top and its name sits above the title, like AppPage. */
+                if root.app-shell: Rectangle {
+                    x: 0; y: 0; width: parent.width; height: root.settings-content-y + 24px;
+                    background: @linear-gradient(180deg, Theme.primary.transparentize(0.68) 0%, Theme.background.transparentize(1.0) 100%);
+                }
+                if root.app-shell: Text {
+                    x: root.settings-content-x; y: 6px;
+                    width: root.settings-content-width; height: 16px;
+                    vertical-alignment: center;
+                    text: root.app-shell-kicker.to-uppercase();
+                    color: Theme.primary;
+                    font-size: 12px;
+                    font-weight: 700;
+                    letter-spacing: 1.2px;
+                    overflow: elide;
+                }
+                if root.app-shell && root.app-shell-meta != "": MarqueeText {
+                    x: root.settings-content-x; y: 54px;
+                    width: root.settings-content-width; height: 18px;
+                    label: root.app-shell-meta;
+                    text-color: Theme.text-secondary;
+                    text-size: 13px;
+                    text-weight: 400;
+                    active: true;
+                }
+
                 /* settings-view == 0 means the category rail owns focus.
                  * The right pane is still the real page for the selected category;
                  * entering a category changes interaction/focus, never content. */
                 MarqueeText {
                     x: root.settings-content-x;
-                    y: 14px;
+                    y: root.app-shell ? 20px : 14px;
                     width: root.settings-content-width;
                     height: 36px;
                     label: root.settings-title-view == 0
@@ -3845,6 +4456,7 @@ export component HomeWindow inherits Window {
                             : root.settings-selected-index == 2 ? root.i18n-strings[6]
                             : root.settings-selected-index == 3 ? root.i18n-strings[702]
                             : root.settings-selected-index == 4 ? root.i18n-strings[7]
+                            : root.settings-selected-index == 5 ? root.i18n-strings[813]
                             : root.i18n-strings[8])
                         : root.settings-title-view == 1 ? root.i18n-strings[5]
                         : root.settings-title-view == 2 ? root.i18n-strings[9]
@@ -3864,6 +4476,7 @@ export component HomeWindow inherits Window {
                         : root.settings-title-view == 17 ? root.i18n-strings[18]
                         : root.settings-title-view == 18 ? root.i18n-strings[7]
                         : root.settings-title-view == 19 ? root.i18n-strings[8]
+                        : root.settings-title-view == 69 ? root.i18n-strings[813]
                         : root.settings-title-view == 20 ? root.i18n-strings[19]
                         : root.settings-title-view == 21 ? root.i18n-strings[20]
                         : root.settings-title-view == 22 ? root.i18n-strings[109]
@@ -3896,6 +4509,8 @@ export component HomeWindow inherits Window {
                         : root.settings-title-view == 66 ? root.i18n-strings[669]
                         : root.settings-title-view == 67 ? root.i18n-strings[678]
                         : root.settings-title-view == 68 ? root.i18n-strings[702]
+                        : root.settings-title-view == 70 ? root.i18n-strings[827]
+                        : root.settings-title-view == 71 ? root.i18n-strings[537]
                         : root.i18n-strings[3];
                     text-color: Theme.text;
                     text-size: 26px;
@@ -3956,8 +4571,8 @@ export component HomeWindow inherits Window {
                     { title: root.i18n-strings[324], value: root.default-user-name == "" ? root.i18n-strings[173] : root.default-user-name, enabled: root.user-count > 1 && root.user-login-mode == "default", nav: false, toggle: false, on: false, detail: "" },
                     { title: root.i18n-strings[280], value: root.timezone, enabled: true, nav: false, toggle: false, on: false, detail: "" },
                     { title: root.i18n-strings[281], value: "", enabled: true, nav: false, toggle: true, on: root.automatic-time, detail: "" },
-                    { title: root.i18n-strings[326], value: root.manual-date-label, enabled: !root.automatic-time, nav: false, toggle: false, on: false, detail: "" },
-                    { title: root.i18n-strings[327], value: root.manual-time-label, enabled: !root.automatic-time, nav: false, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[326], value: root.manual-date-label, enabled: !root.automatic-time, nav: !root.automatic-time, toggle: false, on: false, detail: "" },
+                    { title: root.i18n-strings[327], value: root.manual-time-label, enabled: !root.automatic-time, nav: !root.automatic-time, toggle: false, on: false, detail: "" },
                     { title: root.i18n-strings[282], value: root.last-time-sync-label, enabled: root.automatic-time, nav: false, toggle: false, on: false, detail: root.regional-notice },
                     { title: root.i18n-strings[283], value: root.keyboard-layout-label, enabled: true, nav: false, toggle: false, on: false, detail: "" },
                 ]: SettingsSelectableRow {
@@ -4063,6 +4678,7 @@ export component HomeWindow inherits Window {
                     toggle: row.toggle;
                     toggle-on: row.on;
                     enabled: row.enabled;
+                    navigates: k >= 2 && !root.automatic-time;
                     selected: root.settings-view == 30 && root.oob-index == k;
                     visible: root.settings-view == 30;
                 }
@@ -4164,20 +4780,45 @@ export component HomeWindow inherits Window {
                 }
 
                 /* ----------------------------------- Moonlight Stream Settings (42) */
+                /* Like Moonlight's own settings: VIDEO | AUDIO (from 4) | PC
+                 * (from 6); moonlight.rs SETTINGS_ROWS. */
+                for section[i] in [
+                    { start: 4, label: root.i18n-strings[729] },
+                    { start: 6, label: root.i18n-strings[858] },
+                ]: SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(section.start, root.moonlight-scroll, 4, 6, 0) - root.settings-section-gap;
+                    width: root.settings-content-width;
+                    label: section.label;
+                    scope-label: root.i18n-strings[312];
+                    visible: root.settings-view == 42 && root.moonlight-scroll < section.start
+                        && root.sec-row-visible(section.start, root.moonlight-scroll, 4, 6, 0);
+                }
                 for row[k] in [
-                    { title: root.i18n-strings[454], value: root.moonlight-resolution-label },
-                    { title: root.i18n-strings[455], value: root.moonlight-fps-label },
-                    { title: root.i18n-strings[456], value: root.moonlight-codec-label },
-                    { title: root.i18n-strings[457], value: root.moonlight-bitrate-label },
+                    { title: root.i18n-strings[454], value: root.moonlight-resolution-label, detail: "", toggle: false, on: false, slider: false, fraction: 0 },
+                    { title: root.i18n-strings[455], value: root.moonlight-fps-label, detail: "", toggle: false, on: false, slider: false, fraction: 0 },
+                    { title: root.i18n-strings[457], value: root.moonlight-bitrate-label, detail: "", toggle: false, on: false,
+                        slider: root.moonlight-bitrate-fraction > 0, fraction: root.moonlight-bitrate-fraction },
+                    { title: root.i18n-strings[456], value: root.moonlight-codec-label, detail: "", toggle: false, on: false, slider: false, fraction: 0 },
+                    { title: root.i18n-strings[859], value: root.moonlight-audio-label, detail: "", toggle: false, on: false, slider: false, fraction: 0 },
+                    { title: root.i18n-strings[863], value: "", detail: "", toggle: true, on: root.moonlight-local-audio, slider: false, fraction: 0 },
+                    { title: root.i18n-strings[864], value: "", detail: root.i18n-strings[865], toggle: true, on: root.moonlight-optimize, slider: false, fraction: 0 },
+                    { title: root.i18n-strings[866], value: "", detail: "", toggle: true, on: root.moonlight-quit-app, slider: false, fraction: 0 },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.srow-y(k, 0, 0);
+                    y: root.sec-row-y(k, root.moonlight-scroll, 4, 6, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
                     value: row.value;
+                    detail: row.detail;
+                    toggle: row.toggle;
+                    toggle-on: row.on;
+                    show-slider: row.slider;
+                    slider-fraction: row.fraction;
                     selected: root.settings-view == 42 && root.moonlight-index == k;
-                    visible: root.settings-view == 42;
+                    visible: root.settings-view == 42
+                        && root.sec-row-visible(k, root.moonlight-scroll, 4, 6, 0);
                 }
 
                 /* ----------------------------------------------------------- Gaming */
@@ -4209,19 +4850,19 @@ export component HomeWindow inherits Window {
                         && root.srow-visible(k, root.gaming-scroll-offset, root.settings-sectioned-visible-rows);
                 }
 
-                /* ----------------------------------------------------------- System */
+                /* ------------------------------------------------------------ Power */
                 for section[i] in [
-                    { start: root.system-storage-start, label: root.i18n-strings[732] },
-                    { start: root.system-support-start, label: root.i18n-strings[733] },
+                    { start: root.power-battery-start, label: root.i18n-strings[814] },
+                    { start: root.power-devices-start, label: root.i18n-strings[815] },
                 ]: SettingsSectionHeader {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(section.start, root.system-scroll-offset, root.system-storage-start, root.system-support-start, 0) - root.settings-section-gap;
+                    y: root.sec-row-y(section.start, root.power-scroll-offset, root.power-battery-start, root.power-devices-start, 0) - root.settings-section-gap;
                     width: root.settings-content-width;
                     label: section.label;
                     scope-label: root.i18n-strings[313];
-                    visible: root.page-system
-                        && root.system-scroll-offset < section.start
-                        && root.sec-row-visible(section.start, root.system-scroll-offset, root.system-storage-start, root.system-support-start, 0);
+                    visible: root.page-power
+                        && root.power-scroll-offset < section.start
+                        && root.sec-row-visible(section.start, root.power-scroll-offset, root.power-battery-start, root.power-devices-start, 0);
                 }
                 for row[k] in [
                     {
@@ -4230,52 +4871,107 @@ export component HomeWindow inherits Window {
                         detail: root.system-effective-profile != root.system-profile
                             ? root.i18n-strings[214] + (root.system-effective-profile == "battery-saver" ? root.i18n-strings[51] : root.i18n-strings[52])
                             : "",
-                        nav: false,
+                        nav: false, slider: false, fraction: 0,
                     },
                     {
                         title: root.i18n-strings[53],
                         value: root.system-auto-battery-threshold <= 0 ? root.i18n-strings[54] : "≤ " + root.system-auto-battery-threshold + "%",
-                        detail: "", nav: false,
-                    },
-                    {
-                        title: root.i18n-strings[55],
-                        value: root.system-screensaver-after-min <= 0 ? root.i18n-strings[54] : root.system-screensaver-after-min + root.i18n-strings[215],
-                        detail: "", nav: false,
+                        detail: "", nav: false, slider: false, fraction: 0,
                     },
                     {
                         title: root.i18n-strings[56],
                         value: root.system-sleep-after-min <= 0 ? root.i18n-strings[54] : root.system-sleep-after-min + root.i18n-strings[215],
-                        detail: root.system-screensaver-after-min > 0 ? root.i18n-strings[57] : "",
-                        nav: false,
+                        detail: "", nav: false, slider: false, fraction: 0,
                     },
                     {
-                        title: root.i18n-strings[328],
-                        value: root.system-poweroff-after-min <= 0 ? root.i18n-strings[54] : root.system-poweroff-after-min + root.i18n-strings[215],
-                        detail: root.system-poweroff-after-min > 0 && root.system-sleep-after-min > 0 && !root.system-rtc-wakeup
-                            ? root.i18n-strings[59]
-                            : root.system-sleep-after-min > 0 ? root.i18n-strings[60]
-                            : root.system-screensaver-after-min > 0 ? root.i18n-strings[61]
-                            : "",
-                        nav: false,
+                        title: root.i18n-strings[816],
+                        value: root.battery-percent < 0 ? root.i18n-strings[205] : root.battery-percent + "%",
+                        detail: root.battery-state == "charging" ? root.i18n-strings[382]
+                            : root.battery-state == "full" ? root.i18n-strings[383]
+                            : root.battery-state == "discharging" ? root.i18n-strings[818]
+                            : root.battery-state == "not-charging" ? root.i18n-strings[819] : "",
+                        nav: false, slider: false, fraction: 0,
                     },
-                    { title: root.i18n-strings[19], value: root.system-storage-active + " • " + root.system-storage-health, detail: "", nav: true },
-                    { title: root.i18n-strings[651], value: "", detail: "", nav: true },
-                    { title: root.i18n-strings[20], value: "", detail: "", nav: true },
-                    { title: root.i18n-strings[498], value: "", detail: "", nav: true },
-                    { title: root.i18n-strings[499], value: root.safe-mode ? root.i18n-strings[518] : "", detail: "", nav: true },
-                    { title: root.i18n-strings[109], value: "", detail: "", nav: true },
+                    {
+                        title: root.i18n-strings[817],
+                        value: root.battery-health == "good" ? root.i18n-strings[820]
+                            : root.battery-health == "overheat" || root.battery-health == "hot" || root.battery-health == "warm" ? root.i18n-strings[821]
+                            : root.battery-health == "cold" || root.battery-health == "cool" ? root.i18n-strings[822]
+                            : root.battery-health == "dead" ? root.i18n-strings[823]
+                            : root.battery-health == "unknown" || root.battery-health == "" ? root.i18n-strings[205]
+                            : root.i18n-strings[824],
+                        detail: "", nav: false, slider: false, fraction: 0,
+                    },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(k, root.system-scroll-offset, root.system-storage-start, root.system-support-start, 0);
+                    y: root.sec-row-y(k, root.power-scroll-offset, root.power-battery-start, root.power-devices-start, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
                     value: row.value;
                     detail: row.detail;
                     navigates: row.nav;
+                    show-slider: row.slider;
+                    slider-fraction: row.fraction;
+                    selected: root.settings-view == 69 && root.power-index == k;
+                    visible: root.page-power
+                        && root.sec-row-visible(k, root.power-scroll-offset, root.power-battery-start, root.power-devices-start, 0);
+                }
+                for device[k] in root.power-devices: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(root.power-devices-start + k, root.power-scroll-offset, root.power-battery-start, root.power-devices-start, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: device.name;
+                    detail: device.kind == "controller" ? root.i18n-strings[14]
+                        : device.kind == "headphones" ? root.i18n-strings[330] : root.i18n-strings[161];
+                    value: device.battery >= 0 ? device.battery + "%" : root.i18n-strings[205];
+                    show-slider: device.battery >= 0;
+                    slider-fraction: device.battery / 100;
+                    selected: root.settings-view == 69 && root.power-index == root.power-devices-start + k;
+                    visible: root.page-power
+                        && root.sec-row-visible(root.power-devices-start + k, root.power-scroll-offset, root.power-battery-start, root.power-devices-start, 0);
+                }
+                SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(root.power-devices-start, root.power-scroll-offset, root.power-battery-start, root.power-devices-start, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: root.i18n-strings[825];
+                    enabled: false;
+                    selected: root.settings-view == 69 && root.power-index == root.power-devices-start;
+                    visible: root.page-power && root.power-devices.length == 0
+                        && root.sec-row-visible(root.power-devices-start, root.power-scroll-offset, root.power-battery-start, root.power-devices-start, 0);
+                }
+
+                /* ----------------------------------------------------------- System */
+                SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(root.system-support-start, root.system-scroll-offset, root.system-support-start, 0, 0) - root.settings-section-gap;
+                    width: root.settings-content-width;
+                    label: root.i18n-strings[733];
+                    scope-label: root.i18n-strings[313];
+                    visible: root.page-system
+                        && root.system-scroll-offset < root.system-support-start
+                        && root.sec-row-visible(root.system-support-start, root.system-scroll-offset, root.system-support-start, 0, 0);
+                }
+                for row[k] in [
+                    { title: root.i18n-strings[19], value: root.system-storage-active + " • " + root.system-storage-health },
+                    { title: root.i18n-strings[651], value: "" },
+                    { title: root.i18n-strings[20], value: "" },
+                    { title: root.i18n-strings[498], value: "" },
+                    { title: root.i18n-strings[499], value: root.safe-mode ? root.i18n-strings[518] : "" },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(k, root.system-scroll-offset, root.system-support-start, 0, 0);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    value: row.value;
+                    navigates: true;
                     selected: root.settings-view == 19 && root.system-index == k;
                     visible: root.page-system
-                        && root.sec-row-visible(k, root.system-scroll-offset, root.system-storage-start, root.system-support-start, 0);
+                        && root.sec-row-visible(k, root.system-scroll-offset, root.system-support-start, 0, 0);
                 }
 
                 /* Storage page. Every row participates in controller navigation,
@@ -4442,42 +5138,6 @@ export component HomeWindow inherits Window {
                         && root.srow-visible(k, root.system-info-scroll-offset, root.settings-list-visible-rows);
                 }
 
-                /* Restore Defaults: explanation flows above the single action. */
-                Rectangle {
-                    x: root.settings-content-x;
-                    y: root.settings-content-y;
-                    width: root.settings-content-width;
-                    height: root.settings-list-bottom - root.settings-content-y;
-                    visible: root.settings-view == 22;
-
-                  VerticalLayout {
-                    spacing: root.settings-row-gap;
-                    alignment: start;
-
-                    Text {
-                        text: root.i18n-strings[106];
-                        color: #c8ccd2;
-                        font-size: 16px;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: root.i18n-strings[107];
-                        color: Theme.text-dim;
-                        font-size: 14px;
-                        wrap: word-wrap;
-                    }
-                    Rectangle { height: root.settings-row-gap; }
-                    SettingsActionButton {
-                        height: root.settings-row-height;
-                        armed: root.system-reset-confirm;
-                        label: root.i18n-strings[109];
-                        prompt: root.i18n-strings[108];
-                        selected: true;
-                        danger: true;
-                    }
-                  }
-                }
-
                 /* Diagnostics: one action and the read-only output location. */
                 SettingsSelectableRow {
                     x: root.settings-content-x;
@@ -4532,7 +5192,7 @@ export component HomeWindow inherits Window {
                     width: root.settings-content-width;
                     label: root.gen-split-label;
                     scope-label: root.settings-section-scope;
-                    visible: root.settings-view >= 50 && root.settings-view <= 67
+                    visible: root.gen-view
                         && root.gen-split > 0 && root.gen-scroll < root.gen-split
                         && root.sec-row-visible(root.gen-split, root.gen-scroll, root.gen-split, 0, 0);
                 }
@@ -4550,7 +5210,7 @@ export component HomeWindow inherits Window {
                     enabled: row.enabled;
                     armed: row.armed;
                     selected: root.gen-index == k;
-                    visible: root.settings-view >= 50 && root.settings-view <= 67
+                    visible: root.gen-view
                         && (root.gen-split > 0 ? root.sec-row-visible(k, root.gen-scroll, root.gen-split, 0, 0)
                             : root.srow-visible(k, root.gen-scroll, root.settings-list-visible-rows));
                 }
@@ -4813,27 +5473,31 @@ export component HomeWindow inherits Window {
                         title: root.i18n-strings[127],
                         value: root.display-brightness-available ? root.display-brightness + "%" : root.i18n-strings[132],
                         enabled: root.display-brightness-available, toggle: false, on: false, shown: true,
+                        slider: root.display-brightness-available, fraction: root.display-brightness / 100,
                     },
                     {
                         pos: 1,
                         title: root.i18n-strings[143],
                         value: root.display-color-temperature + root.i18n-strings[224],
                         enabled: true, toggle: false, on: false,
-                        shown: root.display-color-temperature-available,
+                        shown: root.display-color-temperature-available, slider: false, fraction: 0,
                     },
-                    { pos: root.da-audio-start, title: root.i18n-strings[133], value: root.audio-output-label, enabled: true, toggle: false, on: false, shown: true },
+                    { pos: root.da-audio-start, title: root.i18n-strings[133], value: root.audio-output-label, enabled: true, toggle: false, on: false, shown: true, slider: false, fraction: 0 },
                     {
                         pos: root.da-audio-start + 1,
                         title: root.i18n-strings[134],
-                        value: root.audio-volume-supported ? root.audio-volume + "%" : root.audio-selected == "hdmi" ? root.i18n-strings[223] : root.i18n-strings[205],
+                        value: !root.audio-volume-supported ? (root.audio-selected == "hdmi" ? root.i18n-strings[223] : root.i18n-strings[205])
+                            : root.audio-volume == 0 ? root.i18n-strings[812] : root.audio-volume + "%",
                         enabled: root.audio-volume-supported, toggle: false, on: false, shown: true,
+                        slider: root.audio-volume-supported, fraction: root.audio-volume / 100,
                     },
-                    { pos: root.da-audio-start + 2, title: root.i18n-strings[135], value: root.applications-volume + "%", enabled: true, toggle: false, on: false, shown: true },
-                    { pos: root.da-audio-start + 3, title: root.i18n-strings[139], value: root.home-music-volume + "%", enabled: true, toggle: false, on: false, shown: true },
-                    { pos: root.da-audio-start + 4, title: root.i18n-strings[140], value: root.audio-test-tone-playing ? root.i18n-strings[141] : root.i18n-strings[142], enabled: true, toggle: false, on: false, shown: true },
-                    { pos: root.da-sounds-start, title: root.i18n-strings[136], value: root.system-sounds-volume + "%", enabled: true, toggle: false, on: false, shown: true },
-                    { pos: root.da-sounds-start + 1, title: root.i18n-strings[137], value: "", enabled: true, toggle: true, on: root.navigation-sounds-enabled, shown: true },
-                    { pos: root.da-sounds-start + 2, title: root.i18n-strings[138], value: "", enabled: true, toggle: true, on: root.power-sounds-enabled, shown: true },
+                    { pos: root.da-audio-start + 2, title: root.i18n-strings[135], value: root.applications-volume == 0 ? root.i18n-strings[812] : root.applications-volume + "%", enabled: true, toggle: false, on: false, shown: true, slider: true, fraction: root.applications-volume / 100 },
+                    { pos: root.da-audio-start + 3, title: root.i18n-strings[139], value: root.home-music-volume == 0 ? root.i18n-strings[812] : root.home-music-volume + "%", enabled: true, toggle: false, on: false, shown: true, slider: true, fraction: root.home-music-volume / 100 },
+                    { pos: root.da-audio-start + 4, title: root.i18n-strings[140], value: root.audio-test-tone-playing ? root.i18n-strings[141] : root.i18n-strings[142], enabled: true, toggle: false, on: false, shown: true, slider: false, fraction: 0 },
+                    { pos: root.da-sounds-start, title: root.i18n-strings[136], value: root.system-sounds-volume + "%", enabled: true, toggle: false, on: false, shown: true, slider: true, fraction: root.system-sounds-volume / 100 },
+                    { pos: root.da-sounds-start + 1, title: root.i18n-strings[137], value: "", enabled: true, toggle: true, on: root.navigation-sounds-enabled, shown: true, slider: false, fraction: 0 },
+                    { pos: root.da-sounds-start + 2, title: root.i18n-strings[851], value: "", enabled: true, toggle: true, on: root.notify-sounds-enabled, shown: true, slider: false, fraction: 0 },
+                    { pos: root.da-sounds-start + 3, title: root.i18n-strings[138], value: "", enabled: true, toggle: true, on: root.power-sounds-enabled, shown: true, slider: false, fraction: 0 },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
                     y: root.sec-row-y(row.pos, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, 0);
@@ -4844,6 +5508,8 @@ export component HomeWindow inherits Window {
                     enabled: row.enabled;
                     toggle: row.toggle;
                     toggle-on: row.on;
+                    show-slider: row.slider;
+                    slider-fraction: row.fraction;
                     selected: root.settings-view == 18 && root.display-audio-index == row.pos;
                     visible: row.shown && root.page-display-audio
                         && root.sec-row-visible(row.pos, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, 0);
@@ -5118,7 +5784,7 @@ export component HomeWindow inherits Window {
                     list-y: root.settings-choice-list-y;
                     row-step: root.settings-row-step;
                     row-height: root.settings-row-height;
-                    visible: root.settings-choice-open && !root.details-page;
+                    visible: root.settings-choice-open && !root.details-page && !root.app-page-shown;
                     z: 95;
                 }
 
@@ -5171,8 +5837,8 @@ export component HomeWindow inherits Window {
                 entries: root.app-page-entries;
                 actions: root.app-page-actions;
                 action-captions: root.app-page-captions;
-                index: root.steamlink-active ? root.steamlink-index : root.moonlight-index;
-                notice: root.steamlink-active ? root.steamlink-notice : root.moonlight-notice;
+                index: root.app-page-gen ? root.gen-index : root.steamlink-active ? root.steamlink-index : root.moonlight-index;
+                notice: root.app-page-gen ? root.gen-notice : root.steamlink-active ? root.steamlink-notice : root.moonlight-notice;
                 pin: root.app-page-pin;
                 pin-label: root.i18n-strings[449];
                 progress: root.app-page-progress;
@@ -5194,7 +5860,8 @@ export component HomeWindow inherits Window {
                 list-y: root.settings-choice-list-y;
                 row-step: root.settings-row-step;
                 row-height: root.settings-row-height;
-                visible: root.settings-choice-open && root.details-page;
+                /* Over the full screen pages (Files actions, Game Details). */
+                visible: root.settings-choice-open && (root.details-page || root.app-page-shown);
             }
         }
 
@@ -5209,7 +5876,7 @@ export component HomeWindow inherits Window {
             width: parent.width;
             height: self.content-height;
             z: 20;
-            visible: root.settings-open && root.settings-view == 6;
+            visible: (root.settings-open || root.find-open) && root.settings-view == 6;
             value <=> root.keyboard-value;
             title: root.keyboard-title;
             secret: root.keyboard-secret;
@@ -5249,24 +5916,36 @@ export component HomeWindow inherits Window {
                 height: parent.height;
                 spacing: 20px;
 
-                if !root.settings-open && root.home-focus-valid: ActionHint {
+                /* System keyboard: West deletes the last character (first,
+                 * on the left, user request 2026-10-10). */
+                if (root.settings-open || root.find-open) && root.settings-view == 6: ActionHint {
+                    kind: "face"; face-position: root.details-face-position; label: root.i18n-strings[618];
+                }
+                if !root.settings-open && root.home-sheet-open: ActionHint {
+                    kind: "face"; face-position: root.select-face-position; label: root.i18n-strings[185];
+                }
+                if !root.settings-open && !root.home-sheet-open && root.home-focus-valid: ActionHint {
                     kind: "face"; face-position: root.select-face-position;
                     label: root.home-focused.kind == 0 ? root.i18n-strings[413] : root.i18n-strings[414];
                 }
-                if !root.settings-open && root.home-focus-valid && root.home-focused.kind == 0: ActionHint {
-                    kind: "face"; face-position: root.context-face-position; label: root.i18n-strings[412];
+                /* Games: North = Details; a collection: North = Manage. */
+                if !root.settings-open && !root.home-sheet-open && root.home-focus-valid && root.home-focused.kind == 0: ActionHint {
+                    kind: "face"; face-position: root.context-face-position; label: root.i18n-strings[523];
                 }
-                if !root.settings-open && root.home-focus-valid && root.home-focused.kind == 0: ActionHint {
-                    kind: "face"; face-position: root.details-face-position; label: root.i18n-strings[523];
+                if !root.settings-open && !root.home-sheet-open && root.home-focus-valid && root.home-focused.kind == 2: ActionHint {
+                    kind: "face"; face-position: root.context-face-position; label: root.i18n-strings[849];
                 }
-                if !root.settings-open && root.library-open: ActionHint {
+                if !root.settings-open && (root.find-open && !root.library-open && root.find-zone != 2): ActionHint {
+                    kind: "face"; face-position: root.select-face-position; label: root.i18n-strings[185];
+                }
+                if !root.settings-open && (root.library-open || root.home-sheet-open || root.find-open): ActionHint {
                     kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[186];
                 }
                 if !root.settings-open: Rectangle { horizontal-stretch: 1; }
                 if root.settings-open && root.settings-view != 14: ActionHint { kind: "nav"; label: root.i18n-strings[184]; }
                 if root.settings-select-hint-visible: ActionHint {
                     kind: "face"; face-position: root.select-face-position;
-                    label: !root.settings-choice-open && root.settings-view >= 50 && root.settings-view <= 67
+                    label: !root.settings-choice-open && root.gen-view
                         && root.gen-select-label != "" ? root.gen-select-label : root.i18n-strings[185];
                 }
                 if root.settings-open: ActionHint {
@@ -5281,6 +5960,7 @@ export component HomeWindow inherits Window {
                     kind: "face"; face-position: root.context-face-position; label: root.i18n-strings[791];
                 }
                 if root.settings-open: Rectangle { horizontal-stretch: 1; }
+                if !root.settings-open && !root.home-sheet-open && !root.find-open: ActionHint { kind: "select"; label: root.i18n-strings[828]; }
                 if !root.settings-open && !root.library-open: ActionHint { kind: "start"; label: root.i18n-strings[3]; }
                 ActionHint { kind: "menu"; label: root.i18n-strings[187]; }
             }
@@ -5816,41 +6496,169 @@ export component HomeWindow inherits Window {
         }
     }
 
-    /* Screensaver lifecycle state. The logo moves continuously using
-     * resolution-independent permille coordinates; the first input wakes it
-     * and is consumed instead of leaking into the underlying UI. */
+    /* Manual Date & Time picker: full screen with the nuubOS chrome (top
+     * bar, action bar). Day / Month / Year on the first line, Hour : Minute
+     * on the second; each wheel shows the next value above and the previous
+     * one below. Geometry adapts to 4:3, square and 16:9. */
+    property <length> dt-cell: root.layout-class == 2 ? 104px : 88px;
+    property <length> dt-month: root.layout-class == 2 ? 240px : 200px;
+    property <length> dt-year: root.layout-class == 2 ? 132px : 116px;
+    property <length> dt-colon: 32px;
+    property <length> dt-gap: 14px;
+    property <length> dt-label: 24px;
+    property <length> dt-preview-height: 34px;
+    property <length> dt-spacing: root.height < 600px ? 18px : 28px;
+    property <length> dt-wheel: max(88px, min(156px,
+        (root.height - 116px - 16px - root.dt-preview-height - 2 * root.dt-spacing - 2 * root.dt-label) / 2));
+    property <length> dt-block: root.dt-preview-height + 2 * root.dt-spacing + 2 * (root.dt-label + root.dt-wheel);
+    property <length> dt-top: 58px + max(0px, (root.height - 116px - root.dt-block) / 2);
+    property <length> dt-row0: root.dt-top + root.dt-preview-height + root.dt-spacing;
+    property <length> dt-row1: root.dt-row0 + root.dt-label + root.dt-wheel + root.dt-spacing;
+    property <length> dt-date-x: (root.width - root.dt-cell - root.dt-month - root.dt-year - 2 * root.dt-gap) / 2;
+    property <length> dt-time-x: (root.width - 2 * root.dt-cell - root.dt-colon - 2 * root.dt-gap) / 2;
+    pure function dt-x(i: int) -> length {
+        if i == 0 { return root.dt-date-x; }
+        if i == 1 { return root.dt-date-x + root.dt-cell + root.dt-gap; }
+        if i == 2 { return root.dt-date-x + root.dt-cell + root.dt-month + 2 * root.dt-gap; }
+        if i == 3 { return root.dt-time-x; }
+        return root.dt-time-x + root.dt-cell + root.dt-colon + 2 * root.dt-gap;
+    }
+    pure function dt-w(i: int) -> length {
+        if i == 1 { return root.dt-month; }
+        if i == 2 { return root.dt-year; }
+        return root.dt-cell;
+    }
+
     Rectangle {
         x: 0; y: 0; width: parent.width; height: parent.height;
-        background: #050608;
-        visible: root.screensaver-active;
-        z: 200;
+        background: Theme.background;
+        visible: root.datetime-picker-open;
+        z: 186;
+        clip: true;
 
-        logo := Rectangle {
-            width: 150px;
-            height: 46px;
-            x: (parent.width - self.width) * root.screensaver-x-permille / 1000;
-            y: (parent.height - self.height) * root.screensaver-y-permille / 1000;
-            background: #00000000;
-
-            Text {
-                x: 0px; y: 0px;
-                width: 98px; height: parent.height;
-                text: "nuub";
-                horizontal-alignment: right;
-                vertical-alignment: center;
-                color: #e8ebef;
-                font-size: 28px;
-                font-weight: 700;
+        Rectangle {
+            x: 0; y: 0; width: parent.width; height: 58px;
+            background: Theme.background;
+            HorizontalLayout {
+                x: 20px; y: 10px; height: 32px;
+                spacing: 0px;
+                alignment: start;
+                Text { text: "nuub"; color: Theme.text; font-size: 25px; font-weight: 700; vertical-alignment: center; }
+                Text { text: "OS"; color: Theme.accent; font-size: 25px; font-weight: 700; vertical-alignment: center; }
             }
             Text {
-                x: 98px; y: 0px;
-                width: 52px; height: parent.height;
-                text: "OS";
-                horizontal-alignment: left;
-                vertical-alignment: center;
-                color: Theme.accent;
-                font-size: 28px;
+                x: 0; y: 13px; width: parent.width; height: 28px;
+                text: root.i18n-strings[46];
+                color: Theme.text;
+                font-size: 19px;
                 font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            Rectangle { x: 16px; y: 57px; width: parent.width - 32px; height: 1px; background: Theme.surface; }
+        }
+
+        Text {
+            x: 16px; y: root.dt-top; width: parent.width - 32px; height: root.dt-preview-height;
+            text: root.datetime-preview;
+            color: Theme.text-secondary;
+            font-size: 20px;
+            font-weight: 500;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        for field[i] in root.datetime-fields : wheel := Rectangle {
+            property <bool> focused: root.datetime-field-index == i;
+            property <length> value-size: i == 1
+                ? (root.layout-class == 2 ? 30px : 26px)
+                : (root.layout-class == 2 ? 40px : 34px);
+            x: root.dt-x(i);
+            y: i < 3 ? root.dt-row0 : root.dt-row1;
+            width: root.dt-w(i);
+            height: root.dt-label + root.dt-wheel;
+
+            Text {
+                x: 0; y: 0; width: parent.width; height: root.dt-label - 4px;
+                text: field.label;
+                color: wheel.focused ? Theme.primary : Theme.text-dim;
+                font-size: 13px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                x: 0; y: root.dt-label; width: parent.width; height: root.dt-wheel;
+                /* M3: tonal surface, the focused wheel in the selection
+                 * roles with the primary outline (as Settings rows). */
+                background: wheel.focused ? Theme.secondary-container : Theme.surface-container;
+                border-radius: Shape.large;
+                border-width: wheel.focused ? 3px : 0px;
+                border-color: Theme.primary;
+                animate background, border-width { duration: 120ms; }
+
+                Text {
+                    x: 4px; y: 6px; width: parent.width - 8px; height: parent.height * 0.26;
+                    text: field.above;
+                    color: Theme.text-faint;
+                    font-size: wheel.value-size * 0.5;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Rectangle {
+                    x: 12px; y: parent.height * 0.29; width: parent.width - 24px; height: 1px;
+                    background: wheel.focused ? Theme.outline-variant : Theme.border-soft;
+                }
+                Text {
+                    x: 4px; y: parent.height * 0.3; width: parent.width - 8px; height: parent.height * 0.4;
+                    text: field.value;
+                    color: wheel.focused ? Theme.on-secondary-container : Theme.text;
+                    font-size: wheel.value-size;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Rectangle {
+                    x: 12px; y: parent.height * 0.71; width: parent.width - 24px; height: 1px;
+                    background: wheel.focused ? Theme.outline-variant : Theme.border-soft;
+                }
+                Text {
+                    x: 4px; y: parent.height * 0.74 - 6px; width: parent.width - 8px; height: parent.height * 0.26;
+                    text: field.below;
+                    color: Theme.text-faint;
+                    font-size: wheel.value-size * 0.5;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+        Text {
+            x: root.dt-time-x + root.dt-cell + root.dt-gap;
+            y: root.dt-row1 + root.dt-label;
+            width: root.dt-colon; height: root.dt-wheel;
+            text: ":";
+            color: Theme.text;
+            font-size: root.layout-class == 2 ? 40px : 34px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            x: 0; y: parent.height - 58px; width: parent.width; height: 58px;
+            background: Theme.background;
+            Rectangle { x: 16px; y: 0; width: parent.width - 32px; height: 1px; background: Theme.surface; }
+            HorizontalLayout {
+                x: 18px; y: 0; width: parent.width - 36px; height: parent.height;
+                spacing: 20px;
+                alignment: start;
+                ActionHint { kind: "nav"; label: root.i18n-strings[184]; }
+                ActionHint { kind: "face"; face-position: root.select-face-position; label: root.i18n-strings[82]; }
+                ActionHint { kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[619]; }
             }
         }
     }

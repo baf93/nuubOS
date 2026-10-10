@@ -15,7 +15,6 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
-#include <sys/timerfd.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/utsname.h>
@@ -37,7 +36,6 @@
 #define STATUS_SOCKET "/run/nuubos/statusd.sock"
 #define UI_CONTROL "/run/nuubos/ui-control"
 #define LIFECYCLE_LIGHTING "/usr/lib/nuubos/lifecycle-lighting"
-#define LIFECYCLE_DISPLAY "/usr/lib/nuubos/lifecycle-display"
 #define LIFECYCLE_PRE_POWER "/usr/lib/nuubos/lifecycle-pre-power"
 #define MAX_CLIENTS 16
 
@@ -56,16 +54,13 @@ enum profile_mode {
 
 enum idle_stage {
     IDLE_ACTIVE = 0,
-    IDLE_SCREENSAVER,
     IDLE_SLEEPING
 };
 
 struct config_state {
     enum profile_mode requested_profile;
     int auto_battery_threshold; /* 0=off */
-    int screensaver_after_min;  /* 0=off */
-    int sleep_after_min;        /* 0=off, duration after previous stage */
-    int poweroff_after_min;     /* 0=off, duration after previous stage */
+    int sleep_after_min;        /* 0=off */
 };
 
 struct runtime_state {
@@ -75,9 +70,6 @@ struct runtime_state {
     char battery_state[32];
     enum idle_stage idle_stage;
     long long stage_enter_ms;
-    bool rtc_wakeup_supported;
-    bool rtc_alarm_armed;
-    char last_alarm_backend[24];
     char last_wake_reason[24];
     long long last_sleep_elapsed_ms;
 
@@ -113,7 +105,6 @@ static const char *idle_stage_name(enum idle_stage stage)
 {
     switch (stage) {
     case IDLE_ACTIVE: return "active";
-    case IDLE_SCREENSAVER: return "screensaver";
     case IDLE_SLEEPING: return "sleep";
     default: return "active";
     }
@@ -193,12 +184,10 @@ static int atomic_save_config(const struct config_state *cfg)
     snprintf(tmp, sizeof(tmp), "%s.tmp.%ld", CONFIG_FILE, (long)getpid());
     f = fopen(tmp, "w");
     if (!f) return -1;
-    fprintf(f, "SYSTEM_CONFIG_VERSION=2\n");
+    fprintf(f, "SYSTEM_CONFIG_VERSION=3\n");
     fprintf(f, "PERFORMANCE_PROFILE=%s\n", profile_name(cfg->requested_profile));
     fprintf(f, "AUTO_BATTERY_SAVER_THRESHOLD=%d\n", cfg->auto_battery_threshold);
-    fprintf(f, "SCREENSAVER_AFTER_MIN=%d\n", cfg->screensaver_after_min);
     fprintf(f, "SLEEP_AFTER_MIN=%d\n", cfg->sleep_after_min);
-    fprintf(f, "POWER_OFF_AFTER_MIN=%d\n", cfg->poweroff_after_min);
     if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
         fclose(f); unlink(tmp); return -1;
     }
@@ -212,23 +201,18 @@ static int atomic_save_config(const struct config_state *cfg)
 }
 
 /* Product defaults for a fresh STATE and for Reset System Settings.
- * Sleep is the idle stage that actually saves battery; the screensaver keeps
- * the panel and renderer busy, and Power Off after Sleep depends on per-device
- * RTC wake support, so both start Off. */
+ * Sleep is the only idle stage (user decision 2026-10-09: no screensaver,
+ * no automatic power off; version-2 keys are ignored on load). */
 #define DEFAULT_PROFILE PROFILE_AUTO
 #define DEFAULT_AUTO_BATTERY_THRESHOLD 20
-#define DEFAULT_SCREENSAVER_AFTER_MIN 0
 #define DEFAULT_SLEEP_AFTER_MIN 10
-#define DEFAULT_POWEROFF_AFTER_MIN 0
 #define DEFAULT_BACKUP_POLICY "WEEKLY"
 
 static void config_defaults(struct config_state *cfg)
 {
     cfg->requested_profile = DEFAULT_PROFILE;
     cfg->auto_battery_threshold = DEFAULT_AUTO_BATTERY_THRESHOLD;
-    cfg->screensaver_after_min = DEFAULT_SCREENSAVER_AFTER_MIN;
     cfg->sleep_after_min = DEFAULT_SLEEP_AFTER_MIN;
-    cfg->poweroff_after_min = DEFAULT_POWEROFF_AFTER_MIN;
 }
 
 static void load_config(struct config_state *cfg)
@@ -253,15 +237,9 @@ static void load_config(struct config_state *cfg)
         } else if (!strcmp(key, "AUTO_BATTERY_SAVER_THRESHOLD")) {
             int x = atoi(val);
             if (x >= 0 && x <= 50) cfg->auto_battery_threshold = x;
-        } else if (!strcmp(key, "SCREENSAVER_AFTER_MIN")) {
-            int x = atoi(val);
-            if (x >= 0 && x <= 240) cfg->screensaver_after_min = x;
         } else if (!strcmp(key, "SLEEP_AFTER_MIN")) {
             int x = atoi(val);
             if (x >= 0 && x <= 240) cfg->sleep_after_min = x;
-        } else if (!strcmp(key, "POWER_OFF_AFTER_MIN")) {
-            int x = atoi(val);
-            if (x >= 0 && x <= 480) cfg->poweroff_after_min = x;
         }
     }
     fclose(f);
@@ -543,150 +521,6 @@ static int connect_unix(const char *path)
     return fd;
 }
 
-static bool rtc_wakeup_supported(void)
-{
-    char buf[64];
-    if (read_text_file("/sys/class/rtc/rtc0/device/power/wakeup",buf,sizeof(buf))!=0)
-        return false;
-    return !strcmp(buf,"enabled") && access("/sys/class/rtc/rtc0/wakealarm", W_OK)==0;
-}
-
-static void clear_rtc_alarm(struct runtime_state *st)
-{
-    int fd = open("/sys/class/rtc/rtc0/wakealarm", O_WRONLY|O_CLOEXEC);
-    if (fd >= 0) {
-        ssize_t written = write(fd, "0\n", 2);
-        if (written != 2)
-            fprintf(stderr, "systemd: failed to clear RTC wakealarm: %s\n",
-                    written < 0 ? strerror(errno) : "short write");
-        close(fd);
-    }
-    st->rtc_alarm_armed=false;
-}
-
-static bool arm_rtc_alarm_relative(struct runtime_state *st, long long seconds)
-{
-    char buf[64];
-    int fd;
-
-    clear_rtc_alarm(st);
-    fd = open("/sys/class/rtc/rtc0/wakealarm", O_WRONLY|O_CLOEXEC);
-    if (fd < 0)
-        return false;
-
-    snprintf(buf,sizeof(buf),"+%lld\n",seconds);
-    if (write(fd,buf,strlen(buf)) != (ssize_t)strlen(buf)) {
-        close(fd);
-        return false;
-    }
-
-    close(fd);
-    st->rtc_alarm_armed=true;
-    return true;
-}
-
-struct poweroff_alarm {
-    int timer_fd;
-    bool rtc_fallback;
-    long long deadline_ms;
-};
-
-static void poweroff_alarm_init(struct poweroff_alarm *alarm)
-{
-    alarm->timer_fd = -1;
-    alarm->rtc_fallback = false;
-    alarm->deadline_ms = 0;
-}
-
-static bool arm_poweroff_alarm(struct runtime_state *st,
-                               struct poweroff_alarm *alarm,
-                               long long seconds)
-{
-    struct itimerspec it;
-
-    poweroff_alarm_init(alarm);
-    alarm->deadline_ms = boottime_ms() + seconds * 1000LL;
-
-    alarm->timer_fd = timerfd_create(CLOCK_BOOTTIME_ALARM,
-                                     TFD_NONBLOCK | TFD_CLOEXEC);
-    if (alarm->timer_fd >= 0) {
-        memset(&it, 0, sizeof(it));
-        it.it_value.tv_sec = (time_t)seconds;
-        if (timerfd_settime(alarm->timer_fd, 0, &it, NULL) == 0) {
-            snprintf(st->last_alarm_backend,sizeof(st->last_alarm_backend),
-                     "boottime-alarm");
-            return true;
-        }
-
-        fprintf(stderr,
-                "systemd: CLOCK_BOOTTIME_ALARM set failed: %s\n",
-                strerror(errno));
-        close(alarm->timer_fd);
-        alarm->timer_fd = -1;
-    } else {
-        fprintf(stderr,
-                "systemd: CLOCK_BOOTTIME_ALARM unavailable: %s\n",
-                strerror(errno));
-    }
-
-    if (st->rtc_wakeup_supported &&
-        arm_rtc_alarm_relative(st, seconds)) {
-        alarm->rtc_fallback = true;
-        snprintf(st->last_alarm_backend,sizeof(st->last_alarm_backend),
-                 "rtc-sysfs");
-        return true;
-    }
-
-    snprintf(st->last_alarm_backend,sizeof(st->last_alarm_backend),
-             "none");
-    return false;
-}
-
-static bool poweroff_alarm_expired(struct runtime_state *st,
-                                   struct poweroff_alarm *alarm)
-{
-    if (alarm->timer_fd >= 0) {
-        uint64_t expirations = 0;
-        ssize_t n = read(alarm->timer_fd, &expirations, sizeof(expirations));
-
-        if (n == (ssize_t)sizeof(expirations) && expirations > 0)
-            return true;
-
-        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
-            fprintf(stderr,
-                    "systemd: CLOCK_BOOTTIME_ALARM read failed: %s\n",
-                    strerror(errno));
-        return false;
-    }
-
-    if (alarm->rtc_fallback) {
-        /*
-         * Relative RTC sysfs alarms do not expose a consumable timer object.
-         * CLOCK_BOOTTIME includes suspend time, so a wake at/after the
-         * requested deadline is the timeout path; an earlier wake is user
-         * initiated and cancels the pending poweroff.
-         */
-        return boottime_ms() >= alarm->deadline_ms - 2000LL;
-    }
-
-    (void)st;
-    return false;
-}
-
-static void cancel_poweroff_alarm(struct runtime_state *st,
-                                  struct poweroff_alarm *alarm)
-{
-    if (alarm->timer_fd >= 0) {
-        close(alarm->timer_fd);
-        alarm->timer_fd = -1;
-    }
-
-    if (alarm->rtc_fallback || st->rtc_alarm_armed)
-        clear_rtc_alarm(st);
-
-    alarm->rtc_fallback = false;
-}
-
 static int run_suspend(void)
 {
     char *argv[]={"/usr/sbin/nuubos-suspend",NULL};
@@ -720,25 +554,8 @@ static void notify_ui_lifecycle(const char *mode)
     close(fd);
 }
 
-static void display_screensaver(void)
-{
-    if (run_lifecycle_helper(LIFECYCLE_DISPLAY, "screensaver") != 0)
-        fprintf(stderr, "systemd: screensaver display dim failed\n");
-}
-
-static void display_active(void)
-{
-    if (run_lifecycle_helper(LIFECYCLE_DISPLAY, "active") != 0)
-        fprintf(stderr, "systemd: screensaver display restore failed\n");
-}
-
 static void mark_activity(struct runtime_state *st)
 {
-    /* Avoid spawning the Display helper for ordinary active-state input.
-     * It is needed only when leaving a lifecycle state that may have
-     * applied temporary screensaver dimming. */
-    if (st->idle_stage != IDLE_ACTIVE)
-        display_active();
     st->idle_stage = IDLE_ACTIVE;
     st->stage_enter_ms = boottime_ms();
 }
@@ -792,69 +609,21 @@ static void run_restart(struct runtime_state *st)
 
 static void enter_sleep(struct runtime_state *st)
 {
-    struct poweroff_alarm alarm;
-    bool alarm_armed = false;
-    bool timeout_wake = false;
     int suspend_rc;
 
-    poweroff_alarm_init(&alarm);
     run_pre_power_hook("sleep");
     lighting_sleep();
     st->idle_stage = IDLE_SLEEPING;
     st->stage_enter_ms = boottime_ms();
     st->last_sleep_elapsed_ms = 0;
     snprintf(st->last_wake_reason,sizeof(st->last_wake_reason),"sleeping");
-    snprintf(st->last_alarm_backend,sizeof(st->last_alarm_backend),"none");
     notify_subscribers();
-
-    /*
-     * Power Off After is a relative duration beginning at Sleep entry.
-     * CLOCK_BOOTTIME_ALARM is the primary backend: the kernel's alarmtimer
-     * infrastructure owns the RTC wake and the timerfd itself tells us
-     * whether the wake was caused by timeout.  This avoids coupling the
-     * product policy to CLOCK_REALTIME vs hardware-RTC synchronization.
-     *
-     * If alarmtimer is unavailable, fall back to the already-qualified
-     * relative sysfs form ("+N"), never an absolute wall-clock epoch.
-     */
-    if (st->cfg.poweroff_after_min > 0) {
-        long long off_sec = (long long)st->cfg.poweroff_after_min * 60LL;
-        alarm_armed = arm_poweroff_alarm(st, &alarm, off_sec);
-        if (!alarm_armed)
-            fprintf(stderr,
-                    "systemd: cannot arm wake for Power Off After; "
-                    "sleep will require user wake\n");
-    }
 
     suspend_rc = run_suspend();
     st->last_sleep_elapsed_ms = boottime_ms() - st->stage_enter_ms;
 
-    if (suspend_rc == 0 && alarm_armed)
-        timeout_wake = poweroff_alarm_expired(st, &alarm);
-
-    cancel_poweroff_alarm(st, &alarm);
-
-    if (suspend_rc != 0) {
-        snprintf(st->last_wake_reason,sizeof(st->last_wake_reason),
-                 "suspend-failed");
-        lighting_wake();
-        mark_activity(st);
-        notify_subscribers();
-        return;
-    }
-
-    if (timeout_wake) {
-        snprintf(st->last_wake_reason,sizeof(st->last_wake_reason),
-                 "poweroff-timeout");
-        /*
-         * Keep temporary lighting suppression active: this wake exists only
-         * to complete Power Off and must not flash the RGB back on.
-         */
-        run_poweroff(st);
-        return;
-    }
-
-    snprintf(st->last_wake_reason,sizeof(st->last_wake_reason),"user");
+    snprintf(st->last_wake_reason,sizeof(st->last_wake_reason),
+             suspend_rc != 0 ? "suspend-failed" : "user");
     lighting_wake();
     mark_activity(st);
     notify_subscribers();
@@ -867,46 +636,11 @@ static long long timeout_ms(int minutes)
 
 static void idle_policy_tick(struct runtime_state *st)
 {
-    long long now = boottime_ms();
-    long long elapsed = now - st->stage_enter_ms;
+    long long elapsed = boottime_ms() - st->stage_enter_ms;
 
-    if (st->idle_stage == IDLE_SLEEPING)
-        return;
-
-    if (st->idle_stage == IDLE_ACTIVE) {
-        if (st->cfg.screensaver_after_min > 0) {
-            if (elapsed >= timeout_ms(st->cfg.screensaver_after_min)) {
-                display_screensaver();
-                st->idle_stage = IDLE_SCREENSAVER;
-                st->stage_enter_ms = now;
-                notify_subscribers();
-            }
-            return;
-        }
-
-        if (st->cfg.sleep_after_min > 0) {
-            if (elapsed >= timeout_ms(st->cfg.sleep_after_min))
-                enter_sleep(st);
-            return;
-        }
-
-        if (st->cfg.poweroff_after_min > 0 &&
-            elapsed >= timeout_ms(st->cfg.poweroff_after_min))
-            run_poweroff(st);
-        return;
-    }
-
-    if (st->idle_stage == IDLE_SCREENSAVER) {
-        if (st->cfg.sleep_after_min > 0) {
-            if (elapsed >= timeout_ms(st->cfg.sleep_after_min))
-                enter_sleep(st);
-            return;
-        }
-
-        if (st->cfg.poweroff_after_min > 0 &&
-            elapsed >= timeout_ms(st->cfg.poweroff_after_min))
-            run_poweroff(st);
-    }
+    if (st->idle_stage == IDLE_ACTIVE && st->cfg.sleep_after_min > 0 &&
+        elapsed >= timeout_ms(st->cfg.sleep_after_min))
+        enter_sleep(st);
 }
 
 static long long read_cpu_freq_khz(void)
@@ -1153,12 +887,9 @@ static void reply_status(int fd, const struct runtime_state *st)
         "profile.requested=%s\n"
         "profile.effective=%s\n"
         "auto_battery.threshold=%d\n"
-        "screensaver_after_min=%d\n"
         "sleep_after_min=%d\n"
-        "poweroff_after_min=%d\n"
         "battery.percent=%d\n"
         "battery.state=%s\n"
-        "rtc_wakeup=%d\n"
         "cpu.freq_khz=%lld\n"
         "gpu.freq_hz=%lld\n"
         "temp.cpu_millic=%lld\n"
@@ -1185,22 +916,18 @@ static void reply_status(int fd, const struct runtime_state *st)
         "storage.job_exit=%d\n"
         "lifecycle.stage=%s\n"
         "lifecycle.last_wake=%s\n"
-        "lifecycle.alarm_backend=%s\n"
         "lifecycle.last_sleep_ms=%lld\n",
         NUUBOS_PRODUCT_VERSION,NUUBOS_BUILD_ID,
         profile_name(st->cfg.requested_profile),
         profile_name(st->effective_profile),
         st->cfg.auto_battery_threshold,
-        st->cfg.screensaver_after_min,
         st->cfg.sleep_after_min,
-        st->cfg.poweroff_after_min,
         st->battery_percent,st->battery_state,
-        st->rtc_wakeup_supported?1:0,
         cpu,gpu,tcpu,tgpu,mem_total_kib,mem_available_kib,uptime,model,kernel,ip,
         mode,active,health,tf2,cid,action,backup,due,reason,total,freeb,
         st->storage_job_state,st->storage_job_action,st->storage_job_exit_code,
         idle_stage_name(st->idle_stage),
-        st->last_wake_reason,st->last_alarm_backend,
+        st->last_wake_reason,
         st->last_sleep_elapsed_ms);
     (void)write_all(fd,buf);
 }
@@ -1227,7 +954,6 @@ static int reset_system_settings(struct runtime_state *st)
 
     config_defaults(&st->cfg);
     if(atomic_save_config(&st->cfg)!=0){fprintf(stderr,"systemd: reset: system config\n");rc=-1;}
-    clear_rtc_alarm(st);
     mark_activity(st);
     refresh_battery(st);
     update_effective_profile(st,true);
@@ -1284,21 +1010,9 @@ static void handle_command(struct client *c, struct runtime_state *st, const cha
         refresh_battery(st); update_effective_profile(st,true);
         (void)write_all(c->fd,"OK\n"); notify_subscribers(); return;
     }
-    if(sscanf(line,"SET SCREENSAVER %d",&x)==1){
-        if(x<0||x>240){(void)write_all(c->fd,"ERR invalid timeout\n");return;}
-        st->cfg.screensaver_after_min=x; mark_activity(st);
-        if(atomic_save_config(&st->cfg)!=0){(void)write_all(c->fd,"ERR persist failed\n");return;}
-        (void)write_all(c->fd,"OK\n"); notify_subscribers(); return;
-    }
     if(sscanf(line,"SET SLEEP %d",&x)==1){
         if(x<0||x>240){(void)write_all(c->fd,"ERR invalid timeout\n");return;}
         st->cfg.sleep_after_min=x; mark_activity(st);
-        if(atomic_save_config(&st->cfg)!=0){(void)write_all(c->fd,"ERR persist failed\n");return;}
-        (void)write_all(c->fd,"OK\n"); notify_subscribers(); return;
-    }
-    if(sscanf(line,"SET POWEROFF %d",&x)==1){
-        if(x<0||x>480){(void)write_all(c->fd,"ERR invalid timeout\n");return;}
-        st->cfg.poweroff_after_min=x; mark_activity(st);
         if(atomic_save_config(&st->cfg)!=0){(void)write_all(c->fd,"ERR persist failed\n");return;}
         (void)write_all(c->fd,"OK\n"); notify_subscribers(); return;
     }
@@ -1385,19 +1099,8 @@ static int next_policy_timeout_ms(const struct runtime_state *st)
     if (st->storage_job_pid > 0)
         timeout = 1000;
 
-    if (st->idle_stage == IDLE_ACTIVE) {
-        if (st->cfg.screensaver_after_min > 0)
-            target = timeout_ms(st->cfg.screensaver_after_min);
-        else if (st->cfg.sleep_after_min > 0)
-            target = timeout_ms(st->cfg.sleep_after_min);
-        else if (st->cfg.poweroff_after_min > 0)
-            target = timeout_ms(st->cfg.poweroff_after_min);
-    } else if (st->idle_stage == IDLE_SCREENSAVER) {
-        if (st->cfg.sleep_after_min > 0)
-            target = timeout_ms(st->cfg.sleep_after_min);
-        else if (st->cfg.poweroff_after_min > 0)
-            target = timeout_ms(st->cfg.poweroff_after_min);
-    }
+    if (st->idle_stage == IDLE_ACTIVE && st->cfg.sleep_after_min > 0)
+        target = timeout_ms(st->cfg.sleep_after_min);
 
     if (target >= 0) {
         long long remaining = target - elapsed;
@@ -1426,9 +1129,6 @@ int main(void)
     load_config(&st.cfg);
     st.idle_stage=IDLE_ACTIVE;
     st.stage_enter_ms=boottime_ms();
-    st.rtc_wakeup_supported=rtc_wakeup_supported();
-    st.rtc_alarm_armed=false;
-    snprintf(st.last_alarm_backend,sizeof(st.last_alarm_backend),"none");
     snprintf(st.last_wake_reason,sizeof(st.last_wake_reason),"none");
     st.last_sleep_elapsed_ms=0;
     st.storage_job_pid=-1;
@@ -1436,7 +1136,6 @@ int main(void)
     snprintf(st.storage_job_state,sizeof(st.storage_job_state),"idle");
     st.storage_job_exit_code=0;
     lighting_wake(); /* Lights back on if a previous instance died asleep (no-op when awake). */
-    display_active(); /* Recover a stale runtime-only screensaver dim after service restart. */
     refresh_battery(&st);
     st.effective_profile=PROFILE_AUTO;
     st.notifications_ready=false;
@@ -1496,7 +1195,6 @@ int main(void)
         }
     }
 
-    clear_rtc_alarm(&st);
     if (input_fd >= 0)
         close(input_fd);
     if (status_fd >= 0)

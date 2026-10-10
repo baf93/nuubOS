@@ -6,7 +6,7 @@
  * home.slint) after every change.
  */
 
-use crate::{tr, AppEntry, DetailAction, DetailChip, HomeWindow};
+use crate::{tr, AppEntry, DetailAction, DetailChip, GenRow, HomeWindow};
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
@@ -177,6 +177,13 @@ fn steamlink_page(ui: &HomeWindow) -> Page {
             p.description = tr(ui, 484, "Choose and pair your PC in Steam Link");
             p.push(action(0, tr(ui, 483, "Open Steam Link"), true), tr(ui, 484, "Choose and pair your PC in Steam Link"));
             p.push(action(5, ui.get_steamlink_update_title().to_string(), false), ui.get_steamlink_version_label().to_string());
+            let snap = crate::moonlight::SNAPSHOT.lock().unwrap().clone().unwrap_or_default();
+            let mut auto = action(4, tr(ui, 852, "Automatic Updates"), false);
+            auto.on = snap.steamlink_auto_update;
+            p.push(auto, tr(ui, 856, "New versions install when you open Steam Link; one that does not start is undone automatically"));
+            if !snap.steamlink_previous.is_empty() {
+                p.push(action(9, crate::tr_arg(ui, 853, "Restore Version {0}", &snap.steamlink_previous), false), String::new());
+            }
             let armed = ui.get_steamlink_remove_confirm();
             let mut remove = action(10, tr(ui, 490, "Remove Steam Link"), false);
             remove.armed = armed;
@@ -215,4 +222,85 @@ pub fn refresh(ui: &HomeWindow) {
     ui.set_app_page_pin(page.pin.into());
     ui.set_app_page_progress(page.progress);
     ui.set_app_page_progress_label(page.progress_label.into());
+}
+
+/* ---------------------------------------------------------------- */
+/* Files and Media: application pages drawn from their generic rows  */
+/* ---------------------------------------------------------------- */
+
+/* Icon of a Files/Media row by its key; action rows give their own. */
+fn row_icon(key: &str, title: &str) -> i32 {
+    let ext = |name: &str| name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let by_ext = |name: &str| match ext(name).as_str() {
+        "png" | "jpg" | "jpeg" | "bmp" | "gif" | "webp" => 22,
+        "mp3" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "wav" => 23,
+        "mkv" | "mp4" | "m4v" | "avi" | "webm" | "mov" | "ts" | "mpg" | "mpeg" => 24,
+        "zip" | "7z" | "rar" | "tar" | "gz" | "xz" | "bz2" => 28,
+        _ => 21,
+    };
+    match key {
+        "shares" => 26,
+        "jf" => 33,
+        "info" => 13,
+        k if k.starts_with("root:") => if k.contains("/userdata") || k.ends_with("/userdata") { 25 } else { 27 },
+        k if k.starts_with("share:") => 32,
+        k if k.starts_with("d:") || k.starts_with("jfdir:") => 20,
+        k if k.starts_with("dir:") => if k.matches('/').count() <= 2 { 25 } else { 20 },
+        k if k.starts_with("f:") || k.starts_with("file:") => by_ext(k),
+        k if k.starts_with("jfitem:") => 24,
+        k if k.starts_with("restore:") => 28,
+        _ => by_ext(title),
+    }
+}
+
+/* Action keys become pills after the entries (the row order puts them
+ * last, so the index keeps meaning entries first, then actions). */
+fn action_icon(key: &str) -> Option<i32> {
+    match key {
+        "paste" => Some(31),
+        "mkdir" => Some(30),
+        "add" => Some(19),
+        "jf-signin" => Some(6),
+        "jf-signout" => Some(7),
+        _ => None,
+    }
+}
+
+/// Draws the generic rows of Files (58, 60) or Media (65) as an
+/// application page: kicker, title (location), meta, description; rows
+/// with a type icon; action rows as pills.
+pub fn gen_page(ui: &HomeWindow, kicker: String, title: String, meta: String, description: String) {
+    let keys = crate::gameui::gen_keys();
+    let rows: Vec<GenRow> = ui.get_gen_rows().iter().collect();
+    let mut p = Page::new(kicker, title);
+    p.meta = meta;
+    p.description = description;
+    for (key, r) in keys.iter().zip(rows.iter()) {
+        if let Some(icon) = action_icon(key) {
+            let mut a = action(icon, r.title.to_string(), false);
+            a.enabled = r.enabled;
+            a.armed = r.armed;
+            p.push(a, if r.detail.is_empty() { r.value.to_string() } else { r.detail.to_string() });
+        } else {
+            let value = if r.toggle {
+                if r.toggle_on { tr(ui, 198, "Connected") } else { String::new() }
+            } else {
+                r.value.to_string()
+            };
+            p.entries.push(entry(row_icon(key, r.title.as_str()), r.title.as_str(), r.detail.to_string(), value,
+                r.toggle && r.toggle_on, String::new()));
+        }
+    }
+    ui.set_app_page_gen(true);
+    ui.set_app_page_kicker(p.kicker.into());
+    ui.set_app_page_title(p.title.into());
+    ui.set_app_page_meta(p.meta.into());
+    ui.set_app_page_description(p.description.into());
+    ui.set_app_page_chips(model(p.chips));
+    ui.set_app_page_entries(model(p.entries));
+    ui.set_app_page_actions(model(p.actions));
+    ui.set_app_page_captions(model(p.captions.into_iter().map(SharedString::from).collect()));
+    ui.set_app_page_pin("".into());
+    ui.set_app_page_progress(-1.0);
+    ui.set_app_page_progress_label("".into());
 }

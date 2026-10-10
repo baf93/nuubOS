@@ -76,7 +76,6 @@ struct Details {
     /* Cover art path (libraryd). */
     cover: String,
     available: bool,
-    favorite: bool,
     last: i64,
     time: i64,
     sessions: i64,
@@ -242,7 +241,6 @@ fn parse_details(reply: &str, d: &mut Details) {
                     d.last = f[5].parse().unwrap_or(0);
                     d.time = f[6].parse().unwrap_or(0);
                     d.available = f[7] == "1";
-                    d.favorite = f[8] == "1";
                 }
             }
             "system_name" => d.system_name = value.into(),
@@ -613,9 +611,6 @@ fn details_actions(ui: &HomeWindow, st: &State) -> Vec<(String, DetailAction, St
     if d.available {
         out.push(("play".into(), detail_action(0, tr(ui, 413, "Play"), true), String::new()));
     }
-    let mut favorite = detail_action(1, tr(ui, 412, "Favorite"), false);
-    favorite.on = d.favorite;
-    out.push(("favorite".into(), favorite, String::new()));
     let names: Vec<&str> = d.members.iter().filter(|m| m.member).map(|m| m.name.as_str()).collect();
     out.push(("collections".into(), detail_action(2, tr(ui, 537, "Collections"), false), names.join(", ")));
     if !d.cores.is_empty() {
@@ -806,6 +801,10 @@ pub(crate) fn render(ui: &HomeWindow) {
         crate::webui::render(ui);
         return;
     }
+    if view == crate::findui::COLLECTIONS_VIEW {
+        crate::findui::render(ui);
+        return;
+    }
     if view == 1 || (view == 0 && ui.get_settings_selected_index() == 1) {
         render_services(ui);
         return;
@@ -895,6 +894,11 @@ pub(crate) fn show(ui: &HomeWindow, view: i32) {
     render(ui);
 }
 
+/* Keys of the generic rows on screen, in order. */
+pub(crate) fn gen_keys() -> Vec<String> {
+    STATE.with(|st| st.borrow().keys.clone())
+}
+
 pub(crate) fn focused_key(ui: &HomeWindow) -> String {
     let i = ui.get_gen_index().max(0) as usize;
     STATE.with(|st| st.borrow().keys.get(i).cloned().unwrap_or_default())
@@ -905,7 +909,13 @@ pub(crate) fn focused_key(ui: &HomeWindow) -> String {
 /* ---------------------------------------------------------------- */
 
 /* Fetch everything the Details page aggregates, off the UI thread. */
+/* open: the page appears only once everything is ready (user request
+ * 2026-10-10: it built itself piece by piece). */
 fn load_details(ui: &HomeWindow, id: String) {
+    load_details_then(ui, id, false);
+}
+
+fn load_details_then(ui: &HomeWindow, id: String, open: bool) {
     let weak = ui.as_weak();
     /* The hero cover is decoded at its on-screen height (physical px). */
     let scale = ui.window().scale_factor();
@@ -926,8 +936,19 @@ fn load_details(ui: &HomeWindow, id: String) {
         let backdrop = load(d.meta("screenshot")).or(cover_src).as_ref().and_then(blurred);
         let _ = slint::invoke_from_event_loop(move || {
             let Some(ui) = weak.upgrade() else { return };
-            if !ACTIVE.load(Ordering::SeqCst) || STATE.with(|st| st.borrow().details.id != d.id) {
+            if (!open && !ACTIVE.load(Ordering::SeqCst)) || STATE.with(|st| st.borrow().details.id != d.id) {
                 return;
+            }
+            if open {
+                /* A newer request (another game, or the user moved on to a
+                 * game or Settings meanwhile) wins. */
+                if ui.get_settings_open() || crate::library::GAME_RUNNING.load(Ordering::SeqCst) {
+                    return;
+                }
+                ACTIVE.store(true, Ordering::SeqCst);
+                ui.set_details_active(true);
+                ui.set_details_meta("".into());
+                ui.set_details_desc_step(0);
             }
             let title = if d.meta("title").is_empty() { d.title.clone() } else { d.meta("title").to_owned() };
             ui.set_details_title(title.into());
@@ -940,6 +961,11 @@ fn load_details(ui: &HomeWindow, id: String) {
             ui.set_details_has_backdrop(backdrop.is_some());
             ui.set_details_backdrop(backdrop.map(Image::from_rgba8_premultiplied).unwrap_or_default());
             STATE.with(|st| st.borrow_mut().details = d);
+            if open {
+                show(&ui, 50);
+                ui.set_settings_open(true);
+                write_ui_context("settings");
+            }
             render(&ui);
         });
     });
@@ -947,26 +973,17 @@ fn load_details(ui: &HomeWindow, id: String) {
 
 /* Home: the Details action on a game card. */
 pub fn open_details(ui: &HomeWindow, id: &str, title: &str, cover: Option<Image>) {
-    ACTIVE.store(true, Ordering::SeqCst);
     STATE.with(|st| {
         let mut st = st.borrow_mut();
         st.details = Details { id: id.to_owned(), title: title.to_owned(), available: true, ..Default::default() };
         st.busy = false;
     });
-    ui.set_details_active(true);
-    ui.set_details_title(title.into());
-    ui.set_details_subtitle("".into());
-    ui.set_details_description("".into());
+    /* The Home card's cover stands in until the hero is decoded. */
     ui.set_details_has_cover(cover.is_some());
     ui.set_details_cover(cover.unwrap_or_default());
-    ui.set_details_meta("".into());
     ui.set_details_has_backdrop(false);
     ui.set_details_backdrop(Image::default());
-    ui.set_details_desc_step(0);
-    show(ui, 50);
-    ui.set_settings_open(true);
-    write_ui_context("settings");
-    load_details(ui, id.to_owned());
+    load_details_then(ui, id.to_owned(), true);
 }
 
 /* Home: a long press on a game card. The rows come from emud STATES. */
@@ -1145,6 +1162,7 @@ pub fn apply_choice(ui: &HomeWindow, context: &str, value: String) {
         "game-aspect" => game_set(ui, "aspect", value),
         "game-filter" => game_set(ui, "filter", value),
         "emu-slots" => emu_set(ui, "slots", value),
+        "game-fill" => start_bulk(ui, value),
         "game-source" => tool_then(ui, "/usr/bin/nuubos-scraper", vec!["provider".into(), "set".into(), value],
             None, |ui, _| refresh_gaming(ui)),
         c if c.starts_with("emu-hotkey:") => emu_set(ui, &format!("hotkey_{}", &c[11..]), value),
@@ -1188,7 +1206,6 @@ fn details_confirm(ui: &HomeWindow, key: &str) {
             leave_details(ui);
             crate::library::launch_by_id(ui, &id, d.available);
         }
-        "favorite" => details_command(ui, format!("FAVORITE\t{}\t{}", d.id, if d.favorite { 0 } else { 1 })),
         "collections" => open_collections(ui),
         "settings" => show(ui, 51),
         "bios" => {
@@ -1397,10 +1414,31 @@ fn gaming_rows(ui: &HomeWindow, st: &State) -> Vec<(String, GenRow, bool)> {
         tr(ui, 799, "Adds only what is missing, such as covers or descriptions. What is already there is kept."));
     fill.enabled = st.ss_available;
     rows.push(("fill".into(), fill, st.ss_available && !st.ss_busy));
+    /* Text in the user's language (ScreenScraper/TheGamesDB keep one per
+     * language; libretro has no text). */
+    if st.ss_provider != "libretro" {
+        let mut lang = row(tr(ui, 868, "Metadata in Your Language"), String::new(),
+            tr(ui, 869, "Gets descriptions and genres in your language; the languages already downloaded stay saved"));
+        lang.enabled = st.ss_available;
+        rows.push(("lang".into(), lang, st.ss_available && !st.ss_busy));
+    }
     let mut bios = nav(tr(ui, 576, "BIOS Files"), String::new());
     bios.detail = tr(ui, 581, "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.").into();
     rows.push(("bios".into(), bios, true));
     rows
+}
+
+/* A library scrape job (all | missing[:seconds] | lang). */
+fn start_bulk(ui: &HomeWindow, scope: String) {
+    STATE.with(|st| st.borrow_mut().ss_busy = true);
+    render_gaming(ui);
+    tool_then(ui, "/usr/bin/nuubos-jobctl", vec!["run".into(), "scrape-bulk".into(), scope],
+        None, |ui, out| {
+            STATE.with(|st| st.borrow_mut().ss_busy = false);
+            let text = scrape_outcome(ui, out.trim());
+            notice(ui, text);
+            render_gaming(ui);
+        });
 }
 
 fn render_gaming(ui: &HomeWindow) {
@@ -1500,17 +1538,20 @@ pub fn handle_gaming(ui: &HomeWindow, action: &str) {
                             None, |ui, _| refresh_gaming(ui));
                     }
                 }
-                "bulk" | "fill" if !STATE.with(|st| st.borrow().ss_busy) => {
-                    STATE.with(|st| st.borrow_mut().ss_busy = true);
-                    render_gaming(ui);
-                    let scope = if key == "fill" { "missing" } else { "all" };
-                    tool_then(ui, "/usr/bin/nuubos-jobctl", vec!["run".into(), "scrape-bulk".into(), scope.into()],
-                        None, |ui, out| {
-                            STATE.with(|st| st.borrow_mut().ss_busy = false);
-                            let text = scrape_outcome(ui, out.trim());
-                            notice(ui, text);
-                            render_gaming(ui);
-                        });
+                /* Fill Missing Data: optionally skip the games tried
+                 * recently (user request 2026-10-10). */
+                "fill" if !STATE.with(|st| st.borrow().ss_busy) => {
+                    let options = vec![
+                        ("missing".to_owned(), tr(ui, 870, "Every game with missing data")),
+                        ("missing:3600".to_owned(), tr(ui, 871, "Not tried in the last hour")),
+                        ("missing:86400".to_owned(), tr(ui, 872, "Not tried in the last day")),
+                        ("missing:604800".to_owned(), tr(ui, 873, "Not tried in the last week")),
+                        ("missing:2592000".to_owned(), tr(ui, 874, "Not tried in the last month")),
+                    ];
+                    open_settings_choice(ui, "game-fill", &tr(ui, 798, "Fill Missing Data"), options, "");
+                }
+                "bulk" | "lang" if !STATE.with(|st| st.borrow().ss_busy) => {
+                    start_bulk(ui, if key == "lang" { "lang" } else { "all" }.to_owned());
                 }
                 "scan" if !ui.get_library_scanning() => {
                     STATE.with(|st| st.borrow_mut().lib_scan = 1);

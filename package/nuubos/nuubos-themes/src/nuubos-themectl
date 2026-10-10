@@ -6,6 +6,8 @@
 #   install SRC               a theme folder or .tar (USB, USERDATA); validated first
 #   remove ID                 user-installed only; users of it go back to the default
 #   select USER ID | selected USER
+#   tokens [USER]             <token>=#RRGGBB of the user's theme (default: the
+#                             active user), built-in values for unset tokens
 #
 # A theme is a presentation package without code: theme.conf (FORMAT=1,
 # ID, NAME, AUTHOR, VERSION, MIN_NUUBUI, DESCRIPTION, LICENSE, optional
@@ -80,20 +82,33 @@ theme_dir()
     else return 1; fi
 }
 
+# One line per theme from its manifest (one awk, no per-field sed).
+manifest_line()
+{
+    awk -F= -v d="$1" -v b="$2" '
+        $1 == "ID" && id == "" { id = substr($0, 4) }
+        $1 == "NAME" && name == "" { name = substr($0, 6) }
+        $1 == "AUTHOR" && author == "" { author = substr($0, 8) }
+        $1 == "VERSION" && version == "" { version = substr($0, 9) }
+        END { n = split(d, p, "/"); if (id != "" && p[n] == id) printf "theme=%s\t%s\t%s\t%s\t%s\t%s\n", id, name, author, version, b, d }
+    ' "$1/theme.conf" 2>/dev/null
+}
+
 list()
 {
-    for base in "$BUILTIN" "$INSTALLED"; do
-        [ "$base" = "$BUILTIN" ] && b=1 || b=0
-        for d in "$base"/*; do
-            [ -d "$d" ] || continue
-            [ "$(validate "$d")" = OK ] || continue
-            id="$(value "$d" ID)"
-            # Built-in ids win; a folder must carry its own id.
-            [ "${d##*/}" = "$id" ] || continue
-            [ "$b" = 0 ] && [ -d "$BUILTIN/$id" ] && continue
-            printf 'theme=%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$(value "$d" NAME)" "$(value "$d" AUTHOR)" \
-                "$(value "$d" VERSION)" "$b" "$d"
-        done
+    # Built-ins are part of the image: listed without re-validation (it
+    # took ~1.7 s for 12 themes on the H700 and delayed the Mood menu).
+    for d in "$BUILTIN"/*; do
+        [ -f "$d/theme.conf" ] && manifest_line "$d" 1
+    done
+    for d in "$INSTALLED"/*; do
+        [ -d "$d" ] || continue
+        [ "$(validate "$d")" = OK ] || continue
+        id="$(value "$d" ID)"
+        # Built-in ids win; a folder must carry its own id.
+        [ "${d##*/}" = "$id" ] || continue
+        [ -d "$BUILTIN/$id" ] && continue
+        manifest_line "$d" 0
     done
     echo "end=1"
 }
@@ -176,5 +191,18 @@ case "${1:-}" in
         d="$(theme_dir "$id")" && [ "$(validate "$d")" = OK ] || { id="$DEFAULT"; d="$BUILTIN/$DEFAULT"; }
         printf 'id=%s\npath=%s\nend=1\n' "$id" "$d"
         ;;
-    *) echo "Usage: nuubos-themectl list | validate DIR | install SRC | remove ID | select USER ID | selected USER" >&2; exit 2 ;;
+    tokens)
+        u="${2:-$(cat "$R/run/nuubos/user/active" 2>/dev/null)}"
+        id=""
+        valid_uuid "$u" && id="$(sed -n 's/^THEME=//p' "$STATE_USERS/$u/settings.conf" 2>/dev/null | tail -n 1)"
+        d="$(theme_dir "$id")" && [ "$(validate "$d")" = OK ] || { id="$DEFAULT"; d="$BUILTIN/$DEFAULT"; }
+        echo "id=$id"
+        for k in $TOKENS; do
+            v="$(value "$d" "$k")"
+            [ -n "$v" ] || v="$(value "$BUILTIN/$DEFAULT" "$k")"
+            [ -n "$v" ] && echo "$k=$v"
+        done
+        echo "end=1"
+        ;;
+    *) echo "Usage: nuubos-themectl list | validate DIR | install SRC | remove ID | select USER ID | selected USER | tokens [USER]" >&2; exit 2 ;;
 esac

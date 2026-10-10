@@ -28,6 +28,14 @@ const write = { method: 'POST', headers: { 'X-NuubOS': '1' } };
 const size = (kb) => kb > 1048576 ? (kb / 1048576).toFixed(1) + ' GB' : (kb / 1024).toFixed(0) + ' MB';
 let systems = [];
 
+/* The page wears the active user's Mood (Settings → General → Mood). */
+async function loadMood() {
+  const m = await api('mood');
+  const map = { '--bg': 'background', '--panel': 'surface', '--line': 'border', '--text': 'text', '--dim': 'text-secondary', '--blue': 'accent' };
+  for (const [v, k] of Object.entries(map)) if (m[k]) document.documentElement.style.setProperty(v, m[k]);
+  if (m['accent-text']) document.documentElement.style.setProperty('--on-accent', m['background'] || '#0d0e10');
+}
+
 async function loadStatus() {
   const s = await api('status');
   $('device').textContent = s.device;
@@ -162,4 +170,4 @@ $('scan').onclick = async () => {
 };
 $('upload-system').onchange = showExtensions;
 $('library-system').onchange = loadGames;
-loadStatus(); loadSystems(); loadBios();
+loadMood().catch(() => {}); loadStatus(); loadSystems(); loadBios();

@@ -10,4 +10,8 @@ Slint rendering; the charging bolt is split into a fill (bolt.svg) and the same 
 underlay (bolt-outline.svg), both recoloured from the theme at runtime.
 See LICENSE.txt in the icon directory for the complete Font Awesome Free license.
 
+Font Awesome Free 6.7.2 solid icons added 2026-10-10 (Files and Media pages):
+folder, file, image, music, film, hard-drive, network-wired, sd-card,
+box-archive, palette, folder-plus, paste, server, tv.
+
 nuubOS own icons (MIT, not Font Awesome): desktop.svg, plus.svg.

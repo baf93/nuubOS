@@ -58,6 +58,7 @@
 #define DEFAULT_VOLUME_APPLICATIONS 100
 #define DEFAULT_NAVIGATION_SOUNDS true
 #define DEFAULT_POWER_SOUNDS true
+#define DEFAULT_NOTIFY_SOUNDS true
 
 #define AUDIO_SERVICE_NAME "org.nuubOS.Audio"
 #define AUDIO_OBJECT_PATH "/org/nuubOS/Audio"
@@ -91,8 +92,18 @@ struct audio_state {
 	int volume_system;
 	int volume_home_music;
 	int volume_applications;
+	/* Master to restore on unmute, per route (0 = not muted by
+	 * ToggleMute); runtime only, a muted route left at 0% after a
+	 * restart unmutes to its default. */
+	int unmute_speaker;
+	int unmute_headphones;
+	int unmute_bluetooth;
+	int unmute_applications;
+	int unmute_music;
 	bool navigation_sounds_enabled;
 	bool power_sounds_enabled;
+	/* Notification, error and screenshot cues (Quick Menu toasts). */
+	bool notify_sounds_enabled;
 
 	pid_t test_pid;
 	/* Persistent system-sound player (wav-player "sfx-server") and the
@@ -174,6 +185,7 @@ static const char audio_introspection_xml[] =
 	"<method name='AdjustVolume'>"
 	"<arg name='delta' type='i' direction='in'/>"
 	"</method>"
+	"<method name='ToggleMute'/>"
 	"<method name='StartHomeMusic'/>"
 	"<method name='StopHomeMusic'/>"
 	"<signal name='StateChanged'>"
@@ -452,21 +464,26 @@ static int persist_applications_volume(struct audio_state *state,
 	return 0;
 }
 
+enum sound_toggle { TOGGLE_NAVIGATION, TOGGLE_POWER, TOGGLE_NOTIFY };
+
 static int persist_sound_toggle(struct audio_state *state,
 				DBusConnection *conn,
-				bool navigation,
+				enum sound_toggle which,
 				bool enabled)
 {
-	const char *key = navigation ? "AUDIO_SYSTEM_NAVIGATION_ENABLED" :
-				       "AUDIO_SYSTEM_POWER_ENABLED";
+	const char *key = which == TOGGLE_NAVIGATION ? "AUDIO_SYSTEM_NAVIGATION_ENABLED"
+			: which == TOGGLE_POWER ? "AUDIO_SYSTEM_POWER_ENABLED"
+			: "AUDIO_SYSTEM_NOTIFY_ENABLED";
 
 	if (update_config(key, enabled ? "1" : "0") != 0)
 		return -1;
 
-	if (navigation)
+	if (which == TOGGLE_NAVIGATION)
 		state->navigation_sounds_enabled = enabled;
-	else
+	else if (which == TOGGLE_POWER)
 		state->power_sounds_enabled = enabled;
+	else
+		state->notify_sounds_enabled = enabled;
 
 	emit_state_changed(conn, state);
 	return 0;
@@ -486,8 +503,13 @@ static bool system_sound_allowed(const struct audio_state *state,
 	if (strcmp(name, "select") == 0 ||
 	    strcmp(name, "back") == 0 ||
 	    strcmp(name, "navigation") == 0 ||
-	    strcmp(name, "quick-settings") == 0)
+	    strcmp(name, "quick-settings") == 0 ||
+	    strcmp(name, "launch") == 0)
 		return state->navigation_sounds_enabled;
+
+	if (strcmp(name, "error") == 0 ||
+	    strcmp(name, "screenshot") == 0)
+		return state->notify_sounds_enabled;
 
 	return false;
 }
@@ -704,8 +726,14 @@ static void load_config(struct audio_state *state)
 	state->volume_system = DEFAULT_VOLUME_SYSTEM;
 	state->volume_home_music = DEFAULT_VOLUME_HOME_MUSIC;
 	state->volume_applications = DEFAULT_VOLUME_APPLICATIONS;
+	state->unmute_speaker = 0;
+	state->unmute_headphones = 0;
+	state->unmute_bluetooth = 0;
+	state->unmute_applications = 0;
+	state->unmute_music = 0;
 	state->navigation_sounds_enabled = DEFAULT_NAVIGATION_SOUNDS;
 	state->power_sounds_enabled = DEFAULT_POWER_SOUNDS;
+	state->notify_sounds_enabled = DEFAULT_NOTIFY_SOUNDS;
 	state->test_pid = -1;
 	state->system_pid = -1;
 	state->system_ctl_fd = -1;
@@ -784,6 +812,8 @@ static void load_config(struct audio_state *state)
 			state->navigation_sounds_enabled = strcmp(line + 32, "0") != 0;
 		} else if (strncmp(line, "AUDIO_SYSTEM_POWER_ENABLED=", 27) == 0) {
 			state->power_sounds_enabled = strcmp(line + 27, "0") != 0;
+		} else if (strncmp(line, "AUDIO_SYSTEM_NOTIFY_ENABLED=", 28) == 0) {
+			state->notify_sounds_enabled = strcmp(line + 28, "0") != 0;
 		}
 	}
 
@@ -1107,6 +1137,36 @@ static int persist_selected_volume(struct audio_state *state,
 	return set_selected_volume(state, conn, volume, true);
 }
 
+/* Mute = the hard-mute 0% master of the selected route; unmute restores
+ * the master it had before (its default when it was already 0%). */
+static int toggle_selected_mute(struct audio_state *state,
+				DBusConnection *conn)
+{
+	int *restore;
+	int volume = selected_volume(state);
+	int target;
+
+	if (volume < 0)
+		return -2;
+	if (strcmp(state->selected, "speaker") == 0)
+		restore = &state->unmute_speaker;
+	else if (strcmp(state->selected, "headphones") == 0)
+		restore = &state->unmute_headphones;
+	else
+		restore = &state->unmute_bluetooth;
+
+	if (volume > 0) {
+		*restore = volume;
+		return persist_selected_volume(state, conn, 0);
+	}
+	target = *restore > 0 ? *restore
+	       : strcmp(state->selected, "speaker") == 0 ? DEFAULT_VOLUME_SPEAKER
+	       : strcmp(state->selected, "headphones") == 0 ? DEFAULT_VOLUME_HEADPHONES
+	       : DEFAULT_VOLUME_BLUETOOTH;
+	*restore = 0;
+	return persist_selected_volume(state, conn, target);
+}
+
 static int persist_output_mode(struct audio_state *state,
 			       DBusConnection *conn,
 			       const char *output)
@@ -1282,6 +1342,24 @@ static bool handle_audio_method(DBusConnection *conn,
 		ensure_ui_anchor(state);
 		emit_state_changed(conn, state);
 		send_dbus_reply(conn, dbus_message_new_method_return(message));
+		return true;
+	}
+
+	if (dbus_message_is_method_call(message,
+					AUDIO_INTERFACE,
+					"ToggleMute")) {
+		int rc = toggle_selected_mute(state, conn);
+
+		if (rc == -2)
+			send_dbus_error(conn, message,
+					"org.nuubOS.Audio.Error.VolumeUnsupported",
+					"Active output does not support nuubOS volume control");
+		else if (rc != 0)
+			send_dbus_error(conn, message,
+					"org.nuubOS.Audio.Error.Failed",
+					"Volume update failed");
+		else
+			send_dbus_reply(conn, dbus_message_new_method_return(message));
 		return true;
 	}
 
@@ -1710,14 +1788,8 @@ static void start_system_sound(struct audio_state *state,
 	    !product_audio_master_enabled(state))
 		return;
 
-	if (strcmp(name, "boot") != 0 &&
-	    strcmp(name, "poweroff") != 0 &&
-	    strcmp(name, "restart") != 0 &&
-	    strcmp(name, "select") != 0 &&
-	    strcmp(name, "back") != 0 &&
-	    strcmp(name, "navigation") != 0 &&
-	    strcmp(name, "quick-settings") != 0)
-		return;
+	/* system_sound_allowed() already refuses any other name: the path
+	 * below is built only from the fixed cue list. */
 
 	snprintf(path, sizeof(path), "%s/%s.wav",
 		 SYSTEM_SOUND_DIR, name);
@@ -2144,9 +2216,11 @@ static int reset_audio_defaults(struct audio_state *state,
 	if (persist_applications_volume(state, conn,
 					DEFAULT_VOLUME_APPLICATIONS) != 0)
 		rc = -1;
-	if (persist_sound_toggle(state, conn, true, DEFAULT_NAVIGATION_SOUNDS) != 0)
+	if (persist_sound_toggle(state, conn, TOGGLE_NAVIGATION, DEFAULT_NAVIGATION_SOUNDS) != 0)
 		rc = -1;
-	if (persist_sound_toggle(state, conn, false, DEFAULT_POWER_SOUNDS) != 0)
+	if (persist_sound_toggle(state, conn, TOGGLE_POWER, DEFAULT_POWER_SOUNDS) != 0)
+		rc = -1;
+	if (persist_sound_toggle(state, conn, TOGGLE_NOTIFY, DEFAULT_NOTIFY_SOUNDS) != 0)
 		rc = -1;
 
 	emit_state_changed(conn, state);
@@ -2303,6 +2377,31 @@ static void handle_command(struct audio_state *state,
 		return;
 	}
 
+	/* Mute toggles of Applications and Home Music, like ToggleMute for
+	 * the master: 0% and back to the level before (its default when it
+	 * was already 0%). */
+	if (strcmp(command, "APPLICATIONS MUTE TOGGLE") == 0 ||
+	    strcmp(command, "MUSIC MUTE TOGGLE") == 0) {
+		bool music = command[0] == 'M';
+		int *restore = music ? &state->unmute_music : &state->unmute_applications;
+		int current = music ? state->volume_home_music : state->volume_applications;
+		int target;
+		int rc;
+
+		if (current > 0) {
+			*restore = current;
+			target = 0;
+		} else {
+			target = *restore > 0 ? *restore
+				: music ? DEFAULT_VOLUME_HOME_MUSIC : DEFAULT_VOLUME_APPLICATIONS;
+			*restore = 0;
+		}
+		rc = music ? persist_stream_volume(state, dbus_conn, true, target)
+			   : persist_applications_volume(state, dbus_conn, target);
+		snprintf(reply, reply_size, rc == 0 ? "OK %d\n" : "ERR mute failed\n", target);
+		return;
+	}
+
 	if (sscanf(command, "APPLICATIONS VOLUME SET %31s", arg1) == 1) {
 		int volume = parse_volume(arg1);
 
@@ -2342,7 +2441,7 @@ static void handle_command(struct audio_state *state,
 		bool enabled = strcmp(arg1, "0") != 0 &&
 			       strcasecmp(arg1, "off") != 0 &&
 			       strcasecmp(arg1, "false") != 0;
-		if (persist_sound_toggle(state, dbus_conn, true, enabled) != 0)
+		if (persist_sound_toggle(state, dbus_conn, TOGGLE_NAVIGATION, enabled) != 0)
 			snprintf(reply, reply_size, "ERR navigation sound toggle failed\n");
 		else
 			snprintf(reply, reply_size, "OK\n");
@@ -2359,8 +2458,25 @@ static void handle_command(struct audio_state *state,
 		bool enabled = strcmp(arg1, "0") != 0 &&
 			       strcasecmp(arg1, "off") != 0 &&
 			       strcasecmp(arg1, "false") != 0;
-		if (persist_sound_toggle(state, dbus_conn, false, enabled) != 0)
+		if (persist_sound_toggle(state, dbus_conn, TOGGLE_POWER, enabled) != 0)
 			snprintf(reply, reply_size, "ERR power sound toggle failed\n");
+		else
+			snprintf(reply, reply_size, "OK\n");
+		return;
+	}
+
+	if (strcmp(command, "SYSTEM NOTIFY GET") == 0) {
+		snprintf(reply, reply_size, "%d\n",
+			 state->notify_sounds_enabled ? 1 : 0);
+		return;
+	}
+
+	if (sscanf(command, "SYSTEM NOTIFY SET %31s", arg1) == 1) {
+		bool enabled = strcmp(arg1, "0") != 0 &&
+			       strcasecmp(arg1, "off") != 0 &&
+			       strcasecmp(arg1, "false") != 0;
+		if (persist_sound_toggle(state, dbus_conn, TOGGLE_NOTIFY, enabled) != 0)
+			snprintf(reply, reply_size, "ERR notification sound toggle failed\n");
 		else
 			snprintf(reply, reply_size, "OK\n");
 		return;

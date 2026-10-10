@@ -13,7 +13,7 @@ cp -r "$HERE/../src/themes" "$R/usr/share/nuubos/themes"
 printf 'NUUBOS_USER_SETTINGS_VERSION=1\n' > "$R/state/users/$U/settings.conf"
 c() { NUUBOS_ROOT="$R" sh "$CTL" "$@"; }
 
-ck "built-ins valid and listed" '[ "$(c list | grep -c "^theme=")" = 4 ]'
+ck "built-ins valid and listed" '[ "$(c list | grep -c "^theme=")" = 12 ]'
 ck "default selected when none" 'c selected $U | grep -qx "id=nuubos"'
 mk() { mkdir -p "$T/$1"; printf "%s" "$2" > "$T/$1/theme.conf"; }
 GOOD='FORMAT=1
@@ -42,6 +42,8 @@ ck "select unknown refused" 'c select $U nope | grep -q ERR'
 ck "remove builtin refused" 'c remove nuubos | grep -q "ERR builtin"'
 ck "remove resets users" '[ "$(c remove neon)" = OK ] && c selected $U | grep -qx "id=nuubos" && grep -qx "THEME=nuubos" "$R/state/users/$U/settings.conf"'
 ck "broken selection falls back" 'echo "THEME=ghost" >> "$R/state/users/$U/settings.conf" && c selected $U | grep -qx "id=nuubos"'
+ck "tokens resolve the user's mood" 'c select $U sakura >/dev/null && c tokens $U | grep -qx "accent=#ff6fae" && c tokens $U | grep -qx "id=sakura"'
+ck "tokens of the active user" 'mkdir -p "$R/run/nuubos/user" && echo $U > "$R/run/nuubos/user/active" && c tokens | grep -qx "id=sakura"'
 ck "no staging left" '! ls -a "$R/userdata/themes" | grep -q "^\.stage"'
 [ "$FAIL" = 0 ] && echo "[PASS] themes"
 exit "$FAIL"

@@ -19,6 +19,7 @@
 #include <sys/timerfd.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -38,6 +39,9 @@ struct topbar_state {
     char wifi_state[24];
     int battery_percent;
     char battery_state[24];
+    /* power_supply health, lowercased with dashes (good, overheat, dead,
+     * over-voltage, cold, ...); "unknown" when not reported. */
+    char battery_health[32];
 };
 
 /* Console battery alerts (EPIC-006, owner: Battery & Charging). Re-armed
@@ -274,11 +278,13 @@ static void refresh_battery(struct topbar_state *state)
     char path[448];
     char type[64];
     char status[64];
+    char health[32];
     int best_score = -1001;
     int percent = -1;
 
     state->battery_percent = -1;
     snprintf(state->battery_state, sizeof(state->battery_state), "unknown");
+    snprintf(state->battery_health, sizeof(state->battery_health), "unknown");
 
     dir = opendir("/sys/class/power_supply");
     if (!dir)
@@ -320,6 +326,15 @@ static void refresh_battery(struct topbar_state *state)
     if (!read_first_line(path, status, sizeof(status)))
         snprintf(status, sizeof(status), "Unknown");
 
+    snprintf(path, sizeof(path), "%s/health", best_base);
+    if (read_first_line(path, health, sizeof(health)) && health[0] != '\0') {
+        size_t i;
+
+        for (i = 0; health[i] != '\0' && i + 1 < sizeof(state->battery_health); i++)
+            state->battery_health[i] = health[i] == ' ' ? '-' : (char)tolower((unsigned char)health[i]);
+        state->battery_health[i] = '\0';
+    }
+
     state->battery_percent = percent;
     if (strcasecmp(status, "Charging") == 0)
         snprintf(state->battery_state, sizeof(state->battery_state), "charging");
@@ -340,7 +355,8 @@ static bool state_equal(const struct topbar_state *a,
            strcmp(a->user_name, b->user_name) == 0 &&
            strcmp(a->wifi_state, b->wifi_state) == 0 &&
            a->battery_percent == b->battery_percent &&
-           strcmp(a->battery_state, b->battery_state) == 0;
+           strcmp(a->battery_state, b->battery_state) == 0 &&
+           strcmp(a->battery_health, b->battery_health) == 0;
 }
 
 static bool publish_state(const struct topbar_state *state)
@@ -359,6 +375,7 @@ static bool publish_state(const struct topbar_state *state)
     fprintf(fp, "WIFI_STATE=%s\n", state->wifi_state);
     fprintf(fp, "BATTERY_PERCENT=%d\n", state->battery_percent);
     fprintf(fp, "BATTERY_STATE=%s\n", state->battery_state);
+    fprintf(fp, "BATTERY_HEALTH=%s\n", state->battery_health);
 
     if (fflush(fp) != 0) {
         fclose(fp);
@@ -568,6 +585,39 @@ static int make_uevent_socket(void)
  * HH:MM changes on time. A clock step (manual set, network sync, RTC) cancels
  * the timer, which is then refreshed and re-armed. Battery is event-driven.
  */
+/*
+ * Automatic time while Wi-Fi stays connected (user report 2026-10-10:
+ * clock drift): once an hour the time-sync helper runs; it syncs only when
+ * Automatic Time is on and the last sync is 6 hours old or more. Double
+ * fork: no child to reap here.
+ */
+#define TIME_SYNC "/usr/libexec/nuubos-status-time-sync"
+#define TIME_SYNC_EVERY_MINUTES 60
+
+static void maybe_time_sync(const struct topbar_state *state)
+{
+    static int minutes;
+    pid_t pid;
+
+    if (++minutes < TIME_SYNC_EVERY_MINUTES || strcmp(state->wifi_state, "connected") != 0)
+        return;
+    minutes = 0;
+    pid = fork();
+    if (pid == 0) {
+        sigset_t none;
+
+        sigemptyset(&none);
+        sigprocmask(SIG_SETMASK, &none, NULL);
+        if (fork() == 0) {
+            execl(TIME_SYNC, TIME_SYNC, (char *)NULL);
+            _exit(127);
+        }
+        _exit(0);
+    }
+    if (pid > 0)
+        (void)waitpid(pid, NULL, 0);
+}
+
 static int arm_minute_timer(int fd)
 {
     struct itimerspec spec;
@@ -740,6 +790,7 @@ int main(void)
                 next = current;
                 refresh_time(&next);
                 commit_if_changed(&current, &next);
+                maybe_time_sync(&current);
             } else if (map[i] == -5) {
                 struct signalfd_siginfo si;
                 while (read(signal_fd, &si, sizeof(si)) == sizeof(si)) {

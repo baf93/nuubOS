@@ -25,7 +25,7 @@ static void usage(const char *argv0)
 		"  %s system-volume [0..100|adjust DELTA]\n"
 		"  %s home-music-volume [0..100|adjust DELTA]\n"
 		"  %s music start|stop|next\n"
-		"  %s sfx navigation|select|back|quick-settings\n"
+		"  %s sfx navigation|select|back|quick-settings|launch|error|screenshot|boot|restart|poweroff\n"
 		"  %s test-sound start|stop|status\n"
 		"  %s reset-defaults\n",
 		argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0,

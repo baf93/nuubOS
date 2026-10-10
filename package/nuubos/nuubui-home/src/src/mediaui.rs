@@ -113,10 +113,7 @@ fn build_rows(ui: &HomeWindow, st: &State) -> Vec<(String, GenRow, bool)> {
         rows.push(("jf-signin".into(), row(tr(ui, 587, "Sign In"), tr(ui, 566, "Not signed in"), String::new()), true));
         return rows;
     }
-    if st.cwd == "jf:" {
-        rows.push(("jf-signout".into(), row(tr(ui, 567, "Sign Out"), st.jf_name.clone(),
-            armed_detail(&armed(), "jf-signout", tr(ui, 191, "Press again to confirm"), String::new())), true));
-    }
+
     if st.entries.is_empty() && !st.cwd.is_empty() {
         let mut r = row(tr(ui, 621, "Empty folder"), String::new(), String::new());
         r.enabled = false;
@@ -126,6 +123,11 @@ fn build_rows(ui: &HomeWindow, st: &State) -> Vec<(String, GenRow, bool)> {
         let mut r = if e.folder { nav(e.title.clone(), String::new()) } else { row(e.title.clone(), String::new(), String::new()) };
         r.detail = e.detail.clone().into();
         rows.push((e.key.clone(), r, true));
+    }
+    /* Actions last: the Media page shows them as its action bar. */
+    if st.cwd == "jf:" {
+        rows.push(("jf-signout".into(), row(tr(ui, 567, "Sign Out"), st.jf_name.clone(),
+            armed_detail(&armed(), "jf-signout", tr(ui, 191, "Press again to confirm"), String::new())), true));
     }
     rows
 }
@@ -139,9 +141,13 @@ pub(crate) fn render(ui: &HomeWindow) {
         (build_rows(ui, &st), section.clone(), section)
     });
     apply_rows(ui, rows, section);
-    ui.set_details_title(title.into());
+    ui.set_details_title(title.clone().into());
     ui.set_details_subtitle("".into());
-    ui.set_details_description(STATE.with(|st| st.borrow().cwd.clone()).into());
+    let cwd = STATE.with(|st| st.borrow().cwd.clone());
+    ui.set_details_description(cwd.clone().into());
+    /* An application page (user request 2026-10-10). */
+    let path = if cwd.starts_with("jf:") { String::new() } else { cwd };
+    crate::apppage::gen_page(ui, tr(ui, 665, "Media").to_uppercase(), title, String::new(), path);
 }
 
 /* ---------------------------------------------------------------- */
@@ -288,6 +294,7 @@ fn leave(ui: &HomeWindow) {
     ui.set_details_active(false);
     ui.set_details_shell_title("".into());
     ui.set_gen_rows(ModelRc::default());
+    ui.set_app_page_gen(false);
     write_ui_context("home");
 }
 

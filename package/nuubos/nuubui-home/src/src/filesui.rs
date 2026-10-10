@@ -118,13 +118,6 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
             rows.push(("shares".into(), nav(tr(ui, 611, "Network Shares"), String::new()), true));
         }
         58 => {
-            if let Some((src, mv)) = &st.clipboard {
-                let name = src.rsplit('/').next().unwrap_or(src).to_owned();
-                let mut r = row(tr(ui, 614, "Paste Here"), name, if *mv { tr(ui, 616, "Move") } else { tr(ui, 615, "Copy") });
-                r.enabled = !st.busy;
-                rows.push(("paste".into(), r, !st.busy));
-            }
-            rows.push(("mkdir".into(), row(tr(ui, 612, "New Folder"), String::new(), String::new()), true));
             if st.entries.is_empty() {
                 let mut r = row(tr(ui, 621, "Empty folder"), String::new(), String::new());
                 r.enabled = false;
@@ -138,6 +131,14 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
                     rows.push((key, row(e.name.clone(), human(e.size), String::new()), true));
                 }
             }
+            /* Actions last: the Files page shows them as its action bar. */
+            if let Some((src, mv)) = &st.clipboard {
+                let name = src.rsplit('/').next().unwrap_or(src).to_owned();
+                let mut r = row(tr(ui, 614, "Paste Here"), name, if *mv { tr(ui, 616, "Move") } else { tr(ui, 615, "Copy") });
+                r.enabled = !st.busy;
+                rows.push(("paste".into(), r, !st.busy));
+            }
+            rows.push(("mkdir".into(), row(tr(ui, 612, "New Folder"), String::new(), String::new()), true));
         }
         60 => {
             for (name, url, _user, mounted) in &st.shares {
@@ -231,9 +232,21 @@ pub(crate) fn render(ui: &HomeWindow) {
                 (root.map(|r| root_label(ui, r)).unwrap_or_default(),
                  root.map(|r| tr_arg(ui, 622, "{0} free", &human(r.free))).unwrap_or_default())
             };
-            ui.set_details_title(title.into());
-            ui.set_details_subtitle(sub.into());
+            ui.set_details_title(title.clone().into());
+            ui.set_details_subtitle(sub.clone().into());
             ui.set_details_description(st.cwd.clone().into());
+            /* Files and Network Shares look like an application (user
+             * request 2026-10-10), Removable Media and Backup stay
+             * Settings pages. */
+            if view == 58 || view == 60 {
+                let place = if view == 60 { tr(ui, 611, "Network Shares") }
+                    else if st.cwd.is_empty() { tr(ui, 609, "Files") }
+                    else { st.cwd.rsplit('/').next().unwrap_or("").to_owned() };
+                let meta = if view == 60 || st.cwd.is_empty() { String::new() }
+                    else if sub.is_empty() { title.clone() } else { format!("{title} • {sub}") };
+                crate::apppage::gen_page(ui, tr(ui, 609, "Files").to_uppercase(), place, meta,
+                    if view == 58 { st.cwd.clone() } else { String::new() });
+            }
         });
     }
 }
@@ -316,6 +329,7 @@ fn leave(ui: &HomeWindow) {
     ui.set_details_active(false);
     ui.set_details_shell_title("".into());
     ui.set_gen_rows(ModelRc::default());
+    ui.set_app_page_gen(false);
     write_ui_context("home");
 }
 

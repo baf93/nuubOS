@@ -1,5 +1,7 @@
 mod apppage;
+mod datetime;
 mod filesui;
+mod findui;
 mod gameui;
 mod library;
 mod lighting;
@@ -94,6 +96,7 @@ struct TopbarState {
     wifi_state: String,
     battery_percent: i32,
     battery_state: String,
+    battery_health: String,
 }
 
 impl Default for TopbarState {
@@ -104,6 +107,7 @@ impl Default for TopbarState {
             wifi_state: "disconnected".to_owned(),
             battery_percent: -1,
             battery_state: "unknown".to_owned(),
+            battery_health: "unknown".to_owned(),
         }
     }
 }
@@ -158,10 +162,7 @@ struct SystemSnapshot {
     profile: String,
     effective_profile: String,
     auto_battery_threshold: i32,
-    screensaver_after_min: i32,
     sleep_after_min: i32,
-    poweroff_after_min: i32,
-    rtc_wakeup: bool,
     cpu_freq_khz: i64,
     gpu_freq_hz: i64,
     cpu_temp_millic: i64,
@@ -197,10 +198,7 @@ impl Default for SystemSnapshot {
             profile: "auto".into(),
             effective_profile: "auto".into(),
             auto_battery_threshold: 0,
-            screensaver_after_min: 0,
             sleep_after_min: 0,
-            poweroff_after_min: 0,
-            rtc_wakeup: false,
             cpu_freq_khz: -1,
             gpu_freq_hz: -1,
             cpu_temp_millic: -1,
@@ -311,6 +309,7 @@ fn apply_language(ui: &HomeWindow, code: &str) {
     ui.set_ui_language_name(language_name(code).into());
     library::relocalize(ui);
     gameui::relocalize(ui);
+    refresh_regional(ui);
 }
 
 fn tr(ui: &HomeWindow, index: usize, fallback: &str) -> String {
@@ -499,6 +498,7 @@ fn apply_users(ui:&HomeWindow,s:&USnap,picker:&Arc<AtomicBool>){
     if open&&steamlink::ACTIVE.load(Ordering::SeqCst){steamlink::leave(ui);}
     /* Web bookmarks and history are the active user's too. */
     if open&&webui::ACTIVE.load(Ordering::SeqCst){webui::leave(ui);}
+    if open&&findui::ACTIVE.load(Ordering::SeqCst){findui::leave(ui);}
     if open&&!ui.get_user_picker_open(){
         let i=s.users.iter()
             .position(|u|u.id==s.last_user)
@@ -516,9 +516,9 @@ fn refresh_users(ui:&HomeWindow,p:&Arc<AtomicBool>){if let Ok(r)=users_command("
 fn start_users_listener(ui:&HomeWindow,picker:Arc<AtomicBool>){let weak=ui.as_weak();thread::spawn(move||loop{match UnixStream::connect(USERS_SOCKET){Ok(mut x)=>{if x.write_all(b"SUBSCRIBE\n").is_err(){thread::sleep(Duration::from_millis(500));continue;}let mut b=String::new();for l in BufReader::new(x).lines(){let Ok(l)=l else{break};b.push_str(&l);b.push('\n');if l=="end=1"{let snap=parse_users(&b);b.clear();let w=weak.clone();let p=picker.clone();let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){apply_users(&ui,&snap,&p);});}}}Err(_)=>thread::sleep(Duration::from_millis(500))}});}
 fn parse_regional(r:&str)->RSnap{let mut o=RSnap{timezone:"UTC".into(),auto_time:true,keyboard:"us".into(),last_sync:0,local_date:"---- -- --".into(),local_time:"--:--".into()};for l in r.lines(){let Some((k,v))=l.split_once('=') else{continue};match k{"timezone"=>o.timezone=v.into(),"automatic_time"=>o.auto_time=v=="1","keyboard_layout"=>o.keyboard=v.into(),"last_sync"=>o.last_sync=v.parse().unwrap_or(0),"local_date"=>o.local_date=v.into(),"local_time"=>o.local_time=v.into(),_=>{}}}o}
 fn keyboard_label(c:&str)->&'static str{match c{"uk"=>"English (UK)","it"=>"Italiano","fr"=>"Français","de"=>"Deutsch","es"=>"Español","pt-latin1"=>"Português",_=>"English (US)"}}fn virtual_layout(c:&str)->&'static str{match c{"fr"=>"azerty","de"=>"qwertz",_=>"qwerty"}}
-fn apply_regional(ui:&HomeWindow,s:&RSnap){ui.set_timezone(s.timezone.clone().into());ui.set_automatic_time(s.auto_time);ui.set_manual_date_label(s.local_date.clone().into());ui.set_manual_time_label(s.local_time.clone().into());ui.set_keyboard_layout_code(s.keyboard.clone().into());ui.set_keyboard_layout_label(keyboard_label(&s.keyboard).into());ui.set_keyboard_layout(virtual_layout(&s.keyboard).into());ui.set_last_time_sync_label(if s.last_sync>0{tr(ui,299,"Time synchronized").into()}else{tr(ui,302,"Never").into()});}
+fn apply_regional(ui:&HomeWindow,s:&RSnap){ui.set_timezone(s.timezone.clone().into());ui.set_automatic_time(s.auto_time);ui.set_manual_date_label(datetime::date_label(ui,&s.local_date).into());ui.set_manual_time_label(s.local_time.clone().into());ui.set_keyboard_layout_code(s.keyboard.clone().into());ui.set_keyboard_layout_label(keyboard_label(&s.keyboard).into());ui.set_keyboard_layout(virtual_layout(&s.keyboard).into());ui.set_last_time_sync_label(if s.last_sync>0{tr(ui,299,"Time synchronized").into()}else{tr(ui,302,"Never").into()});}
 fn refresh_regional(ui:&HomeWindow){if let Ok(r)=regional_command("STATUS"){apply_regional(ui,&parse_regional(&r));}}
-fn start_regional_listener(ui:&HomeWindow){let weak=ui.as_weak();thread::spawn(move||loop{match UnixStream::connect(REGIONAL_SOCKET){Ok(mut x)=>{if x.write_all(b"SUBSCRIBE\n").is_err(){thread::sleep(Duration::from_millis(500));continue;}let mut b=String::new();for l in BufReader::new(x).lines(){let Ok(l)=l else{break};b.push_str(&l);b.push('\n');if l.starts_with("clock_valid="){let q=parse_regional(&b);b.clear();let w=weak.clone();let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){apply_regional(&ui,&q);});}}}Err(_)=>thread::sleep(Duration::from_millis(500))}});}
+fn start_regional_listener(ui:&HomeWindow){let weak=ui.as_weak();thread::spawn(move||loop{match UnixStream::connect(REGIONAL_SOCKET){Ok(mut x)=>{if x.write_all(b"SUBSCRIBE\n").is_err(){thread::sleep(Duration::from_millis(500));continue;}let mut b=String::new();for l in BufReader::new(x).lines(){let Ok(l)=l else{break};b.push_str(&l);b.push('\n');if l.starts_with("local_time="){let q=parse_regional(&b);b.clear();let w=weak.clone();let _=slint::invoke_from_event_loop(move||if let Some(ui)=w.upgrade(){apply_regional(&ui,&q);});}}}Err(_)=>thread::sleep(Duration::from_millis(500))}});}
 fn update_general_scroll(ui:&HomeWindow){
     /* General has 12 rows in four sections (PROFILE, USERS, DATE & TIME,
      * KEYBOARD). */
@@ -595,10 +595,7 @@ fn parse_system_snapshot(reply: &str) -> SystemSnapshot {
             "profile.requested" => s.profile = value.to_owned(),
             "profile.effective" => s.effective_profile = value.to_owned(),
             "auto_battery.threshold" => s.auto_battery_threshold = value.parse().unwrap_or(0),
-            "screensaver_after_min" => s.screensaver_after_min = value.parse().unwrap_or(0),
             "sleep_after_min" => s.sleep_after_min = value.parse().unwrap_or(0),
-            "poweroff_after_min" => s.poweroff_after_min = value.parse().unwrap_or(0),
-            "rtc_wakeup" => s.rtc_wakeup = value == "1",
             "cpu.freq_khz" => s.cpu_freq_khz = value.parse().unwrap_or(-1),
             "gpu.freq_hz" => s.gpu_freq_hz = value.parse().unwrap_or(-1),
             "temp.cpu_millic" => s.cpu_temp_millic = value.parse().unwrap_or(-1),
@@ -646,10 +643,7 @@ fn apply_system_snapshot(ui: &HomeWindow, s: &SystemSnapshot) {
     ui.set_system_profile(s.profile.clone().into());
     ui.set_system_effective_profile(s.effective_profile.clone().into());
     ui.set_system_auto_battery_threshold(s.auto_battery_threshold);
-    ui.set_system_screensaver_after_min(s.screensaver_after_min);
     ui.set_system_sleep_after_min(s.sleep_after_min);
-    ui.set_system_poweroff_after_min(s.poweroff_after_min);
-    ui.set_system_rtc_wakeup(s.rtc_wakeup);
 
     ui.set_system_cpu_clock(if s.cpu_freq_khz >= 0 {
         format!("{:.2} GHz", s.cpu_freq_khz as f64 / 1_000_000.0).into()
@@ -673,8 +667,6 @@ fn apply_system_snapshot(ui: &HomeWindow, s: &SystemSnapshot) {
     } else {
         ui.set_system_memory(tr(ui, 241, "Unavailable").into());
     }
-
-    ui.set_screensaver_active(s.idle_stage == "screensaver");
 
     ui.set_system_uptime(if s.uptime_sec >= 0 {
         let hours = s.uptime_sec / 3600;
@@ -750,7 +742,7 @@ fn system_set(ui: &HomeWindow, command: String) {
     });
 }
 
-fn start_system_listener(ui: &HomeWindow, screensaver_gate: Arc<(Mutex<bool>, Condvar)>) {
+fn start_system_listener(ui: &HomeWindow) {
     let weak = ui.as_weak();
     thread::spawn(move || loop {
         match UnixStream::connect(SYSTEM_SOCKET) {
@@ -772,14 +764,6 @@ fn start_system_listener(ui: &HomeWindow, screensaver_gate: Arc<(Mutex<bool>, Co
                             let snapshot = system_command("STATUS")
                                 .map(|reply| parse_system_snapshot(&reply));
                             if let Ok(snapshot) = snapshot {
-                                {
-                                    let (lock, cv) = &*screensaver_gate;
-                                    let mut active = lock.lock().unwrap();
-                                    let next = snapshot.idle_stage == "screensaver";
-                                    let changed = *active != next;
-                                    *active = next;
-                                    if changed && next { cv.notify_one(); }
-                                }
                                 let weak = weak.clone();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(ui) = weak.upgrade() {
@@ -1166,14 +1150,18 @@ fn refresh_wifi_networks(ui: &HomeWindow, saved: bool) {
 
 fn apply_bluetooth_device_rows(
     ui: &HomeWindow,
-    rows: Vec<(String, String, String, bool, bool, bool, i32)>,
+    rows: Vec<(String, String, String, bool, bool, bool, i32, i32)>,
 ) {
     let mut nearby = Vec::new();
     let mut known = Vec::new();
     let selected = ui.get_bluetooth_selected_address().to_string();
     let mut selected_found = false;
 
-    for (address, name, kind, paired, connected, trusted, rssi) in rows {
+    let mut power = Vec::new();
+    for (address, name, kind, paired, connected, trusted, rssi, battery) in rows {
+        if connected && kind != "Controller" {
+            power.push((name.clone(), if kind == "Audio" { "headphones".to_owned() } else { "device".to_owned() }, battery));
+        }
         let entry = BluetoothDeviceEntry {
             address: address.clone().into(),
             name: name.clone().into(),
@@ -1206,6 +1194,8 @@ fn apply_bluetooth_device_rows(
         ui.set_bluetooth_selected_trusted(false);
     }
 
+    POWER_BLUETOOTH.with(|b| *b.borrow_mut() = power);
+    rebuild_power_devices(ui);
     ui.set_bluetooth_devices(ModelRc::from(Rc::new(VecModel::from(nearby))));
     ui.set_bluetooth_known_devices(ModelRc::from(Rc::new(VecModel::from(known))));
 
@@ -1229,7 +1219,7 @@ fn apply_bluetooth_device_rows(
 fn refresh_bluetooth_devices(ui: &HomeWindow) {
     let weak = ui.as_weak();
     thread::spawn(move || {
-        let result = (|| -> zbus::Result<Vec<(String, String, String, bool, bool, bool, i32)>> {
+        let result = (|| -> zbus::Result<Vec<(String, String, String, bool, bool, bool, i32, i32)>> {
             let connection = zbus::blocking::Connection::system()?;
             let proxy = bluetooth_proxy(&connection)?;
             proxy.call("GetDevices", &())
@@ -1389,6 +1379,14 @@ fn apply_controller_rows(
         .collect();
     topbar.sort_by_key(|controller| controller.player);
     ui.set_topbar_controllers(ModelRc::from(Rc::new(VecModel::from(topbar))));
+    POWER_CONTROLLERS.with(|c| {
+        *c.borrow_mut() = rows
+            .iter()
+            .filter(|(_, _, _, connected, builtin, _, _, _)| *connected && !*builtin)
+            .map(|(_, name, _, _, _, _, _, battery)| (name.clone(), "controller".to_owned(), *battery))
+            .collect();
+    });
+    rebuild_power_devices(ui);
 
     let entries: Vec<ControllerEntry> = rows
         .into_iter()
@@ -1923,7 +1921,7 @@ fn open_player_assignment_dropdown(ui: &HomeWindow) {
             let label = if controller.connected {
                 controller.name.to_string()
             } else {
-                format!("{} • Unavailable", controller.name)
+                format!("{}{}", controller.name, tr(ui, 221, " • unavailable"))
             };
             options.push((controller.id.to_string(), label));
         }
@@ -1932,7 +1930,7 @@ fn open_player_assignment_dropdown(ui: &HomeWindow) {
     open_settings_choice(
         ui,
         "player-assignment",
-        &format!("Player {}", assignment.player),
+        &format!("{}{}", tr(ui, 220, "Player "), assignment.player),
         options,
         assignment.controller_id.as_str(),
     );
@@ -1953,6 +1951,9 @@ fn play_ui_sound(action: &str) {
         "menu_back" => Some("back"),
         "menu_up" | "menu_down" | "menu_left" | "menu_right" => Some("navigation"),
         "settings" => Some("quick-settings"),
+        /* Named cues (no input action). */
+        "launch" => Some("launch"),
+        "error" => Some("error"),
         _ => None,
     };
 
@@ -1980,11 +1981,38 @@ fn adjust_applications_volume(ui: &HomeWindow, delta: i32) {
     });
 }
 
+/// Mute/unmute Applications or Home Music (audiod remembers the level).
+fn toggle_stream_mute(ui: &HomeWindow, music: bool) {
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let reply = audio_socket_command(if music { "MUSIC MUTE TOGGLE" } else { "APPLICATIONS MUTE TOGGLE" })
+            .unwrap_or_default();
+        let Some(level) = reply.trim().strip_prefix("OK ").and_then(|v| v.parse::<i32>().ok()) else { return };
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                if music {
+                    ui.set_home_music_volume(level);
+                } else {
+                    ui.set_applications_volume(level);
+                }
+            }
+        });
+    });
+}
+
 fn set_navigation_sounds_enabled(ui: &HomeWindow, enabled: bool) {
     ui.set_navigation_sounds_enabled(enabled);
     thread::spawn(move || {
         let value = if enabled { 1 } else { 0 };
         let _ = audio_socket_command(&format!("SYSTEM NAVIGATION SET {value}"));
+    });
+}
+
+fn set_notify_sounds_enabled(ui: &HomeWindow, enabled: bool) {
+    ui.set_notify_sounds_enabled(enabled);
+    thread::spawn(move || {
+        let value = if enabled { 1 } else { 0 };
+        let _ = audio_socket_command(&format!("SYSTEM NOTIFY SET {value}"));
     });
 }
 
@@ -2009,11 +2037,13 @@ fn refresh_audio_policy(ui: &HomeWindow) {
         let applications = parse_audio_policy_int("APPLICATIONS VOLUME GET", 100).clamp(0, 100);
         let navigation = parse_audio_policy_int("SYSTEM NAVIGATION GET", 1) != 0;
         let power = parse_audio_policy_int("SYSTEM POWER GET", 1) != 0;
+        let notify = parse_audio_policy_int("SYSTEM NOTIFY GET", 1) != 0;
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
                 ui.set_applications_volume(applications);
                 ui.set_navigation_sounds_enabled(navigation);
                 ui.set_power_sounds_enabled(power);
+                ui.set_notify_sounds_enabled(notify);
             }
         });
     });
@@ -2210,6 +2240,24 @@ fn audio_adjust_volume(ui: &HomeWindow, delta: i32) {
     });
 }
 
+/// Mute/unmute = audiod's hard-mute 0% master; unmuting restores the
+/// previous level (audiod owns the remembered value).
+fn audio_toggle_mute(ui: &HomeWindow) {
+    if !ui.get_audio_volume_supported() {
+        return;
+    }
+
+    thread::spawn(move || {
+        let result = (|| -> zbus::Result<()> {
+            let connection = zbus::blocking::Connection::system()?;
+            let proxy = audio_proxy(&connection)?;
+            proxy.call("ToggleMute", &())
+        })();
+        if let Err(error) = result {
+            eprintln!("home: Audio ToggleMute failed={error}");
+        }
+    });
+}
 
 fn audio_stop_test_tone(ui: &HomeWindow) {
     ui.set_audio_test_tone_playing(false);
@@ -2358,26 +2406,6 @@ fn open_auto_battery_dropdown(ui: &HomeWindow) {
     );
 }
 
-fn open_screensaver_timeout_dropdown(ui: &HomeWindow) {
-    let values = [0, 1, 2, 5, 10, 15, 30, 45, 60];
-    let options = values
-        .into_iter()
-        .map(|value| {
-            (
-                value.to_string(),
-                if value == 0 { tr(ui, 54, "Off") } else { format!("{} min", value) },
-            )
-        })
-        .collect();
-    open_settings_choice(
-        ui,
-        "system-screensaver",
-        &tr(ui, 55, "Screensaver After"),
-        options,
-        ui.get_system_screensaver_after_min().to_string().as_str(),
-    );
-}
-
 fn open_sleep_timeout_dropdown(ui: &HomeWindow) {
     let values = [0, 1, 2, 5, 10, 15, 30, 45, 60, 120];
     let options = values
@@ -2395,26 +2423,6 @@ fn open_sleep_timeout_dropdown(ui: &HomeWindow) {
         &tr(ui, 56, "Sleep After"),
         options,
         ui.get_system_sleep_after_min().to_string().as_str(),
-    );
-}
-
-fn open_poweroff_timeout_dropdown(ui: &HomeWindow) {
-    let values = [0, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240];
-    let options = values
-        .into_iter()
-        .map(|value| {
-            (
-                value.to_string(),
-                if value == 0 { tr(ui, 54, "Off") } else { format!("{} min", value) },
-            )
-        })
-        .collect();
-    open_settings_choice(
-        ui,
-        "system-poweroff",
-        &tr(ui, 58, "Power Off"),
-        options,
-        ui.get_system_poweroff_after_min().to_string().as_str(),
     );
 }
 
@@ -2545,6 +2553,7 @@ fn apply_settings_choice(ui: &HomeWindow) {
         "theme" => themes::select(ui, value),
         c if c.starts_with("game-") || c.starts_with("emu-") => gameui::apply_choice(ui, c, value),
         c if c.starts_with("files-") || c.starts_with("share-") || c.starts_with("backup-") => filesui::apply_choice(ui, c, value),
+        c if c.starts_with("find-") => findui::apply_choice(ui, c, value),
         "player-assignment" => {
             let player_index = ui.get_player_assignment_index().max(0) as usize;
             let Some(assignment) = ui.get_player_assignments().row_data(player_index) else {
@@ -2592,14 +2601,8 @@ fn apply_settings_choice(ui: &HomeWindow) {
         "system-auto-battery" => {
             system_set(ui, format!("SET AUTO_BATTERY {}", value));
         }
-        "system-screensaver" => {
-            system_set(ui, format!("SET SCREENSAVER {}", value));
-        }
         "system-sleep" => {
             system_set(ui, format!("SET SLEEP {}", value));
-        }
-        "system-poweroff" => {
-            system_set(ui, format!("SET POWEROFF {}", value));
         }
         "system-storage-backup-policy" => {
             system_set(ui, format!("SET STORAGE BACKUP_POLICY {}", value));
@@ -3101,11 +3104,8 @@ fn navigate_settings_view(ui: &HomeWindow, next_view: i32) {
         refresh_audio(ui);
         refresh_audio_policy(ui);
     }
-    if matches!(next_view, 19 | 20 | 21 | 22) {
+    if matches!(next_view, 19 | 20 | 21 | POWER_VIEW) {
         refresh_system(ui);
-        if next_view != 22 {
-            ui.set_system_reset_confirm(false);
-        }
     }
 }
 
@@ -3517,6 +3517,7 @@ fn finish_system_keyboard(ui: &HomeWindow) {
         filesui::KEYBOARD_FOLDER..=filesui::KEYBOARD_SHARE_PASSWORD => filesui::keyboard_done(ui, purpose, value),
         mediaui::KEYBOARD_SERVER..=mediaui::KEYBOARD_JF_PASSWORD => mediaui::keyboard_done(ui, purpose, value),
         webui::KEYBOARD_ADDRESS => webui::keyboard_done(ui, value),
+        findui::KEYBOARD_TITLE..=findui::KEYBOARD_RENAME_COLLECTION => findui::keyboard_done(ui, purpose, value),
         _ => navigate_settings_view(ui, return_view),
     }
 }
@@ -3538,16 +3539,19 @@ fn keyboard_toggle_shift(ui: &HomeWindow) {
     apply_keyboard_layout(ui);
 }
 
+/* Deletes the last character (the Back key, or West on the controller). */
+fn keyboard_backspace(ui: &HomeWindow) {
+    let mut value = ui.get_keyboard_value().to_string();
+    value.pop();
+    let cursor = value.len() as i32;
+    ui.set_keyboard_value(value.into());
+    ui.invoke_system_keyboard_place_cursor(cursor);
+}
+
 fn handle_system_keyboard_confirm(ui: &HomeWindow) {
     let Some(key) = keyboard_key(ui) else { return; };
     match key.as_str() {
-        "Back" => {
-            let mut value = ui.get_keyboard_value().to_string();
-            value.pop();
-            let cursor = value.len() as i32;
-            ui.set_keyboard_value(value.into());
-            ui.invoke_system_keyboard_place_cursor(cursor);
-        }
+        "Back" => keyboard_backspace(ui),
         "Space" => {
             let mut value = ui.get_keyboard_value().to_string();
             value.push(' ');
@@ -3906,7 +3910,7 @@ fn start_bluetooth_aux_signal_listener(ui: &HomeWindow, signal_name: &'static st
                 "DevicesSnapshotChanged" => {
                     let body = message
                         .body()
-                        .deserialize::<(Vec<(String, String, String, bool, bool, bool, i32)>,)>();
+                        .deserialize::<(Vec<(String, String, String, bool, bool, bool, i32, i32)>,)>();
                     match body {
                         Ok((rows,)) => {
                             let weak = weak.clone();
@@ -4039,6 +4043,7 @@ fn load_topbar_state() -> TopbarState {
                 state.battery_percent = value.parse::<i32>().unwrap_or(-1);
             }
             "BATTERY_STATE" => state.battery_state = value.to_owned(),
+            "BATTERY_HEALTH" => state.battery_health = value.to_owned(),
             _ => {}
         }
     }
@@ -4052,6 +4057,7 @@ fn apply_topbar_state(ui: &HomeWindow, state: TopbarState) {
     ui.set_wifi_state(state.wifi_state.into());
     ui.set_battery_percent(state.battery_percent);
     ui.set_battery_state(state.battery_state.into());
+    ui.set_battery_health(state.battery_health.into());
     ui.set_battery_label(if state.battery_percent >= 0 { format!("{}%", state.battery_percent).into() } else { "--%".into() });
 }
 
@@ -4195,12 +4201,15 @@ fn update_display_audio_scroll(ui: &HomeWindow, count: i32) {
 /// Display & Audio rows by function. Color Temperature (row 1) exists only
 /// when the panel supports it; the rows below it move up when it does not.
 #[derive(Clone, Copy, PartialEq)]
-enum DaRow { Brightness, ColorTemperature, Output, Volume, Applications, HomeMusic, TestSound, SystemSounds, NavigationSounds, PowerSounds }
+enum DaRow { Brightness, ColorTemperature, Output, Volume, Applications, HomeMusic, TestSound, SystemSounds, NavigationSounds, NotifySounds, PowerSounds }
+
+/* Rows without Color Temperature. */
+const DA_ROWS: i32 = 10;
 
 fn display_audio_row(ui: &HomeWindow) -> DaRow {
-    const ROWS: [DaRow; 10] = [DaRow::Brightness, DaRow::ColorTemperature, DaRow::Output, DaRow::Volume, DaRow::Applications,
-        DaRow::HomeMusic, DaRow::TestSound, DaRow::SystemSounds, DaRow::NavigationSounds, DaRow::PowerSounds];
-    let index = ui.get_display_audio_index().clamp(0, 9 - 1 + ui.get_da_temp());
+    const ROWS: [DaRow; 11] = [DaRow::Brightness, DaRow::ColorTemperature, DaRow::Output, DaRow::Volume, DaRow::Applications,
+        DaRow::HomeMusic, DaRow::TestSound, DaRow::SystemSounds, DaRow::NavigationSounds, DaRow::NotifySounds, DaRow::PowerSounds];
+    let index = ui.get_display_audio_index().clamp(0, DA_ROWS - 1 + ui.get_da_temp());
     let logical = if ui.get_da_temp() == 0 && index >= 1 { index + 1 } else { index };
     ROWS[logical as usize]
 }
@@ -4422,7 +4431,59 @@ fn safe_confirm(ui: &HomeWindow, row: i32, settings_active: &Arc<AtomicBool>) {
     }
 }
 
-const SYSTEM_ROWS: i32 = 11;
+/* System: STORAGE & SOFTWARE (0 Storage, 1 Software Update, 2 System
+ * Information) | TROUBLESHOOTING (3 Diagnostics, 4 Recovery). */
+const SYSTEM_ROWS: i32 = 5;
+/* Settings → Power (settings-view 69, category 5): POWER (0 Performance
+ * Profile, 1 Automatic Battery Saver, 2 Sleep After) | BATTERY (3 Charge,
+ * 4 Health, read-only) | CONNECTED DEVICES (from 5, read-only, at least one
+ * row: "none"). */
+const POWER_VIEW: i32 = 69;
+const POWER_DEVICES_START: i32 = 5;
+
+fn power_row_count(ui: &HomeWindow) -> i32 {
+    POWER_DEVICES_START + (ui.get_power_devices().row_count() as i32).max(1)
+}
+
+fn update_power_scroll(ui: &HomeWindow) {
+    ui.set_power_scroll_offset(sectioned_scroll(
+        ui,
+        ui.get_power_index(),
+        power_row_count(ui),
+        ui.get_power_scroll_offset(),
+        (3, POWER_DEVICES_START, 0),
+    ));
+}
+
+thread_local! {
+    /* Battery sources of the Power page: connected external controllers
+     * (controllersd) and connected Bluetooth devices (bluetoothd). */
+    static POWER_CONTROLLERS: std::cell::RefCell<Vec<(String, String, i32)>> = std::cell::RefCell::new(Vec::new());
+    static POWER_BLUETOOTH: std::cell::RefCell<Vec<(String, String, i32)>> = std::cell::RefCell::new(Vec::new());
+}
+
+/// Rebuilds the CONNECTED DEVICES rows: controllers first, then Bluetooth
+/// devices that are not controllers (controllersd already lists those,
+/// with the Battery1 level).
+fn rebuild_power_devices(ui: &HomeWindow) {
+    let mut rows: Vec<PowerDevice> = Vec::new();
+    POWER_CONTROLLERS.with(|c| {
+        for (name, kind, battery) in c.borrow().iter() {
+            rows.push(PowerDevice { name: name.clone().into(), kind: kind.clone().into(), battery: *battery });
+        }
+    });
+    POWER_BLUETOOTH.with(|b| {
+        for (name, kind, battery) in b.borrow().iter() {
+            rows.push(PowerDevice { name: name.clone().into(), kind: kind.clone().into(), battery: *battery });
+        }
+    });
+    ui.set_power_devices(ModelRc::from(Rc::new(VecModel::from(rows))));
+    let count = power_row_count(ui);
+    if ui.get_power_index() >= count {
+        ui.set_power_index(count - 1);
+    }
+    update_power_scroll(ui);
+}
 
 fn update_system_scroll(ui: &HomeWindow) {
     ui.set_system_scroll_offset(sectioned_scroll(
@@ -4461,6 +4522,7 @@ fn handle_settings_action(
 ) {
     play_ui_sound(action);
     let view = ui.get_settings_view();
+    if ui.get_datetime_picker_open(){datetime::action(ui,action);return;}
     if ui.get_avatar_picker_open(){if action=="menu_back"{ui.set_avatar_picker_open(false);return;}let n=ui.get_avatar_choices().row_count() as i32;match action{"menu_up"|"menu_down"|"menu_left"|"menu_right"=>move_avatar_selection(ui,action),"menu_confirm" if n>0=>{if let Some(a)=ui.get_avatar_choices().row_data(ui.get_avatar_picker_index().max(0) as usize){let id=ui.get_profile_edit_user_id().to_string();let spec=a.spec.to_string();ui.set_avatar_picker_open(false);thread::spawn(move||{let _=users_command(&format!("SET_AVATAR	{}	{}",id,spec));});}},_=>{}}return;}
 
     if ui.get_settings_choice_open() {
@@ -4526,7 +4588,18 @@ fn handle_settings_action(
             1 => navigate_settings_view(ui, 0),
             2 | 3 => navigate_settings_view(ui, 1),
             4 => navigate_settings_view(ui, ui.get_wifi_detail_return_view()),
-            6 => navigate_settings_view(ui, ui.get_keyboard_return_view()),
+            6 => {
+                /* A collection name asked from Home goes back to Home. */
+                let purpose = ui.get_keyboard_purpose();
+                if !((findui::KEYBOARD_NEW_COLLECTION..=findui::KEYBOARD_RENAME_COLLECTION).contains(&purpose)
+                    && findui::keyboard_cancelled(ui))
+                {
+                    navigate_settings_view(ui, ui.get_keyboard_return_view());
+                    if ui.get_keyboard_return_view() == findui::COLLECTIONS_VIEW {
+                        findui::render(ui);
+                    }
+                }
+            }
             7 | 8 => navigate_settings_view(ui, 1),
             9 => navigate_settings_view(ui, ui.get_bluetooth_detail_return_view()),
             10 => navigate_settings_view(ui, 0),
@@ -4539,8 +4612,8 @@ fn handle_settings_action(
             24 | 25 => navigate_settings_view(ui, 23),
             26 => navigate_settings_view(ui, 25),
             27 | 28 => navigate_settings_view(ui, 19),
-            20 | 21 | 22 => {
-                ui.set_system_reset_confirm(false);
+            POWER_VIEW => navigate_settings_view(ui, 0),
+            20 | 21 => {
                 ui.set_system_storage_confirm(false);
                 navigate_settings_view(ui, 19);
             }
@@ -4556,7 +4629,7 @@ fn handle_settings_action(
         0 => match action {
             "menu_up" => {
                 let current = ui.get_settings_selected_index();
-                let next = if current <= 0 { 5 } else { current - 1 };
+                let next = if current <= 0 { 6 } else { current - 1 };
                 ui.set_settings_selected_index(next);
                 if next == 1 {
                     gameui::reset_services(ui);
@@ -4570,13 +4643,18 @@ fn handle_settings_action(
                     refresh_audio(ui);
                     refresh_audio_policy(ui);
                 } else if next == 5 {
+                    ui.set_power_scroll_offset(0);
+                    refresh_system(ui);
+                    refresh_controllers(ui);
+                    refresh_bluetooth_devices(ui);
+                } else if next == 6 {
                     ui.set_system_scroll_offset(0);
                     refresh_system(ui);
                 }
             }
             "menu_down" => {
                 let current = ui.get_settings_selected_index();
-                let next = if current >= 5 { 0 } else { current + 1 };
+                let next = if current >= 6 { 0 } else { current + 1 };
                 ui.set_settings_selected_index(next);
                 if next == 1 {
                     gameui::reset_services(ui);
@@ -4588,6 +4666,11 @@ fn handle_settings_action(
                     refresh_audio(ui);
                     refresh_audio_policy(ui);
                 } else if next == 5 {
+                    ui.set_power_scroll_offset(0);
+                    refresh_system(ui);
+                    refresh_controllers(ui);
+                    refresh_bluetooth_devices(ui);
+                } else if next == 6 {
                     ui.set_system_scroll_offset(0);
                     refresh_system(ui);
                 }
@@ -4619,6 +4702,13 @@ fn handle_settings_action(
                     refresh_audio(ui);
                     refresh_audio_policy(ui);
                 } else if ui.get_settings_selected_index() == 5 {
+                    ui.set_power_index(0);
+                    ui.set_power_scroll_offset(0);
+                    navigate_settings_view(ui, POWER_VIEW);
+                    refresh_system(ui);
+                    refresh_controllers(ui);
+                    refresh_bluetooth_devices(ui);
+                } else if ui.get_settings_selected_index() == 6 {
                     ui.set_system_index(0);
                     ui.set_system_scroll_offset(0);
                     navigate_settings_view(ui, 19);
@@ -5030,38 +5120,42 @@ fn handle_settings_action(
                     ui.set_system_index(move_model_selection(ui.get_system_index(), SYSTEM_ROWS, 1));
                     update_system_scroll(ui);
                 }
-                /* POWER 0-4, STORAGE & SOFTWARE 5-7, TROUBLESHOOTING 8-10
-                 * (home.slint system-storage-start/system-support-start). */
                 "menu_confirm" => match ui.get_system_index() {
-                    0 => open_system_profile_dropdown(ui),
-                    1 => open_auto_battery_dropdown(ui),
-                    2 => open_screensaver_timeout_dropdown(ui),
-                    3 => open_sleep_timeout_dropdown(ui),
-                    4 => open_poweroff_timeout_dropdown(ui),
-                    5 => {
+                    0 => {
                         ui.set_system_storage_index(0);
                         ui.set_system_storage_scroll_offset(0);
                         ui.set_system_storage_confirm(false);
                         navigate_settings_view(ui, 20);
                         refresh_system(ui);
                     },
-                    6 => gameui::open_update(ui),
-                    7 => {
+                    1 => gameui::open_update(ui),
+                    2 => {
                         ui.set_system_info_index(0);
                         ui.set_system_info_scroll_offset(0);
                         navigate_settings_view(ui, 21);
                     },
-                    8 => navigate_settings_view(ui, 27),
-                    9 => navigate_settings_view(ui, 28),
-                    10 => {
-                        ui.set_system_reset_confirm(false);
-                        navigate_settings_view(ui, 22);
-                    }
+                    3 => navigate_settings_view(ui, 27),
+                    4 => navigate_settings_view(ui, 28),
                     _ => {}
                 },
                 _ => {}
             }
         }
+        POWER_VIEW => match action {
+            "menu_up" | "menu_down" => {
+                let count = power_row_count(ui);
+                ui.set_power_index(move_model_selection(ui.get_power_index(), count, if action == "menu_up" { -1 } else { 1 }));
+                update_power_scroll(ui);
+            }
+            "menu_confirm" => match ui.get_power_index() {
+                0 => open_system_profile_dropdown(ui),
+                1 => open_auto_battery_dropdown(ui),
+                2 => open_sleep_timeout_dropdown(ui),
+                /* Battery and device rows are read-only. */
+                _ => {}
+            },
+            _ => {}
+        },
         20 => {
             let job_running = ui.get_system_storage_job_state().as_str() == "running";
             match action {
@@ -5136,17 +5230,6 @@ fn handle_settings_action(
             "menu_confirm" => {}
             _ => {}
         },
-        22 => {
-            if action == "menu_confirm" {
-                if ui.get_system_reset_confirm() {
-                    ui.set_system_reset_confirm(false);
-                    system_set(ui, "RESET SYSTEM SETTINGS".to_owned());
-                    navigate_settings_view(ui, 19);
-                } else {
-                    ui.set_system_reset_confirm(true);
-                }
-            }
-        }
         27 => match action {
             "menu_up" => ui.set_diag_index(move_model_selection(ui.get_diag_index(), 2, -1)),
             "menu_down" => ui.set_diag_index(move_model_selection(ui.get_diag_index(), 2, 1)),
@@ -5155,7 +5238,7 @@ fn handle_settings_action(
         },
         28 => handle_recovery_action(ui, action),
         18 => {
-            let count = 9 + ui.get_da_temp();
+            let count = DA_ROWS + ui.get_da_temp();
             let row = display_audio_row(ui);
             let step = match action { "menu_left" => -1, "menu_right" => 1, _ => 0 };
             match action {
@@ -5173,13 +5256,18 @@ fn handle_settings_action(
                     DaRow::HomeMusic => adjust_home_music_volume(ui, step),
                     DaRow::SystemSounds => adjust_system_sounds_volume(ui, step),
                     DaRow::NavigationSounds => set_navigation_sounds_enabled(ui, !ui.get_navigation_sounds_enabled()),
+                    DaRow::NotifySounds => set_notify_sounds_enabled(ui, !ui.get_notify_sounds_enabled()),
                     DaRow::PowerSounds => set_power_sounds_enabled(ui, !ui.get_power_sounds_enabled()),
                     _ => {}
                 },
                 "menu_confirm" => match row {
                     DaRow::Output => open_audio_output_dropdown(ui),
+                    DaRow::Volume => audio_toggle_mute(ui),
+                    DaRow::Applications => toggle_stream_mute(ui, false),
+                    DaRow::HomeMusic => toggle_stream_mute(ui, true),
                     DaRow::TestSound => audio_toggle_test_tone(ui),
                     DaRow::NavigationSounds => set_navigation_sounds_enabled(ui, !ui.get_navigation_sounds_enabled()),
+                    DaRow::NotifySounds => set_notify_sounds_enabled(ui, !ui.get_notify_sounds_enabled()),
                     DaRow::PowerSounds => set_power_sounds_enabled(ui, !ui.get_power_sounds_enabled()),
                     _ => {}
                 },
@@ -5193,6 +5281,7 @@ fn handle_settings_action(
             "menu_down" => move_keyboard_vertical(ui, 1),
             "menu_confirm" => handle_system_keyboard_confirm(ui),
             "face_north" => keyboard_toggle_shift(ui),
+            "face_west" => keyboard_backspace(ui),
             _ => {}
         },
         _ => {}
@@ -5249,7 +5338,7 @@ fn route_input_action(
         if matches!(
             action,
             "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-            "menu_confirm" | "menu_back"
+            "menu_confirm" | "menu_back" | "face_west"
         ) {
             let action = action.to_owned();
             let weak = weak.clone();
@@ -5264,11 +5353,29 @@ fn route_input_action(
         return;
     }
 
+    if findui::ACTIVE.load(Ordering::SeqCst) {
+        if matches!(
+            action,
+            "menu_up" | "menu_down" | "menu_left" | "menu_right" |
+            "menu_confirm" | "menu_back" | "face_north" | "face_west"
+        ) {
+            let action = action.to_owned();
+            let weak = weak.clone();
+            let settings_active = settings_active.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    findui::handle_action(&ui, &action, &settings_active);
+                }
+            });
+        }
+        return;
+    }
+
     if webui::ACTIVE.load(Ordering::SeqCst) {
         if matches!(
             action,
             "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-            "menu_confirm" | "menu_back" | "face_north"
+            "menu_confirm" | "menu_back" | "face_north" | "face_west"
         ) {
             let action = action.to_owned();
             let weak = weak.clone();
@@ -5286,7 +5393,7 @@ fn route_input_action(
         if matches!(
             action,
             "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-            "menu_confirm" | "menu_back"
+            "menu_confirm" | "menu_back" | "face_west"
         ) {
             let action = action.to_owned();
             let weak = weak.clone();
@@ -5304,7 +5411,7 @@ fn route_input_action(
         if matches!(
             action,
             "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-            "menu_confirm" | "menu_back"
+            "menu_confirm" | "menu_back" | "face_west"
         ) {
             let action = action.to_owned();
             let weak = weak.clone();
@@ -5322,7 +5429,7 @@ fn route_input_action(
         if matches!(
             action,
             "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-            "menu_confirm" | "menu_back"
+            "menu_confirm" | "menu_back" | "face_west"
         ) {
             let action = action.to_owned();
             let weak = weak.clone();
@@ -5341,7 +5448,7 @@ fn route_input_action(
         if matches!(
             action,
             "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-            "menu_confirm" | "menu_back"
+            "menu_confirm" | "menu_back" | "face_west"
         ) {
             let action = action.to_owned();
             let weak = weak.clone();
@@ -5361,7 +5468,7 @@ fn route_input_action(
         if matches!(
             action,
             "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-            "menu_confirm" | "menu_back"
+            "menu_confirm" | "menu_back" | "face_west"
         ) {
             let action = action.to_owned();
             let weak = weak.clone();
@@ -5397,7 +5504,7 @@ fn route_input_action(
     if settings_active.load(Ordering::SeqCst) && matches!(
         action,
         "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-        "menu_confirm" | "menu_back" | "face_north"
+        "menu_confirm" | "menu_back" | "face_north" | "face_west"
     ) {
         let action = action.to_owned();
         let weak = weak.clone();
@@ -5420,7 +5527,7 @@ fn route_input_action(
         matches!(
             action,
             "menu_up" | "menu_down" | "menu_left" | "menu_right" |
-            "menu_confirm" | "menu_back" | "face_north" | "face_west"
+            "menu_confirm" | "menu_back" | "face_north" | "face_west" | "select"
         )
     {
         let action = action.to_owned();
@@ -5437,7 +5544,6 @@ fn start_input_listener(
     ui: &HomeWindow,
     settings_active: Arc<AtomicBool>,
     user_picker_active: Arc<AtomicBool>,
-    screensaver_gate: Arc<(Mutex<bool>, Condvar)>,
 ) {
     let weak = ui.as_weak();
 
@@ -5482,22 +5588,6 @@ fn start_input_listener(
                                 continue;
                             }
 
-                            {
-                                let (lock, _) = &*screensaver_gate;
-                                let mut active = lock.lock().unwrap();
-                                if *active {
-                                    *active = false;
-                                    let _ = system_command("ACTIVITY");
-                                    let weak = weak.clone();
-                                    let _ = slint::invoke_from_event_loop(move || {
-                                        if let Some(ui) = weak.upgrade() {
-                                            ui.set_screensaver_active(false);
-                                        }
-                                    });
-                                    continue;
-                                }
-                            }
-
                             route_input_action(
                                 fields[2],
                                 &weak,
@@ -5525,19 +5615,15 @@ fn start_input_listener(
  * 0 Timezone, 1 Automatic Time, 2 Date, 3 Time. */
 fn date_time_row_action(ui:&HomeWindow,row:i32,action:&str){
     let manual=!ui.get_automatic_time();
-    let step=if action=="menu_left"{-1}else{1};
     match (row,action){
         (0,"menu_confirm")=>open_timezone_region(ui),
         (1,"menu_confirm")=>{
             let v=if ui.get_automatic_time(){"0"}else{"1"};
             thread::spawn(move||{let _=regional_command(&format!("SET_AUTOMATIC_TIME\t{}",v));});
         }
-        (2,"menu_left"|"menu_right") if manual=>{
-            thread::spawn(move||{let _=regional_command(&format!("ADJUST_LOCAL_DAYS\t{}",step));});
-        }
-        (3,"menu_left"|"menu_right") if manual=>{
-            thread::spawn(move||{let _=regional_command(&format!("ADJUST_LOCAL_MINUTES\t{}",step));});
-        }
+        /* The full-screen picker, on the Day or the Hour wheel. */
+        (2,"menu_confirm") if manual=>datetime::open(ui,0),
+        (3,"menu_confirm") if manual=>datetime::open(ui,3),
         _=>{}
     }
 }
@@ -5570,6 +5656,7 @@ fn enter_oob(ui:&HomeWindow){
 fn leave_oob(ui:&HomeWindow){
     OOB_ACTIVE.store(false,Ordering::SeqCst);
     ui.set_avatar_picker_open(false);
+    ui.set_datetime_picker_open(false);
     navigate_settings_view(ui,0);
     ui.set_settings_selected_index(0);
     ui.set_settings_open(false);
@@ -5610,7 +5697,7 @@ fn oob_finish(ui:&HomeWindow){
 
 fn handle_oob_action(ui:&HomeWindow,action:&str,settings_active:&Arc<AtomicBool>){
     /* Dropdowns and the avatar picker behave exactly as in Settings. */
-    if ui.get_avatar_picker_open()||ui.get_settings_choice_open(){
+    if ui.get_avatar_picker_open()||ui.get_settings_choice_open()||ui.get_datetime_picker_open(){
         handle_settings_action(ui,action,settings_active);
         return;
     }
@@ -5789,48 +5876,6 @@ fn start_boot_transition(ui: &HomeWindow) {
     );
 }
 
-fn start_screensaver_animator(
-    ui: &HomeWindow,
-    gate: Arc<(Mutex<bool>, Condvar)>,
-) {
-    let weak = ui.as_weak();
-
-    thread::spawn(move || {
-        let mut x: i32 = 110;
-        let mut y: i32 = 170;
-        let mut dx: i32 = 7;
-        let mut dy: i32 = 5;
-
-        loop {
-            let (lock, cv) = &*gate;
-            let mut active = lock.lock().unwrap();
-            while !*active {
-                active = cv.wait(active).unwrap();
-            }
-            drop(active);
-
-            x += dx;
-            y += dy;
-            if x <= 0 { x = 0; dx = dx.abs(); }
-            else if x >= 1000 { x = 1000; dx = -dx.abs(); }
-            if y <= 0 { y = 0; dy = dy.abs(); }
-            else if y >= 1000 { y = 1000; dy = -dy.abs(); }
-
-            let weak = weak.clone();
-            let px = x;
-            let py = y;
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = weak.upgrade() {
-                    ui.set_screensaver_x_permille(px);
-                    ui.set_screensaver_y_permille(py);
-                }
-            });
-
-            thread::sleep(Duration::from_millis(80));
-        }
-    });
-}
-
 fn start_lifecycle_listener(ui: &HomeWindow) {
     let weak = ui.as_weak();
 
@@ -5913,9 +5958,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let system_info_gate = Arc::new((Mutex::new(false), Condvar::new()));
     let _ = SYSTEM_INFO_GATE.set(system_info_gate.clone());
     start_system_info_live(&ui, system_info_gate);
-    let screensaver_gate = Arc::new((Mutex::new(false), Condvar::new()));
-    start_system_listener(&ui, screensaver_gate.clone());
-    start_screensaver_animator(&ui, screensaver_gate.clone());
+    start_system_listener(&ui);
     start_lifecycle_listener(&ui);
     refresh_hint_mapping(&ui);
 
@@ -5947,7 +5990,6 @@ fn main() -> Result<(), slint::PlatformError> {
         &ui,
         settings_active.clone(),
         user_picker_active.clone(),
-        screensaver_gate.clone(),
     );
 
     if std::env::var("NUUBOS_SAFE_MODE").as_deref() == Ok("1") {

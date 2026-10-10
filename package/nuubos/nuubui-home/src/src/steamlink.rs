@@ -9,7 +9,10 @@
  *
  * Settings shell like Moonlight, settings-view 45. Rows: absent → Download;
  * downloading → progress (A cancels); installed → Open, Update / Check for
- * Updates, Remove (second press).
+ * Updates, Automatic Updates (streamd installs a newer build when the page
+ * checks and rolls back an update that fails at its first start), Restore
+ * Version (the build before the last update, when kept), Remove (second
+ * press).
  */
 
 use crate::moonlight::{command, send, Snapshot, SNAPSHOT};
@@ -36,9 +39,19 @@ fn update_available(s: &Snapshot) -> bool {
         && compare_versions(&s.steamlink_latest, &s.steamlink_version) == CmpOrdering::Greater
 }
 
+/* Actions of the installed application, in page order. */
+pub(crate) fn installed_actions(s: &Snapshot) -> Vec<&'static str> {
+    let mut keys = vec!["open", "update", "auto"];
+    if !s.steamlink_previous.is_empty() {
+        keys.push("restore");
+    }
+    keys.push("remove");
+    keys
+}
+
 fn row_count(ui: &HomeWindow) -> i32 {
     if ui.get_steamlink_state() == "installed" {
-        3
+        SNAPSHOT.lock().unwrap().as_ref().map(|s| installed_actions(s).len() as i32).unwrap_or(3)
     } else {
         1
     }
@@ -147,18 +160,21 @@ pub fn handle_action(ui: &HomeWindow, action: &str) {
     }
     let Some(s) = SNAPSHOT.lock().unwrap().clone() else { return };
     ui.set_steamlink_notice("".into());
-    match (ui.get_steamlink_state().as_str(), index) {
+    let key = installed_actions(&s).get(index.max(0) as usize).copied().unwrap_or("");
+    match (ui.get_steamlink_state().as_str(), key) {
         ("absent", _) => send("STEAMLINK_INSTALL".into()),
         ("installing", _) => send("STEAMLINK_CANCEL".into()),
-        (_, 0) => launch(ui),
-        (_, 1) if update_available(&s) => send("STEAMLINK_INSTALL".into()),
-        (_, 1) => send("STEAMLINK_CHECK".into()),
-        (_, 2) if ui.get_steamlink_remove_confirm() => {
+        (_, "open") => launch(ui),
+        (_, "update") if update_available(&s) => send("STEAMLINK_INSTALL".into()),
+        (_, "update") => send("STEAMLINK_CHECK".into()),
+        (_, "auto") => send(format!("STEAMLINK_AUTO_UPDATE\t{}", if s.steamlink_auto_update { 0 } else { 1 })),
+        (_, "restore") => send("STEAMLINK_ROLLBACK".into()),
+        (_, "remove") if ui.get_steamlink_remove_confirm() => {
             ui.set_steamlink_remove_confirm(false);
             ui.set_steamlink_index(0);
             send("STEAMLINK_REMOVE".into());
         }
-        (_, 2) => ui.set_steamlink_remove_confirm(true),
+        (_, "remove") => ui.set_steamlink_remove_confirm(true),
         _ => {}
     }
 }

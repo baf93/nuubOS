@@ -66,6 +66,8 @@ static const struct binding default_bindings[] = {
 	 * on Home. */
 	{ "face_north", 307 },
 	{ "face_west", 308 },
+	/* Find a Game on Home (Select). */
+	{ "select", 314 },
 	/*
 	 * Physical console power is a device-global semantic action.  It is
 	 * deliberately not owned by Settings or Quick Menu and is delivered to
@@ -1099,7 +1101,8 @@ static bool action_is_navigation(const char *action)
 	       strcmp(action, "menu_confirm") == 0 ||
 	       strcmp(action, "menu_back") == 0 ||
 	       strcmp(action, "face_north") == 0 ||
-	       strcmp(action, "face_west") == 0;
+	       strcmp(action, "face_west") == 0 ||
+	       strcmp(action, "select") == 0;
 }
 
 static bool client_wants_action(const struct client *client,

@@ -315,9 +315,14 @@ fn main() {
     ui.set_system_kernel("Linux 7.2.8".into());
     ui.set_system_cpu_clock("1.51 GHz".into());
     ui.set_system_cpu_temperature("47 °C".into());
-    ui.set_system_screensaver_after_min(2);
     ui.set_system_sleep_after_min(5);
-    ui.set_system_poweroff_after_min(30);
+    ui.set_battery_percent(78);
+    ui.set_battery_state("discharging".into());
+    ui.set_battery_health("good".into());
+    ui.set_power_devices(slint::ModelRc::new(slint::VecModel::from(vec![
+        PowerDevice { name: "Xbox Wireless Controller".into(), kind: "controller".into(), battery: 64 },
+        PowerDevice { name: "Beats Studio3".into(), kind: "headphones".into(), battery: -1 },
+    ])));
     ui.set_audio_output_label("Automatic • Speaker".into());
     let nets = vec![
         WifiNetworkEntry { ssid: "CasaBaf-5G".into(), security: "WPA2".into(), signal_dbm: -48, saved: true, current: true },
@@ -375,8 +380,9 @@ fn main() {
         })),
         ("display_audio", Box::new(|ui| { ui.set_settings_selected_index(4); ui.set_settings_view(18); ui.set_display_audio_index(2); ui.set_display_audio_scroll_offset(0); })),
         ("display_audio_sounds", Box::new(|ui| { ui.set_display_color_temperature_available(true); ui.set_display_audio_index(9); ui.set_display_audio_scroll_offset(5); })),
-        ("system", Box::new(|ui| { ui.set_display_color_temperature_available(false); ui.set_settings_selected_index(5); ui.set_settings_view(19); ui.set_system_index(4); ui.set_system_scroll_offset(0); })),
-        ("system_support", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_settings_view(19); ui.set_system_index(10); ui.set_system_scroll_offset(6); })),
+        ("system", Box::new(|ui| { ui.set_display_color_temperature_available(false); ui.set_settings_selected_index(6); ui.set_settings_view(19); ui.set_system_index(4); ui.set_system_scroll_offset(0); })),
+        ("power", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_settings_view(69); ui.set_power_index(1); ui.set_power_scroll_offset(0); })),
+        ("power_devices", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_settings_view(69); ui.set_power_index(5); ui.set_power_scroll_offset(3); })),
         ("controllers", Box::new(|ui| { ui.set_settings_selected_index(2); ui.set_settings_view(0); })),
         ("lighting", Box::new(|ui| {
             ui.set_lighting_supported(true); ui.set_lighting_effect("orbit".into()); ui.set_lighting_color("theme".into());
@@ -480,6 +486,7 @@ fn main() {
             ui.set_gen_notice("".into()); ui.set_details_has_cover(false);
             ui.set_details_active(true); ui.set_settings_view(51); ui.set_gen_index(1); ui.set_gen_scroll(0);
             ui.set_details_title("Super Mario World".into()); ui.set_gen_section(s(ui, 524).into());
+            ui.set_details_subtitle("Nintendo Entertainment System".into());
             ui.set_gen_rows(gen(&[(&s(ui, 525), &s(ui, 528).replace("{0}", "snes9x"), "", true, -1),
                 (&s(ui, 526), "4:3", "", true, -1), (&s(ui, 527), &s(ui, 534), "", true, -1),
                 (&s(ui, 535), "", &s(ui, 536), false, -1)]));
@@ -589,7 +596,24 @@ fn main() {
     scenes.push(("oob_datetime", Box::new(|ui| {
         ui.set_oob_step(1); ui.set_settings_view(30); ui.set_oob_index(1); ui.set_automatic_time(false);
     })));
+    /* Manual Date & Time picker (datetime.rs), focus on Month. */
+    scenes.push(("datetime_picker", Box::new(|ui| {
+        let s = ui.get_i18n_strings();
+        let t = |i: usize| s.row_data(i).unwrap_or_default();
+        let f = |l: usize, a: SharedString, v: SharedString, b: SharedString| DateTimeField { label: t(l), above: a, value: v, below: b };
+        ui.set_datetime_fields(ModelRc::new(Rc::new(VecModel::from(vec![
+            f(894, "11".into(), "10".into(), "09".into()),
+            f(895, t(885), t(884), t(883)),
+            f(896, "2027".into(), "2026".into(), "2025".into()),
+            f(897, "15".into(), "14".into(), "13".into()),
+            f(898, "33".into(), "32".into(), "31".into()),
+        ]))));
+        ui.set_datetime_preview(format!("{} 10 {} 2026", t(892), t(884)).into());
+        ui.set_datetime_field_index(1);
+        ui.set_datetime_picker_open(true);
+    })));
     scenes.push(("oob_wifi", Box::new(|ui| {
+        ui.set_datetime_picker_open(false);
         ui.set_oob_step(2); ui.set_settings_view(31); ui.set_oob_index(2); ui.set_connectivity_wifi_active(false);
     })));
     scenes.push(("oob_users", Box::new(|ui| {
@@ -659,8 +683,11 @@ fn main() {
         ui.set_moonlight_resolution_label(s.row_data(122).unwrap_or_default());
         ui.set_moonlight_fps_label(s.row_data(460).unwrap_or_default().replace("{0}", "60").into());
         ui.set_moonlight_codec_label("H.264".into());
-        ui.set_moonlight_bitrate_label(s.row_data(122).unwrap_or_default());
+        ui.set_moonlight_bitrate_label(s.row_data(461).unwrap_or_default().replace("{0}", "20").into());
+        ui.set_moonlight_bitrate_fraction(20000.0 / 150000.0);
+        ui.set_moonlight_audio_label(s.row_data(860).unwrap_or_default());
     })));
+    scenes.push(("moonlight_settings_pc", Box::new(|ui| { ui.set_moonlight_index(7); ui.set_moonlight_scroll(4); })));
     /* Steam Link page (settings-view 45, EPIC-026). */
     scenes.push(("steamlink_absent", Box::new(|ui| {
         ui.set_moonlight_active(false);
@@ -716,14 +743,14 @@ fn main() {
         }
         slint::Image::from_rgba8(buf)
     }
-    fn card(kind: i32, title: &str, detail: &str, system: &str, aspect: f32, accent: u32, img: Option<slint::Image>, available: bool, favorite: bool) -> HomeCard {
+    fn card(kind: i32, title: &str, detail: &str, system: &str, aspect: f32, accent: u32, img: Option<slint::Image>, available: bool, _unused: bool) -> HomeCard {
         HomeCard {
             key: title.into(), kind, title: title.into(), detail: detail.into(), system_name: system.into(),
             last_played: detail.split("  •  ").nth(1).unwrap_or("").into(),
             play_time: detail.split("  •  ").nth(2).map(|t| t.trim_start_matches("Played ")).unwrap_or("").into(),
             cover_path: "".into(), has_cover: img.is_some(), cover: img.unwrap_or_default(), aspect, x_units: 0.0,
             accent: slint::Color::from_rgb_u8((accent >> 16) as u8, (accent >> 8) as u8, accent as u8),
-            available, favorite, focused: false,
+            available, focused: false, ..Default::default()
         }
     }
     fn units(mut v: Vec<HomeCard>) -> ModelRc<HomeCard> {
@@ -742,16 +769,27 @@ fn main() {
     /* System icons as shipped by nuubos-library. */
     let icon = |id: &str| slint::Image::load_from_path(std::path::Path::new(
         &format!("/workspace/package/nuubos/nuubos-library/src/systems/{id}.png"))).ok();
+    fn previews(mut c: HomeCard, imgs: Vec<slint::Image>) -> HomeCard {
+        c.previews = imgs.len() as i32;
+        let mut it = imgs.into_iter();
+        c.p0 = it.next().unwrap_or_default(); c.p1 = it.next().unwrap_or_default();
+        c.p2 = it.next().unwrap_or_default(); c.p3 = it.next().unwrap_or_default();
+        c
+    }
+    let fan = |a: (u8, u8, u8), b: (u8, u8, u8), c: (u8, u8, u8)| vec![cover(150, 200, a), cover(150, 200, b), cover(200, 150, c)];
+    let collections = units(vec![
+        previews(card(2, "RPG Classics", "12 games", "", 1.6, 0x2d3f66, None, true, false), fan((120, 40, 160), (40, 90, 170), (180, 120, 40))),
+        card(2, "Couch Co-op", "3 games", "", 1.6, 0x2d3f66, None, true, false),
+        card(1, "New Collection", "", "", 1.6, 0x2d3f66, None, true, false),
+    ]);
     let shelf = units(vec![
-        card(1, "Favorites", "4 games", "", 1.6, 0x7a5a14, None, true, false),
-        card(2, "RPG Classics", "12 games", "", 1.6, 0x2d3f66, None, true, false),
-        card(3, "Super Nintendo", "48 games", "", 1.6, 0x6b5bc4, icon("snes"), true, false),
-        card(3, "PlayStation", "23 games", "", 1.6, 0x3d6fb8, icon("psx"), true, false),
+        previews(card(3, "Super Nintendo", "48 games", "", 1.6, 0x6b5bc4, icon("snes"), true, false), fan((200, 60, 50), (60, 150, 90), (230, 200, 60))),
+        previews(card(3, "PlayStation", "23 games", "", 1.6, 0x3d6fb8, icon("psx"), true, false), vec![cover(200, 200, (230, 120, 30))]),
         card(3, "Game Boy Advance", "61 games", "", 1.6, 0x4b3fb0, icon("gba"), true, false),
         card(3, "Mega Drive / Genesis", "1 game", "", 1.6, 0x1f4fa8, icon("megadrive"), true, false),
         card(3, "PICO-8", "3 games", "", 1.6, 0xff004d, None, true, false),
     ]);
-    let snes_tile = shelf.row_data(2).unwrap_or_default();
+    let snes_tile = shelf.row_data(0).unwrap_or_default();
     let apps = units(vec![
         card(4, "Moonlight", "", "", 1.0, 0x1a1d22, Some(cover(96, 96, (90, 160, 255))), true, false),
         card(4, "Steam Link", "", "", 1.0, 0x1a1d22, None, true, false),
@@ -761,24 +799,58 @@ fn main() {
         let t = ["Chrono Trigger", "Donkey Kong Country", "EarthBound", "F-Zero", "Final Fantasy VI", "Kirby Super Star", "Mega Man X",
                  "Secret of Mana", "Star Fox", "Super Castlevania IV", "Super Mario Kart", "Super Metroid", "Yoshi's Island", "Zelda: A Link to the Past"][i];
         let img = if i % 3 == 0 { Some(cover(280, 200, (50 + (i as u8) * 12, 90, 160))) } else { None };
+        /* The longest chip row (NES name, both play chips) on the focused card. */
+        if i == 2 {
+            return card(0, "The Legend of Zelda II: The Adventure of Link", "Nintendo Entertainment System  •  Last played 3 days ago  •  Played 12 h 40 min",
+                        "Nintendo Entertainment System", 1.4, 0xb03a2e, img, true, true);
+        }
         card(0, t, "Super Nintendo  •  Never played", "Super Nintendo", 1.4, 0x6b5bc4, img, true, i == 2)
     }).collect());
     /* Games copied but none played yet: the empty Recently Played card. */
-    let (shelf_only, apps_only) = (shelf.clone(), apps.clone());
+    let (shelf_only, apps_only, collections_only) = (shelf.clone(), apps.clone(), collections.clone());
+    let find_cards = recent.clone();
     scenes.push(("home_unplayed", Box::new(move |ui| {
         ui.set_topbar_controllers(ModelRc::default());
         ui.set_audio_bluetooth_available(false);
-        ui.set_home_recent(ModelRc::default()); ui.set_home_shelf(shelf_only.clone()); ui.set_home_apps(apps_only.clone());
+        ui.set_home_recent(ModelRc::default()); ui.set_home_systems(shelf_only.clone()); ui.set_home_collections(collections_only.clone()); ui.set_home_apps(apps_only.clone());
         ui.set_home_row(0); ui.set_home_empty_variant(2); ui.set_select_face_position(1);
     })));
     scenes.push(("home_recent", Box::new(move |ui| {
         ui.set_home_empty_variant(0);
-        ui.set_home_recent(recent.clone()); ui.set_home_shelf(shelf.clone()); ui.set_home_apps(apps.clone());
+        ui.set_home_recent(recent.clone()); ui.set_home_systems(shelf.clone()); ui.set_home_collections(collections.clone()); ui.set_home_apps(apps.clone());
         ui.set_home_row(0); ui.set_home_recent_index(0); ui.set_context_face_position(0); ui.set_select_face_position(1);
     })));
     scenes.push(("home_recent_end", Box::new(|ui| { ui.set_home_recent_index(5); })));
-    scenes.push(("home_shelf", Box::new(|ui| { ui.set_home_row(1); ui.set_home_shelf_index(2); })));
-    scenes.push(("home_apps", Box::new(|ui| { ui.set_home_row(2); ui.set_home_apps_index(0); ui.set_library_scanning(true); })));
+    scenes.push(("home_shelf", Box::new(|ui| { ui.set_home_row(1); ui.set_home_systems_index(0); })));
+    scenes.push(("home_collections", Box::new(|ui| { ui.set_home_row(2); ui.set_home_collections_index(0); })));
+    scenes.push(("home_collections_new", Box::new(|ui| { ui.set_home_collections_index(2); })));
+    scenes.push(("home_sheet", Box::new(|ui| {
+        ui.set_home_row(0);
+        ui.set_home_sheet_title("Add to Collection • Super Mario World".into());
+        ui.set_home_sheet_items(ModelRc::from(Rc::new(VecModel::from(vec![
+            HomeSheetItem { label: "RPG Classics".into(), detail: "".into(), check: 1, armed: false },
+            HomeSheetItem { label: "Couch Co-op".into(), detail: "".into(), check: 0, armed: false },
+            HomeSheetItem { label: "New Collection".into(), detail: "".into(), check: -1, armed: false },
+        ]))));
+        ui.set_home_sheet_index(1); ui.set_home_sheet_open(true);
+    })));
+    scenes.push(("home_find", Box::new(move |ui| {
+        ui.set_home_sheet_open(false);
+        ui.set_find_open(true); ui.set_find_zone(1); ui.set_find_query("mario".into());
+        ui.set_find_chips(ModelRc::from(Rc::new(VecModel::from(vec![
+            FindChip { label: "Super Nintendo".into(), active: true },
+            FindChip { label: "Decade".into(), active: false },
+            FindChip { label: "Genre".into(), active: false },
+            FindChip { label: "Players".into(), active: false },
+            FindChip { label: "Never Played Only".into(), active: false },
+            FindChip { label: "Clear Filters".into(), active: false },
+        ]))));
+        ui.set_find_chip_index(1);
+        ui.set_find_results(find_cards.clone()); ui.set_find_status("6 games".into());
+    })));
+    scenes.push(("home_find_results", Box::new(|ui| { ui.set_find_zone(2); ui.set_find_result_index(1); })));
+    scenes.push(("home_find_surprise", Box::new(|ui| { ui.set_find_zone(3); ui.set_find_surprise_index(0); })));
+    scenes.push(("home_apps", Box::new(|ui| { ui.set_find_open(false); ui.set_home_sheet_open(false); ui.set_home_row(3); ui.set_home_apps_index(0); ui.set_library_scanning(true); })));
     scenes.push(("home_apps_notice", Box::new(|ui| {
         ui.set_library_scanning(false);
         ui.set_home_notice(ui.get_i18n_strings().row_data(411).unwrap_or_default());
@@ -789,7 +861,7 @@ fn main() {
         ui.set_library_games(grid.clone()); ui.set_library_aspect(1.4); ui.set_library_title("Super Nintendo".into());
         ui.set_library_detail("14 games".into()); ui.set_library_index(2); ui.set_library_open(true);
     })));
-    scenes.push(("home_grid_scrolled", Box::new(|ui| { ui.set_library_index(12); })));
+    scenes.push(("home_grid_scrolled", Box::new(|ui| { ui.set_library_index(13); })));
     scenes.push(("home_notice", Box::new(|ui| {
         ui.set_library_open(false); ui.set_home_row(0); ui.set_home_recent_index(1);
         ui.set_home_notice(ui.get_i18n_strings().row_data(411).unwrap_or_default());
@@ -908,8 +980,9 @@ fn sync_focus(ui: &HomeWindow) {
     let row = ui.get_home_row();
     for (model, active, index) in [
         (ui.get_home_recent(), row == 0, ui.get_home_recent_index()),
-        (ui.get_home_shelf(), row == 1, ui.get_home_shelf_index()),
-        (ui.get_home_apps(), row == 2, ui.get_home_apps_index()),
+        (ui.get_home_systems(), row == 1, ui.get_home_systems_index()),
+        (ui.get_home_collections(), row == 2, ui.get_home_collections_index()),
+        (ui.get_home_apps(), row == 3, ui.get_home_apps_index()),
         (ui.get_library_games(), true, ui.get_library_index()),
     ] {
         for i in 0..model.row_count() {

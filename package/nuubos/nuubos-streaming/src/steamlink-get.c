@@ -12,6 +12,9 @@
  *       @latest <version>
  *   nuubos-steamlink-get install <root>
  *       @progress <percent>... then @done <version>
+ *   nuubos-steamlink-get rollback <root>
+ *       @done <version>   (swaps app/ and previous/: rolling back twice
+ *                          returns to the newer build)
  *   nuubos-steamlink-get remove <root>
  *       @done
  *
@@ -19,7 +22,8 @@
  * non-zero.
  *
  * The archive is extracted while it downloads (gzip + tar, no temporary
- * tarball) into <root>/.staging, then swapped in as <root>/app. USERDATA is
+ * tarball) into <root>/.staging, then swapped in as <root>/app; the build
+ * it replaces stays as <root>/previous for a rollback. USERDATA is
  * exFAT: symbolic and hard links become copies of their targets. SIGTERM
  * stops the download and removes the partial tree.
  *
@@ -932,7 +936,8 @@ static int install(const char *root)
 		return fail(error);
 	}
 
-	/* Swap: the previous build is kept until the new one is in place. */
+	/* Swap: the installed build becomes <root>/previous (rollback); the
+	 * build before it goes away once the new one is in place. */
 	if (access(app, F_OK) == 0 && rename(app, old) != 0) {
 		remove_tree(staging);
 		return fail("write");
@@ -942,15 +947,58 @@ static int install(const char *root)
 		remove_tree(staging);
 		return fail("write");
 	}
-	remove_tree(old);
+	{
+		char previous[PATH_MAX];
+
+		snprintf(previous, sizeof(previous), "%s/previous", root);
+		if (access(old, F_OK) == 0) {
+			remove_tree(previous);
+			if (rename(old, previous) != 0)
+				remove_tree(old);
+		}
+	}
 	sync();
+	event("@done %s", version);
+	return 0;
+}
+
+/* Back to the build before the last update (and forth again). */
+static int rollback(const char *root)
+{
+	char app[PATH_MAX], previous[PATH_MAX], swap[PATH_MAX], path[PATH_MAX];
+	char version[32] = "";
+	FILE *fp;
+
+	snprintf(app, sizeof(app), "%s/app", root);
+	snprintf(previous, sizeof(previous), "%s/previous", root);
+	snprintf(swap, sizeof(swap), "%s/.swap", root);
+	if (!valid_tree(previous))
+		return fail("archive");
+	remove_tree(swap);
+	if (access(app, F_OK) == 0 && rename(app, swap) != 0)
+		return fail("write");
+	if (rename(previous, app) != 0) {
+		rename(swap, app);
+		return fail("write");
+	}
+	if (access(swap, F_OK) == 0 && rename(swap, previous) != 0)
+		remove_tree(swap);
+	sync();
+	snprintf(path, sizeof(path), "%s/version.txt", app);
+	fp = fopen(path, "r");
+	if (fp) {
+		if (!fgets(version, sizeof(version), fp))
+			version[0] = '\0';
+		fclose(fp);
+	}
+	version[strcspn(version, "\r\n")] = '\0';
 	event("@done %s", version);
 	return 0;
 }
 
 static int remove_app(const char *root)
 {
-	static const char *const dirs[] = { ".staging", ".old", "app" };
+	static const char *const dirs[] = { ".staging", ".old", ".swap", "previous", "app" };
 	int rc = 0;
 
 	for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
@@ -1000,6 +1048,8 @@ int main(int argc, char **argv)
 	}
 	if (argc == 3 && !strcmp(argv[1], "remove") && argv[2][0] == '/')
 		return remove_app(argv[2]);
-	fprintf(stderr, "usage: nuubos-steamlink-get check | install <root> | remove <root>\n");
+	if (argc == 3 && !strcmp(argv[1], "rollback") && argv[2][0] == '/')
+		return rollback(argv[2]);
+	fprintf(stderr, "usage: nuubos-steamlink-get check | install <root> | rollback <root> | remove <root>\n");
 	return 2;
 }

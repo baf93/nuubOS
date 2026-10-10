@@ -22,11 +22,19 @@ define NUUBOS_CONTROLLERS_BUILD_CMDS
 		$(@D)/controllersd.c \
 		-o $(@D)/nuubos-controllersd \
 		-ldbus-1
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
+		$(NUUBOS_CONTROLLERS_DBUS_CFLAGS) \
+		-std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror \
+		$(@D)/controllersctl.c \
+		-o $(@D)/nuubos-controllersctl \
+		-ldbus-1
 endef
 
 define NUUBOS_CONTROLLERS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/nuubos-controllersd \
 		$(TARGET_DIR)/usr/sbin/nuubos-controllersd
+	$(INSTALL) -D -m 0755 $(@D)/nuubos-controllersctl \
+		$(TARGET_DIR)/usr/bin/nuubos-controllersctl
 	$(INSTALL) -D -m 0755 $(@D)/S48nuubos-controllersd \
 		$(TARGET_DIR)/etc/init.d/S48nuubos-controllersd
 	$(INSTALL) -D -m 0644 $(@D)/org.nuubOS.Controllers.conf \

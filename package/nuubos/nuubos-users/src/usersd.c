@@ -20,7 +20,7 @@
 #define ACTIVE_FILE "/run/nuubos/user/active"
 #define DEVICE_CONFIG "/state/config/nuubos.conf"
 #define AVATAR_DIR "/usr/share/nuubos/avatars"
-#define AVATAR_BUILTIN_COUNT 24
+#define AVATAR_BUILTIN_COUNT 20
 #define MAX_CLIENTS 12
 #define MAX_USERS 32
 struct client{int fd;bool subscribed;char buf[1024];size_t used;};
@@ -31,7 +31,7 @@ static int write_all(int fd,const char*s){size_t n=strlen(s);while(n){ssize_t w=
 static void trim(char*s){char*p=s;size_t n;while(*p&&isspace((unsigned char)*p))p++;if(p!=s)memmove(s,p,strlen(p)+1);n=strlen(s);while(n&&isspace((unsigned char)s[n-1]))s[--n]='\0';}
 static bool valid_id(const char*s){size_t i,n=strlen(s);if(n!=36)return false;for(i=0;i<n;i++){if(i==8||i==13||i==18||i==23){if(s[i]!='-')return false;}else if(!isxdigit((unsigned char)s[i]))return false;}return true;}
 static bool valid_name(const char*s){size_t i,n=strlen(s);if(n<1||n>64)return false;for(i=0;i<n;i++){unsigned char c=(unsigned char)s[i];if(c<' '||c==0x7f||c=='\n'||c=='\r'||c=='\t')return false;}return true;}
-static bool safe_avatar_spec(const char*s){if(!strncmp(s,"builtin:",8)){const char*p=s+8;return strlen(p)==2&&isdigit((unsigned char)p[0])&&isdigit((unsigned char)p[1]);}if(!strncmp(s,"custom:",7)){const char*p=s+7;size_t i,n=strlen(p);if(!n||n>120||strstr(p,"..")||strchr(p,'/'))return false;for(i=0;i<n;i++){unsigned char c=(unsigned char)p[i];if(!(isalnum(c)||c=='.'||c=='_'||c=='-'||c==' '))return false;}return true;}return false;}
+static bool safe_avatar_spec(const char*s){if(!strncmp(s,"builtin:",8)){const char*p=s+8;return strlen(p)==2&&isdigit((unsigned char)p[0])&&isdigit((unsigned char)p[1])&&atoi(p)>=1&&atoi(p)<=AVATAR_BUILTIN_COUNT;}if(!strncmp(s,"custom:",7)){const char*p=s+7;size_t i,n=strlen(p);if(!n||n>120||strstr(p,"..")||strchr(p,'/'))return false;for(i=0;i<n;i++){unsigned char c=(unsigned char)p[i];if(!(isalnum(c)||c=='.'||c=='_'||c=='-'||c==' '))return false;}return true;}return false;}
 static bool read_line_file(const char*path,char*out,size_t sz){FILE*f=fopen(path,"r");if(!f)return false;if(!fgets(out,(int)sz,f)){fclose(f);return false;}fclose(f);trim(out);return true;}
 static bool read_kv(const char*path,const char*key,char*out,size_t sz){FILE*f=fopen(path,"r");char line[512];size_t k=strlen(key);if(!f)return false;while(fgets(line,sizeof(line),f)){trim(line);if(!strncmp(line,key,k)&&line[k]=='='){snprintf(out,sz,"%s",line+k+1);fclose(f);return true;}}fclose(f);return false;}
 static int write_atomic_text(const char*path,const char*text,mode_t mode){char tmp[512];FILE*f;snprintf(tmp,sizeof(tmp),"%s.tmp.%ld",path,(long)getpid());f=fopen(tmp,"w");if(!f)return-1;if(fputs(text,f)==EOF||fflush(f)||fsync(fileno(f))){fclose(f);unlink(tmp);return-1;}fclose(f);chmod(tmp,mode);if(rename(tmp,path)){unlink(tmp);return-1;}return 0;}

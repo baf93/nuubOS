@@ -62,14 +62,30 @@ sync_time()
         die "ntpd unavailable"
 
     #
-    # Client-only, foreground, quit after the clock has been set.
+    # ntpd exits 0 when no server name resolves (seen right after a Wi-Fi
+    # reconnect): never record that as a sync.
+    #
+    nslookup pool.ntp.org >/dev/null 2>&1 ||
+        die "DNS unavailable"
+
+    #
+    # Client-only, foreground, quit after the clock has been set. ntpd -q
+    # retries forever without an answer: stop it after 12 s, within the UI's
+    # 15 s Sync Now timeout (no timeout(1) on the target).
     #
     ntpd \
         -n \
         -q \
         -p 0.pool.ntp.org \
         -p 1.pool.ntp.org \
-        -p 2.pool.ntp.org ||
+        -p 2.pool.ntp.org &
+    NTPD=$!
+    ( sleep 12; kill "$NTPD" 2>/dev/null ) &
+    WATCHDOG=$!
+    wait "$NTPD"
+    RC=$?
+    kill "$WATCHDOG" 2>/dev/null
+    [ "$RC" -eq 0 ] ||
         die "NTP synchronization failed"
 
     clock_valid ||

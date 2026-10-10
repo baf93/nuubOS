@@ -96,7 +96,7 @@ static const char introspection_xml[] =
     "<arg name='paired_count' type='u' direction='out'/>"
     "</method>"
     "<method name='GetDevices'>"
-    "<arg name='devices' type='a(sssbbbi)' direction='out'/>"
+    "<arg name='devices' type='a(sssbbbii)' direction='out'/>"
     "</method>"
     "<method name='SetEnabled'>"
     "<arg name='enabled' type='b' direction='in'/>"
@@ -127,7 +127,7 @@ static const char introspection_xml[] =
     "<arg name='paired_count' type='u'/>"
     "</signal>"
     "<signal name='DevicesSnapshotChanged'>"
-    "<arg name='devices' type='a(sssbbbi)'/>"
+    "<arg name='devices' type='a(sssbbbii)'/>"
     "</signal>"
     "<signal name='DiscoveryStateChanged'>"
     "<arg name='discovering' type='b'/>"
@@ -544,7 +544,7 @@ static bool append_devices(DBusMessage *message,
 
     dbus_message_iter_init_append(message, &root);
     if (!dbus_message_iter_open_container(&root, DBUS_TYPE_ARRAY,
-                                          "(sssbbbi)", &array))
+                                          "(sssbbbii)", &array))
         return false;
 
     for (i = 0; i < count; i++) {
@@ -556,6 +556,8 @@ static bool append_devices(DBusMessage *message,
         dbus_bool_t connected = devices[i].connected ? TRUE : FALSE;
         dbus_bool_t trusted = devices[i].trusted ? TRUE : FALSE;
         dbus_int32_t rssi = devices[i].rssi;
+        /* org.bluez.Battery1 percentage, -1 when not reported. */
+        dbus_int32_t battery = devices[i].battery;
 
         if (!dbus_message_iter_open_container(&array, DBUS_TYPE_STRUCT, NULL, &item))
             return false;
@@ -566,6 +568,7 @@ static bool append_devices(DBusMessage *message,
             !dbus_message_iter_append_basic(&item, DBUS_TYPE_BOOLEAN, &connected) ||
             !dbus_message_iter_append_basic(&item, DBUS_TYPE_BOOLEAN, &trusted) ||
             !dbus_message_iter_append_basic(&item, DBUS_TYPE_INT32, &rssi) ||
+            !dbus_message_iter_append_basic(&item, DBUS_TYPE_INT32, &battery) ||
             !dbus_message_iter_close_container(&array, &item))
             return false;
     }

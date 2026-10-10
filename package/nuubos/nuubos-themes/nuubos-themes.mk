@@ -12,7 +12,7 @@ NUUBOS_THEMES_LICENSE_FILES = LICENSE
 
 define NUUBOS_THEMES_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/nuubos-themectl $(TARGET_DIR)/usr/bin/nuubos-themectl
-	for t in nuubos ember mint graphite; do \
+	for t in $$(ls $(@D)/themes); do \
 		$(INSTALL) -D -m 0644 $(@D)/themes/$$t/theme.conf \
 			$(TARGET_DIR)/usr/share/nuubos/themes/$$t/theme.conf || exit 1; \
 	done

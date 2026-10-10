@@ -1,4 +1,4 @@
-# nuubOS themes (format 1)
+# nuubOS Moods (theme format 1)
 
 A nuubOS theme changes how nuubUI looks without changing what it does. It is
 a folder (or a `.tar` holding one folder) with a single text file,
@@ -7,9 +7,9 @@ a folder (or a `.tar` holding one folder) with a single text file,
 ## Installing
 
 - Copy the folder or `.tar` to the SD card or a USB drive, open **Files**,
-  select it and choose **Install Theme**. The package is checked first; an
+  select it and choose **Install Mood**. The package is checked first; an
   invalid package never replaces a working theme.
-- Each user picks a theme in **Settings → General → Theme**. Moving through
+- Each user picks a theme in **Settings → General → Mood**. Moving through
   the list previews each theme on the real interface; **Back** keeps the
   current one.
 - Installed themes are shared by every user (`/userdata/themes/<id>`). The

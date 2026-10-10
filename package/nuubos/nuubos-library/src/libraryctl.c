@@ -25,11 +25,13 @@ static void usage(void)
 		"  status                         Home snapshot\n"
 		"  watch                          print every snapshot change\n"
 		"  scan                           rescan ROM storage\n"
-		"  games SCOPE                    system:<id> | favorites | collection:<id> | recent\n"
+		"  games SCOPE                    system:<id> | collection:<id> | recent\n"
+		"  search [k=v|k=v]               q, system, collection, year=A-B, genre, players, unplayed=1, random=1\n"
+		"  filters\n"
+		"  migrate-favorites NAME\n"
 		"  session-begin GAME             a game session started\n"
 		"  session-end GAME               the running session ended\n"
 		"  played GAME SECONDS            record a finished session\n"
-		"  favorite GAME on|off\n"
 		"  collection-create NAME\n"
 		"  collection-rename ID NAME\n"
 		"  collection-delete ID\n"
@@ -141,10 +143,14 @@ int main(int argc, char **argv)
 		snprintf(command, sizeof(command), "SESSION_RECORD\t%s\t%s", argv[2], argv[3]);
 		return run(command, false, false);
 	}
-	if (!strcmp(verb, "favorite") && argc == 4 &&
-	    (!strcmp(argv[3], "on") || !strcmp(argv[3], "off"))) {
-		snprintf(command, sizeof(command), "FAVORITE\t%s\t%d", argv[2],
-			 !strcmp(argv[3], "on"));
+	if (!strcmp(verb, "search") && argc <= 3) {
+		snprintf(command, sizeof(command), "SEARCH\t%s", argc == 3 ? argv[2] : "");
+		return run(command, true, false);
+	}
+	if (!strcmp(verb, "filters") && argc == 2)
+		return run("FILTERS", true, false);
+	if (!strcmp(verb, "migrate-favorites") && argc == 3) {
+		snprintf(command, sizeof(command), "MIGRATE_FAVORITES\t%s", argv[2]);
 		return run(command, false, false);
 	}
 	if (!strcmp(verb, "collection-create") && argc == 3) {
