@@ -1467,3 +1467,10 @@
 1466=Auto skips frames only when the game slows down
 1467=Wrap Around Rows
 1468=On Home, going past the last item returns to the first
+1469=Search System
+1470=Change it for a port of a game from another system.
+1471=As in Settings ({0})
+1472=Same as the game ({0})
+1473=Advanced Search
+1474=Change it if the game is not found or the match is wrong.
+1475=Permanently deletes the game's folder and everything in it for every user. Saves are kept.

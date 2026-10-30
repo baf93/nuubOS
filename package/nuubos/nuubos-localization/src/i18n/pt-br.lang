@@ -1467,3 +1467,10 @@
 1466=Auto pula quadros só quando o jogo fica lento
 1467=Fileiras em loop
 1468=No início, depois do último item volta para o primeiro
+1469=Sistema da busca
+1470=Altere para a adaptação de um jogo de outro sistema.
+1471=Como nas Configurações ({0})
+1472=O do jogo ({0})
+1473=Busca avançada
+1474=Altere se o jogo não for encontrado ou se a correspondência estiver errada.
+1475=Exclui permanentemente a pasta do jogo e tudo o que há nela para todos os usuários. Os saves são mantidos.

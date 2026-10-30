@@ -1467,3 +1467,10 @@
 1466=Auto saute des images seulement quand le jeu ralentit
 1467=Défilement en boucle
 1468=Sur l'accueil, après le dernier élément on revient au premier
+1469=Système de recherche
+1470=Modifiez-le pour le portage d'un jeu d'un autre système.
+1471=Comme dans les Paramètres ({0})
+1472=Celui du jeu ({0})
+1473=Recherche avancée
+1474=Modifiez-le si le jeu n'est pas trouvé ou si la correspondance est fausse.
+1475=Supprime définitivement le dossier du jeu et tout son contenu pour tous. Les sauvegardes sont conservées.

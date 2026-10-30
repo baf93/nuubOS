@@ -1467,3 +1467,10 @@
 1466=Auto salta cuadros solo cuando el juego se pone lento
 1467=Filas en bucle
 1468=En el inicio, después del último elemento se vuelve al primero
+1469=Sistema de búsqueda
+1470=Cámbialo para la adaptación de un juego de otro sistema.
+1471=Como en Ajustes ({0})
+1472=El del juego ({0})
+1473=Búsqueda avanzada
+1474=Cámbialo si no se encuentra el juego o la coincidencia es incorrecta.
+1475=Elimina para siempre la carpeta del juego y todo su contenido para todos. Se conservan las partidas.

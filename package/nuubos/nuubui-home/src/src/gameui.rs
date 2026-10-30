@@ -82,6 +82,8 @@ struct Details {
     time: i64,
     sessions: i64,
     path: String,
+    /* A game in a folder of its own: Delete Game removes the folder. */
+    folder: bool,
     /* Ports: whether the user let this port read Music and Videos
      * (nuubos-portsd MEDIA_ACCESS). */
     media_access: bool,
@@ -89,6 +91,12 @@ struct Details {
     /* The user's tags of the game (libraryd field 13). */
     tags: Vec<String>,
     meta: Vec<(String, String)>,
+    /* Search System (GitHub #29): (id, name) of every system and the ids
+     * the metadata source can search; the source and its Cover Region. */
+    all_systems: Vec<(String, String)>,
+    search_systems: Vec<String>,
+    source: String,
+    source_region: String,
     /* nuubos-emud */
     core: String,
     core_default: String,
@@ -168,6 +176,9 @@ struct State {
     sys_scope: bool,
     /* The Controls sub-page of Game Settings (51) or a system's page (77). */
     controls: bool,
+    /* Advanced Search (GitHub #29) on page 51: search name, system and
+     * Cover Region of the game. */
+    search: bool,
     /* Page 76: (id, name, effective emulator) of the systems with games. */
     systems: Vec<(String, String, String)>,
     /* The row page 76 lands on once loaded (back from a system). */
@@ -331,6 +342,7 @@ fn parse_details(reply: &str, d: &mut Details) {
             }
             "system_name" => d.system_name = value.into(),
             "sessions" => d.sessions = value.parse().unwrap_or(0),
+            "folder" => d.folder = value == "1",
             /* Games-card games are "sd2:<path>" (libraryd): shown as SD2 › <path>. */
             "path" => d.path = match value.strip_prefix("sd2:") {
                 Some(rest) => format!("SD2 › {rest}"),
@@ -575,6 +587,37 @@ fn scope_details(ui: &HomeWindow) -> Details {
 }
 
 /* Rows of Game Settings (a game) or System Settings (system). */
+/* Advanced Search (GitHub #29): how the metadata source looks the game
+ * up. A port is another system's game (Daytona USA for PSP is a
+ * Dreamcast game); each row stores its choice and runs Update. */
+fn search_rows(ui: &HomeWindow, st: &State, d: &Details, rows: &mut Vec<(String, GenRow, bool)>) {
+    let on = !st.busy && d.available;
+    let searched = if d.meta("search").is_empty() { d.title.clone() } else { d.meta("search").to_owned() };
+    let mut name = row(tr(ui, 800, "Search Name"), searched,
+        tr(ui, 1474, "Change it if the game is not found or the match is wrong."));
+    name.navigates = true;
+    name.enabled = on;
+    rows.push(("search-name".into(), name, on));
+    let mut system = row(tr(ui, 1469, "Search System"), search_system_name(d),
+        tr(ui, 1470, "Change it for a port of a game from another system."));
+    system.navigates = true;
+    system.enabled = on;
+    rows.push(("search-system".into(), system, on));
+    if d.source != "thegamesdb" {
+        /* The region alone as the value (640x480: room for the title). */
+        let own = d.meta("search_region");
+        let mut region = if own.is_empty() {
+            row(tr(ui, 1419, "Cover Region"), region_label(ui, &d.source_region),
+                tr_arg(ui, 1471, "As in Settings ({0})", &region_label(ui, &d.source_region)))
+        } else {
+            row(tr(ui, 1419, "Cover Region"), region_label(ui, own), String::new())
+        };
+        region.navigates = true;
+        region.enabled = on;
+        rows.push(("search-region".into(), region, on));
+    }
+}
+
 fn settings_rows(ui: &HomeWindow, st: &State, d: &Details, system: bool, rows: &mut Vec<(String, GenRow, bool)>) {
     if !system && !d.cores.is_empty() {
         let mut all = nav(tr_arg(ui, 1452, "{0} Settings", &d.system_name), String::new());
@@ -766,6 +809,7 @@ fn build_rows(ui: &HomeWindow, st: &State, view: i32) -> Vec<(String, GenRow, bo
         51 | SYSTEM_VIEW if st.controls => {
             controls_rows(ui, st, if view == SYSTEM_VIEW || st.sys_scope { &st.sys } else { d }, &mut rows)
         }
+        51 if st.search => search_rows(ui, st, d, &mut rows),
         51 if st.sys_scope => settings_rows(ui, st, &st.sys, true, &mut rows),
         51 => settings_rows(ui, st, d, false, &mut rows),
         SYSTEM_VIEW => settings_rows(ui, st, &st.sys, true, &mut rows),
@@ -960,7 +1004,9 @@ fn details_actions(ui: &HomeWindow, st: &State) -> Vec<(String, DetailAction, St
         out.push(("metadata".into(), get, caption));
     }
     if d.system != "ports" {
-        let mut search = detail_action(17, tr(ui, 800, "Search Name"), false);
+        /* Search name, system and Cover Region on their own page (user
+         * 2026-10-30: three buttons crowded the page). */
+        let mut search = detail_action(17, tr(ui, 1473, "Advanced Search"), false);
         search.enabled = !st.busy && d.available;
         let searched = if d.meta("search").is_empty() { d.title.clone() } else { d.meta("search").to_owned() };
         out.push(("search".into(), search, tr_arg(ui, 801, "Searched as \"{0}\". Change it if the game is not found or the match is wrong.", &searched)));
@@ -981,7 +1027,9 @@ fn details_actions(ui: &HomeWindow, st: &State) -> Vec<(String, DetailAction, St
     delete.armed = st.armed == "delete";
     out.push(("delete".into(), delete, armed_detail(&st.armed, "delete",
         tr(ui, 546, "Press again to delete permanently"),
-        if d.available {
+        if d.available && d.folder {
+            tr(ui, 1475, "Permanently deletes the game's folder and everything in it for every user. Saves are kept.")
+        } else if d.available {
             tr(ui, 545, "Permanently deletes the game file for every user. Saves are kept.")
         } else {
             tr(ui, 1318, "Removes the game, its cover and details from the library for every user. Saves are kept.")
@@ -1165,10 +1213,12 @@ pub(crate) fn render(ui: &HomeWindow) {
     if !(50..=56).contains(&view) && view != 63 && view != SYSTEMS_VIEW && view != SYSTEM_VIEW {
         return;
     }
+    ui.set_settings_search_page(view == 51 && STATE.with(|st| st.borrow().search));
     let rows = STATE.with(|st| build_rows(ui, &st.borrow(), view));
     let section = match view {
         50 => STATE.with(|st| st.borrow().details.system_name.clone()),
         51 | SYSTEM_VIEW if STATE.with(|st| st.borrow().controls) => tr(ui, 1456, "Controls"),
+        51 if STATE.with(|st| st.borrow().search) => tr(ui, 1473, "Advanced Search"),
         51 if STATE.with(|st| st.borrow().sys_scope) =>
             STATE.with(|st| tr_arg(ui, 1452, "{0} Settings", &st.borrow().sys.system_name)),
         51 => tr(ui, 524, "Game Settings"),
@@ -1309,6 +1359,14 @@ fn load_details_then(ui: &HomeWindow, id: String, open: bool) {
             d.media_access = crate::library::ports_command(&format!("MEDIA_ACCESS\t{}", port_script(&d)))
                 .is_ok_and(|r| r.trim() == "OK 1");
         }
+        if d.system != "ports" {
+            let ss = run_tool("/usr/bin/nuubos-scraper", &["provider", "status"], None);
+            d.source = kv(&ss, "provider").to_owned();
+            d.source_region = kv(&ss, "region").to_owned();
+            d.search_systems = kv(&ss, "systems").split(',').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+            d.all_systems = library("SYSTEMS", true).lines().filter_map(|l| l.strip_prefix("system="))
+                .filter_map(|l| l.split_once('\t')).map(|(i, n)| (i.to_owned(), n.to_owned())).collect();
+        }
         let bios = run_tool("/usr/bin/nuubos-biosctl", &["status", &d.system], None);
         d.bios_missing = parse_bios(&bios).0.iter().any(|s| s.state == "missing" || s.state == "invalid");
         let load = |p: &str| if p.is_empty() { None } else { Image::load_from_path(std::path::Path::new(p)).ok() };
@@ -1357,6 +1415,7 @@ pub fn open_details(ui: &HomeWindow, id: &str, title: &str, cover: Option<Image>
     STATE.with(|st| {
         let mut st = st.borrow_mut();
         st.details = Details { id: id.to_owned(), title: title.to_owned(), available: true, ..Default::default() };
+        st.search = false;
         st.busy = false;
     });
     /* The Home card's cover stands in until the hero is decoded. */
@@ -1811,6 +1870,19 @@ pub fn apply_choice(ui: &HomeWindow, context: &str, value: String) {
             None, |ui, _| refresh_gaming(ui)),
         "game-region" => tool_then(ui, "/usr/bin/nuubos-scraper", vec!["region".into(), "set".into(), value],
             None, |ui, _| refresh_gaming(ui)),
+        /* Store the game's choice, then look it up again (as Search Name). */
+        "game-search-system" | "game-search-region" => {
+            let id = STATE.with(|st| st.borrow().details.id.clone());
+            let verb = if context == "game-search-system" { "search-system" } else { "search-region" };
+            tool_then(ui, "/usr/bin/nuubos-scraper", vec![verb.into(), id, value], None, |ui, out| {
+                if out.starts_with("OK") {
+                    let id = STATE.with(|st| st.borrow().details.id.clone());
+                    scrape_game(ui, id, true);
+                } else {
+                    play_ui_sound("error");
+                }
+            });
+        }
         c if c.starts_with("emu-hotkey:") => emu_set(ui, &format!("hotkey_{}", &c[11..]), value),
         "game-tag" => {
             let (id, on) = STATE.with(|st| {
@@ -1872,6 +1944,7 @@ fn details_confirm(ui: &HomeWindow, key: &str) {
                 let mut st = st.borrow_mut();
                 st.sys_scope = false;
                 st.controls = false;
+                st.search = false;
             });
             ui.set_settings_system_scope(false);
             show(ui, 51);
@@ -1895,8 +1968,33 @@ fn details_confirm(ui: &HomeWindow, key: &str) {
             render(ui);
         }
         "search" => {
+            STATE.with(|st| {
+                let mut st = st.borrow_mut();
+                st.search = true;
+                st.controls = false;
+                st.sys_scope = false;
+            });
+            ui.set_settings_system_scope(false);
+            show(ui, 51);
+        }
+        "search-name" => {
             let current = if d.meta("search").is_empty() { d.title.clone() } else { d.meta("search").to_owned() };
-            open_system_keyboard(ui, &tr(ui, 800, "Search Name"), KEYBOARD_SEARCH, 50, "text", &current);
+            open_system_keyboard(ui, &tr(ui, 800, "Search Name"), KEYBOARD_SEARCH, 51, "text", &current);
+        }
+        "search-system" => {
+            let mut options: Vec<(String, String)> = d.all_systems.iter()
+                .filter(|(id, _)| *id != d.system && d.search_systems.contains(id))
+                .map(|(id, name)| (id.clone(), name.clone())).collect();
+            options.sort_by_key(|(_, name)| name.to_lowercase());
+            options.insert(0, ("default".into(), tr_arg(ui, 1472, "Same as the game ({0})", &d.system_name)));
+            let current = if d.meta("search_system").is_empty() { "default" } else { d.meta("search_system") };
+            open_settings_choice(ui, "game-search-system", &tr(ui, 1469, "Search System"), options, current);
+        }
+        "search-region" => {
+            let mut options = vec![("default".to_owned(), tr_arg(ui, 1471, "As in Settings ({0})", &region_label(ui, &d.source_region)))];
+            options.extend(REGIONS.iter().map(|id| (id.to_string(), region_label(ui, id))));
+            let current = if d.meta("search_region").is_empty() { "default" } else { d.meta("search_region") };
+            open_settings_choice(ui, "game-search-region", &tr(ui, 1419, "Cover Region"), options, current);
         }
         "accept" | "reject" => {
             let verb = key.to_owned();
@@ -1998,6 +2096,11 @@ pub fn handle_details_action(ui: &HomeWindow, action: &str, settings_active: &Ar
         "menu_back" => {
             if ui.get_settings_view() == 51 && STATE.with(|st| st.borrow().controls) {
                 show_controls(ui, false);
+            } else if ui.get_settings_view() == 51 && STATE.with(|st| st.borrow().search) {
+                STATE.with(|st| st.borrow_mut().search = false);
+                show(ui, 50);
+                focus(ui, "search");
+                render(ui);
             } else if ui.get_settings_view() == 51 && STATE.with(|st| st.borrow().sys_scope) {
                 /* Back from the system to the game, its values reloaded. */
                 STATE.with(|st| st.borrow_mut().sys_scope = false);
@@ -2058,6 +2161,16 @@ fn source_detail(ui: &HomeWindow, id: &str) -> String {
         "libretro" => tr(ui, 795, "Covers only. No account needed."),
         _ => tr(ui, 793, "Covers, descriptions and ratings in your language. A free ScreenScraper account gives more requests."),
     }
+}
+
+/* The system a game is searched as: its own, or the one the user chose
+ * (GitHub #29). */
+fn search_system_name(d: &Details) -> String {
+    let id = d.meta("search_system");
+    if id.is_empty() {
+        return d.system_name.clone();
+    }
+    d.all_systems.iter().find(|(i, _)| i == id).map(|(_, n)| n.clone()).unwrap_or_else(|| id.to_owned())
 }
 
 /* Cover Regions (nuubos-scraper region ids). */
@@ -3183,7 +3296,9 @@ pub fn keyboard_done(ui: &HomeWindow, purpose: i32, value: String) {
         }
         KEYBOARD_SEARCH => {
             ui.set_keyboard_value("".into());
-            navigate_settings_view(ui, 50);
+            navigate_settings_view(ui, 51);
+            render(ui);
+            focus(ui, "search-name");
             render(ui);
             /* Store the name, then look the game up with it. */
             let id = STATE.with(|st| st.borrow().details.id.clone());

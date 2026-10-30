@@ -1467,3 +1467,10 @@
 1466=Auto hoppar över bildrutor bara när spelet saktar ner
 1467=Rader runt
 1468=På hemskärmen kommer du efter sista objektet tillbaka till det första
+1469=Söksystem
+1470=Ändra det för en portering av ett spel från ett annat system.
+1471=Som i Inställningar ({0})
+1472=Samma som spelet ({0})
+1473=Avancerad sökning
+1474=Ändra det om spelet inte hittas eller matchningen är fel.
+1475=Raderar spelets mapp med allt innehåll permanent för alla användare. Sparfiler behålls.

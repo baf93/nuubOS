@@ -740,6 +740,16 @@ fn main() {
                 (5, s(ui, 560), false, false, false), (9, s(ui, 549), false, false, false), (10, s(ui, 544), false, false, true)]));
             ui.set_details_caption(s(ui, 546).into()); ui.set_details_caption_armed(true);
         })),
+        ("game_details_advanced_search", Box::new(|ui| {
+            /* GitHub #29: one Advanced Search action for the search name,
+             * system and Cover Region (page 51, game_settings_search). */
+            ui.set_gen_index(6); ui.set_details_desc_step(0);
+            ui.set_details_actions(actions(&[(0, s(ui, 413), true, false, false), (1, s(ui, 412), false, true, false),
+                (2, s(ui, 537), false, false, false), (35, s(ui, 1230), false, false, false), (3, s(ui, 524), false, false, false),
+                (5, s(ui, 560), false, false, false), (17, s(ui, 1473), false, false, false),
+                (9, s(ui, 549), false, false, false), (10, s(ui, 544), false, false, false)]));
+            ui.set_details_caption(s(ui, 801).replace("{0}", "Daytona USA").into()); ui.set_details_caption_armed(false);
+        })),
         ("game_details_bare", Box::new(|ui| {
             ui.set_gen_index(0);
             ui.set_details_title("cube".into()); ui.set_details_subtitle("PlayStation Portable".into());
@@ -772,8 +782,15 @@ fn main() {
                 (&s(ui, 526), "4:3", "", true, -1), (&s(ui, 527), &s(ui, 534), "", true, -1),
                 (&s(ui, 535), "", &s(ui, 536), false, -1)]));
         })),
+        ("game_settings_search", Box::new(|ui| {
+            ui.set_gen_index(1); ui.set_gen_section(s(ui, 1473).into()); ui.set_settings_search_page(true);
+            ui.set_details_title("Daytona USA".into()); ui.set_details_subtitle("PlayStation Portable".into());
+            ui.set_gen_rows(gen(&[(&s(ui, 800), "Daytona USA", &s(ui, 1474), true, -1),
+                (&s(ui, 1469), "Dreamcast", &s(ui, 1470), true, -1),
+                (&s(ui, 1419), &s(ui, 122), &s(ui, 1471).replace("{0}", &s(ui, 122)), true, -1)]));
+        })),
         ("game_settings_nds", Box::new(|ui| {
-            ui.set_gen_index(4);
+            ui.set_gen_index(4); ui.set_gen_section(s(ui, 524).into()); ui.set_settings_search_page(false);
             ui.set_details_title("Mario Kart DS".into());
             ui.set_details_subtitle("Nintendo DS".into());
             ui.set_gen_rows(gen(&[(&s(ui, 525), &s(ui, 528).replace("{0}", "melonds_nuubos"), "", true, -1),
