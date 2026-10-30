@@ -13,7 +13,7 @@ LIBRETRO_MELONDS_LICENSE_FILES = LICENSE
 # core-info file to derive melonds_nuubos_libretro.info from
 LIBRETRO_MELONDS_DEPENDENCIES = libretro-core-info
 
-# Bundled as melonDS-nuubOS (melonds_nuubos): patches 0001-0024 are nuubOS
+# Bundled as melonDS-nuubOS (melonds_nuubos): patches 0001-0027 are nuubOS
 # H700 performance work (README "Patched cores"); upstream melonDS remains a
 # download.
 # Link-time and profile-guided optimisation (2026-10-17, user: "optimise

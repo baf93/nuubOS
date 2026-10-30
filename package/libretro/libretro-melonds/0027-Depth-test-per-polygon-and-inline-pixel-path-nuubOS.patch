@@ -1,0 +1,165 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nuubOS <nuubos@localhost>
+Date: Fri, 30 Oct 2026 13:00:00 +0100
+Subject: [PATCH] Depth test per polygon and inline pixel path (nuubOS)
+
+RenderPolygonScanline called the depth test through a function pointer
+for every pixel, and RenderPixel/TextureLookup were calls too. The
+scanline is now a template on the depth test (four instances, chosen once
+per polygon) with RenderPixel and TextureLookup inlined. Lane CPU time in
+the Pokemon Black 2 town scene -5.8 %.
+
+Results are identical (screen hashes over 2,100 frames).
+
+Upstream: not submitted (nuubOS H700 performance work).
+---
+ src/GPU3D_Soft.cpp | 49 +++++++++++++++++++++++++++++++++----------------
+ src/GPU3D_Soft.h   |  5 +++--
+ 2 files changed, 36 insertions(+), 18 deletions(-)
+
+diff --git a/src/GPU3D_Soft.cpp b/src/GPU3D_Soft.cpp
+index 348378f..b5d9e42 100644
+--- a/src/GPU3D_Soft.cpp
++++ b/src/GPU3D_Soft.cpp
+@@ -156,7 +156,7 @@ void SoftRenderer::SetRenderSettings(GPU::RenderSettings& settings)
+     SetupRenderThread();
+ }
+ 
+-void SoftRenderer::TextureLookup(u32 texparam, u32 texpal, s16 s, s16 t, u16* color, u8* alpha)
++inline void SoftRenderer::TextureLookup(u32 texparam, u32 texpal, s16 s, s16 t, u16* color, u8* alpha)
+ {
+     u32 vramaddr = (texparam & 0xFFFF) << 3;
+ 
+@@ -462,7 +462,7 @@ u32 AlphaBlend(u32 srccolor, u32 dstcolor, u32 alpha)
+     return srcR | (srcG << 8) | (srcB << 16) | (dstalpha << 24);
+ }
+ 
+-u32 SoftRenderer::RenderPixel(Polygon* polygon, u8 vr, u8 vg, u8 vb, s16 s, s16 t)
++inline u32 SoftRenderer::RenderPixel(Polygon* polygon, u8 vr, u8 vg, u8 vb, s16 s, s16 t)
+ {
+     u8 r, g, b, a;
+ 
+@@ -928,7 +928,19 @@ void SoftRenderer::RenderShadowMaskScanline(Lane* L, RendererPolygon* rp, s32 y)
+     rp->XR = rp->SlopeR.Step();
+ }
+ 
+-void SoftRenderer::RenderPolygonScanline(Lane* L, RendererPolygon* rp, s32 y)
++// the depth test is fixed per polygon: one instance per test, inlined in
++// the pixel loops instead of a call through a pointer per pixel (nuubOS)
++template<int depthTest>
++__attribute__((always_inline)) static inline bool DepthTestT(s32 dstz, s32 z, u32 dstattr)
++{
++    if (depthTest == 0) return DepthTest_Equal_W(dstz, z, dstattr);
++    if (depthTest == 1) return DepthTest_Equal_Z(dstz, z, dstattr);
++    if (depthTest == 2) return DepthTest_LessThan_FrontFacing(dstz, z, dstattr);
++    return DepthTest_LessThan(dstz, z, dstattr);
++}
++
++template<int depthTest>
++void SoftRenderer::RenderPolygonScanlineT(Lane* L, RendererPolygon* rp, s32 y)
+ {
+     Polygon* polygon = rp->PolyData;
+ 
+@@ -938,13 +950,6 @@ void SoftRenderer::RenderPolygonScanline(Lane* L, RendererPolygon* rp, s32 y)
+     u32 polyalpha = (polygon->Attr >> 16) & 0x1F;
+     bool wireframe = (polyalpha == 0);
+ 
+-    bool (*fnDepthTest)(s32 dstz, s32 z, u32 dstattr);
+-    if (polygon->Attr & (1<<14))
+-        fnDepthTest = polygon->WBuffer ? DepthTest_Equal_W : DepthTest_Equal_Z;
+-    else if (polygon->FacingView)
+-        fnDepthTest = DepthTest_LessThan_FrontFacing;
+-    else
+-        fnDepthTest = DepthTest_LessThan;
+ 
+     L->PrevIsShadowMask = false;
+ 
+@@ -1102,13 +1107,13 @@ void SoftRenderer::RenderPolygonScanline(Lane* L, RendererPolygon* rp, s32 y)
+ 
+         // if depth test against the topmost pixel fails, test
+         // against the pixel underneath
+-        if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
++        if (!DepthTestT<depthTest>(DepthBuffer[pixeladdr], z, dstattr))
+         {
+             if (!(dstattr & 0x3) || pixeladdr >= BufferSize) continue;
+ 
+             pixeladdr += BufferSize;
+             dstattr = AttrBuffer[pixeladdr];
+-            if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
++            if (!DepthTestT<depthTest>(DepthBuffer[pixeladdr], z, dstattr))
+                 continue;
+         }
+ 
+@@ -1198,13 +1203,13 @@ void SoftRenderer::RenderPolygonScanline(Lane* L, RendererPolygon* rp, s32 y)
+ 
+         // if depth test against the topmost pixel fails, test
+         // against the pixel underneath
+-        if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
++        if (!DepthTestT<depthTest>(DepthBuffer[pixeladdr], z, dstattr))
+         {
+             if (!(dstattr & 0x3) || pixeladdr >= BufferSize) continue;
+ 
+             pixeladdr += BufferSize;
+             dstattr = AttrBuffer[pixeladdr];
+-            if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
++            if (!DepthTestT<depthTest>(DepthBuffer[pixeladdr], z, dstattr))
+                 continue;
+         }
+ 
+@@ -1273,13 +1278,13 @@ void SoftRenderer::RenderPolygonScanline(Lane* L, RendererPolygon* rp, s32 y)
+ 
+         // if depth test against the topmost pixel fails, test
+         // against the pixel underneath
+-        if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
++        if (!DepthTestT<depthTest>(DepthBuffer[pixeladdr], z, dstattr))
+         {
+             if (!(dstattr & 0x3) || pixeladdr >= BufferSize) continue;
+ 
+             pixeladdr += BufferSize;
+             dstattr = AttrBuffer[pixeladdr];
+-            if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
++            if (!DepthTestT<depthTest>(DepthBuffer[pixeladdr], z, dstattr))
+                 continue;
+         }
+ 
+@@ -1342,6 +1347,18 @@ void SoftRenderer::RenderPolygonScanline(Lane* L, RendererPolygon* rp, s32 y)
+     rp->XR = rp->SlopeR.Step();
+ }
+ 
++void SoftRenderer::RenderPolygonScanline(Lane* L, RendererPolygon* rp, s32 y)
++{
++    Polygon* polygon = rp->PolyData;
++    if (polygon->Attr & (1<<14))
++    {
++        if (polygon->WBuffer) RenderPolygonScanlineT<0>(L, rp, y);
++        else                  RenderPolygonScanlineT<1>(L, rp, y);
++    }
++    else if (polygon->FacingView) RenderPolygonScanlineT<2>(L, rp, y);
++    else                          RenderPolygonScanlineT<3>(L, rp, y);
++}
++
+ void SoftRenderer::RenderScanline(Lane* L, s32 y, int npolys)
+ {
+     for (int i = 0; i < npolys; i++)
+diff --git a/src/GPU3D_Soft.h b/src/GPU3D_Soft.h
+index b59e3b0..2baa10c 100644
+--- a/src/GPU3D_Soft.h
++++ b/src/GPU3D_Soft.h
+@@ -473,14 +473,15 @@ private:
+     Lane Lanes[NumLanes];
+     int LaneStart[NumLanes+1];
+     s64 LaneTime[NumLanes];
+-    void TextureLookup(u32 texparam, u32 texpal, s16 s, s16 t, u16* color, u8* alpha);
+-    u32 RenderPixel(Polygon* polygon, u8 vr, u8 vg, u8 vb, s16 s, s16 t);
++    __attribute__((always_inline)) inline void TextureLookup(u32 texparam, u32 texpal, s16 s, s16 t, u16* color, u8* alpha);
++    __attribute__((always_inline)) inline u32 RenderPixel(Polygon* polygon, u8 vr, u8 vg, u8 vb, s16 s, s16 t);
+     void PlotTranslucentPixel(u32 pixeladdr, u32 color, u32 z, u32 polyattr, u32 shadow);
+     void SetupPolygonLeftEdge(RendererPolygon* rp, s32 y);
+     void SetupPolygonRightEdge(RendererPolygon* rp, s32 y);
+     void SetupPolygon(RendererPolygon* rp, Polygon* polygon);
+     void RenderShadowMaskScanline(Lane* L, RendererPolygon* rp, s32 y);
+     void RenderPolygonScanline(Lane* L, RendererPolygon* rp, s32 y);
++    template<int depthTest> void RenderPolygonScanlineT(Lane* L, RendererPolygon* rp, s32 y);
+     void RenderScanline(Lane* L, s32 y, int npolys);
+     int SetupLane(Lane* L, Polygon** polygons, int npolys, s32 y, s32 yend);
+     void RenderLane(int k);

@@ -1,0 +1,246 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nuubOS <nuubos@localhost>
+Date: Fri, 30 Oct 2026 11:00:00 +0100
+Subject: [PATCH] Cheaper geometry FIFO DMA and early frustum reject (nuubOS)
+
+Scenes that send a whole level to the geometry engine (Pokemon Black 2
+town: ~13,800 vertices and ~4,300 polygons a frame, ~85 % of them rejected)
+spent most of the emulation thread in the per-word FIFO path and in
+polygons that clipping throws away.
+
+- DMA::Run9, main RAM -> geometry FIFO DMA: the packed commands are
+  unpacked in the DMA loop with WriteToGXFIFO's state and the DMA's own
+  state in locals; entries run at once while the engine is in immediate
+  mode (checked once, again only after a SWAP_BUFFERS or a queued entry).
+  A queued entry writes the state back first and reads it again after
+  (queueing can stall or start DMAs). Per-word DMA timing is unchanged.
+- SubmitPolygon: a polygon whose vertices all lie beyond the same Z plane
+  (or one beyond the far plane without far-plane clipping), else with
+  nothing outside Z the same Y plane, else with nothing outside Z or Y the
+  same X plane, is rejected before the culling maths and the vertex
+  copies, with the same side effects ClipPolygon returning 0 has.
+
+Results are identical (screen hashes over 2,100 frames, Pokemon Black 2
+and Mario Kart DS); geometry timing is unchanged.
+
+Upstream: not submitted (nuubOS H700 performance work).
+---
+ src/DMA.cpp   | 102 +++++++++++++++++++++++++++++++++++++++++++++++++++-------
+ src/GPU3D.cpp |  51 +++++++++++++++++++++++++++++
+ src/GPU3D.h   |  13 ++++++++
+ 3 files changed, 155 insertions(+), 11 deletions(-)
+
+diff --git a/src/DMA.cpp b/src/DMA.cpp
+index c7e28ac..5f38f89 100644
+--- a/src/DMA.cpp
++++ b/src/DMA.cpp
+@@ -590,25 +590,105 @@ void DMA::Run9()
+         // UnitTimings9_32 and the generic copy do for this case, without
+         // classifying both addresses for every word (nuubOS)
+         u32 dst_n = NDS::ARM9MemTimings[CurDstAddr >> 14][6];
+-        while (IterCount > 0 && !Stall)
++        u8* freshTable = DMATiming::MRAMRead32Bursts[dst_n == 2 ? 0 : 1];
++        u32 srcInc = SrcAddrInc<<2;
++        const u32 shift = NDS::ARM9ClockShift;
++        const u64 target = NDS::ARM9Target;
++        const u8* ram = NDS::MainRAM;
++        const u32 ramMask = NDS::MainRAMMask;
++        const bool geometry = GPU3D::GeometryEnabled;
++
++        // the DMA's and the FIFO port's state live in locals for the loop;
++        // queueing an entry (not immediate mode) can stall or start DMAs, so
++        // around it the state is written back and read again (nuubOS)
++        u64 ts = NDS::ARM9Timestamp;
++        u32 src = CurSrcAddr, iter = IterCount, rem = RemCount;
++        u32 burstCount = MRAMBurstCount;
++        u8* burstTable = MRAMBurstTable;
++        u32 numCmds = GPU3D::NumCommands, curCmd = GPU3D::CurCommand;
++        u32 paramCount = GPU3D::ParamCount, totalParams = GPU3D::TotalParams;
++        bool immediate = GPU3D::ImmediateReady();
++
++        while (iter > 0 && !Stall)
+         {
+-            if (burststart || MRAMBurstTable[MRAMBurstCount] == 0)
++            if (burststart || burstTable[burstCount] == 0)
+             {
+-                MRAMBurstCount = 0;
+-                MRAMBurstTable = DMATiming::MRAMRead32Bursts[dst_n == 2 ? 0 : 1];
++                burstCount = 0;
++                burstTable = freshTable;
+             }
+-            NDS::ARM9Timestamp += (MRAMBurstTable[MRAMBurstCount++] << NDS::ARM9ClockShift);
++            ts += (u64)burstTable[burstCount++] << shift;
+             burststart = false;
+ 
+-            GPU3D::WriteGXPort32(CurDstAddr, *(u32*)&NDS::MainRAM[CurSrcAddr & NDS::MainRAMMask]);
++            if (geometry)
++            {
++                // GPU3D::WriteToGXFIFO
++                u32 val = *(u32*)&ram[src & ramMask];
++                bool params = true;
++                if (numCmds == 0)
++                {
++                    numCmds = 4;
++                    curCmd = val;
++                    paramCount = 0;
++                    totalParams = GPU3D::CmdNumParams[curCmd & 0xFF];
++                    params = (totalParams == 0);
++                }
++                else
++                    paramCount++;
+ 
+-            CurSrcAddr += SrcAddrInc<<2;
+-            CurDstAddr += DstAddrInc<<2;
+-            IterCount--;
+-            RemCount--;
++                while (params)
++                {
++                    if ((curCmd & 0xFF) || (numCmds == 4 && curCmd == 0))
++                    {
++                        if (immediate)
++                        {
++                            GPU3D::ExecuteImmediateEntry(curCmd & 0xFF, val);
++                            if ((curCmd & 0xFF) == 0x50)
++                                immediate = GPU3D::ImmediateReady();
++                        }
++                        else
++                        {
++                            NDS::ARM9Timestamp = ts;
++                            CurSrcAddr = src; IterCount = iter; RemCount = rem;
++                            MRAMBurstCount = burstCount; MRAMBurstTable = burstTable;
++                            GPU3D::NumCommands = numCmds; GPU3D::CurCommand = curCmd;
++                            GPU3D::ParamCount = paramCount; GPU3D::TotalParams = totalParams;
++
++                            GPU3D::CmdFIFOWriteEntry(curCmd & 0xFF, val);
++
++                            ts = NDS::ARM9Timestamp;
++                            src = CurSrcAddr; iter = IterCount; rem = RemCount;
++                            burstCount = MRAMBurstCount; burstTable = MRAMBurstTable;
++                            srcInc = SrcAddrInc<<2;
++                            immediate = GPU3D::ImmediateReady();
++                        }
++                    }
++
++                    if (paramCount >= totalParams)
++                    {
++                        curCmd >>= 8;
++                        numCmds--;
++                        if (numCmds == 0) break;
++
++                        paramCount = 0;
++                        totalParams = GPU3D::CmdNumParams[curCmd & 0xFF];
++                    }
++                    if (paramCount < totalParams)
++                        break;
++                }
++            }
+ 
+-            if (NDS::ARM9Timestamp >= NDS::ARM9Target) break;
++            src += srcInc;
++            iter--;
++            rem--;
++
++            if (ts >= target) break;
+         }
++
++        NDS::ARM9Timestamp = ts;
++        CurSrcAddr = src; IterCount = iter; RemCount = rem;
++        MRAMBurstCount = burstCount; MRAMBurstTable = burstTable;
++        GPU3D::NumCommands = numCmds; GPU3D::CurCommand = curCmd;
++        GPU3D::ParamCount = paramCount; GPU3D::TotalParams = totalParams;
+     }
+     else
+     {
+diff --git a/src/GPU3D.cpp b/src/GPU3D.cpp
+index 531b339..8118f52 100644
+--- a/src/GPU3D.cpp
++++ b/src/GPU3D.cpp
+@@ -1066,6 +1066,35 @@ void SubmitPolygon()
+     VertexSlotCounter = 1;
+     VertexSlotsFree = 0b11110;
+ 
++    // polygons entirely outside the view volume (most of them in scenes that
++    // send a whole level): rejected here as ClipPolygon would, without the
++    // culling maths and the vertex copies. Only the cases where clipping
++    // provably yields nothing: every vertex beyond the same Z plane (or one
++    // beyond the far plane without far-plane clipping), else, with nothing
++    // outside Z, every vertex beyond the same Y plane, else, with nothing
++    // outside Z or Y, the same X plane; the planes are clipped in that order
++    // and earlier clipping could move vertices (nuubOS)
++    {
++        u32 outAll = 0x3F, outAny = 0;
++        for (int i = 0; i < nverts; i++)
++        {
++            const s32* p = TempVertexBuffer[i].Position;
++            u32 o = (p[2] > p[3] ? 0x01 : 0) | (p[2] < -p[3] ? 0x02 : 0) |
++                    (p[1] > p[3] ? 0x04 : 0) | (p[1] < -p[3] ? 0x08 : 0) |
++                    (p[0] > p[3] ? 0x10 : 0) | (p[0] < -p[3] ? 0x20 : 0);
++            outAll &= o;
++            outAny |= o;
++        }
++        if ((outAll & 0x03) ||
++            ((outAny & 0x01) && !(CurPolygonAttr & (1<<12))) ||
++            (!(outAny & 0x03) && ((outAll & 0x0C) ||
++                                  (!(outAny & 0x0C) && (outAll & 0x30)))))
++        {
++            LastStripPolygon = NULL;
++            return;
++        }
++    }
++
+     // culling
+     // TODO: work out how it works on the real thing
+     // the normalization part is a wild guess
+@@ -1824,6 +1853,28 @@ void CmdFIFOWrite(CmdFIFOEntry& entry)
+     CmdFIFOQueue(entry);
+ }
+ 
++bool ImmediateReady()
++{
++    return ImmediateGeometry && GeometryEnabled && !FlushRequest &&
++           CmdPIPE.IsEmpty() && CmdFIFO.IsEmpty() && CmdStallQueue.IsEmpty();
++}
++
++void ExecuteImmediateEntry(u8 command, u32 param)
++{
++    CmdFIFOEntry entry;
++    entry.Command = command;
++    entry.Param = param;
++    ExecuteImmediate(entry);
++}
++
++void CmdFIFOWriteEntry(u8 command, u32 param)
++{
++    CmdFIFOEntry entry;
++    entry.Command = command;
++    entry.Param = param;
++    CmdFIFOWrite(entry);
++}
++
+ static void CmdFIFOQueue(CmdFIFOEntry& entry)
+ {
+     if (CmdFIFO.IsEmpty() && !CmdPIPE.IsFull())
+diff --git a/src/GPU3D.h b/src/GPU3D.h
+index cbf4940..a44b478 100644
+--- a/src/GPU3D.h
++++ b/src/GPU3D.h
+@@ -141,6 +141,19 @@ extern bool PendingWait3D, DisplayWait3D, Line3DWait;
+ 
+ void WriteToGXFIFO(u32 val);
+ 
++// nuubOS: the main RAM -> geometry FIFO DMA (DMA::Run9) unpacks the
++// commands itself with WriteToGXFIFO's state kept in locals. While
++// ImmediateReady() holds an entry runs at once (ExecuteImmediateEntry);
++// only a SWAP_BUFFERS run that way or a queued entry can change it.
++// Otherwise the caller writes its state back and queues the entry with
++// CmdFIFOWriteEntry.
++extern u32 NumCommands, CurCommand, ParamCount, TotalParams;
++extern bool GeometryEnabled;
++extern const u8 CmdNumParams[256];
++bool ImmediateReady();
++void ExecuteImmediateEntry(u8 command, u32 param);
++void CmdFIFOWriteEntry(u8 command, u32 param);
++
+ u8 Read8(u32 addr);
+ u16 Read16(u32 addr);
+ u32 Read32(u32 addr);
