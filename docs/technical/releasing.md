@@ -90,7 +90,16 @@ nuubOS uses [Semantic Versioning](https://semver.org): `MAJOR.MINOR.PATCH`.
   (per-system settings, planned too, moved after 1.0.0); `1.0.0-rc.4` (maintainer
   decision, 2026-10-26) brings the bug fixes from RC3 plus four small community
   requests: power key short press = Sleep, a terminal app, hiding RetroArch from the
-  Quick Menu, disc change for multi-disc games in the Quick Menu; then `1.0.0`.
+  Quick Menu, disc change for multi-disc games in the Quick Menu. While it was being
+  prepared the maintainer added more community requests (2026-10-27..30): system
+  settings and controls per game and per system, frameskip and resolution per game,
+  data and ports on SD2, offline achievements, PSP games in a folder, advanced
+  metadata search, cover region, volume button step, vibration intensity, picture
+  position, Wrap Around Rows, Syncthing ROM folders, OpenSSL 4 and the melonDS
+  performance work. `1.0.0-rc.4` was released ahead of its 2026-11-02 target
+  (maintainer decision, 2026-10-30); features freeze after it. `1.0.0-rc.5`, the
+  last RC, brings bug fixes plus one exception: a reorganization of Settings
+  (docs/dev/open-items.md); then `1.0.0`.
 - Qualification (maintainer decision, 2026-10-27): "Tested" = the maintainer's
   RG40XX-V, RG CubeXX and RG35XX Pro; every other board stays "Community tested"
   or "Supported, not tested", also for 1.0.0, until more people officially join

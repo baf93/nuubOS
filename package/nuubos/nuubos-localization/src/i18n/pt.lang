@@ -1467,4 +1467,11 @@
 1466=Auto salta fotogramas só quando o jogo abranda
 1467=Filas em ciclo
 1468=No início, depois do último item volta-se ao primeiro
-1469=Áudio USB
+1469=Sistema de pesquisa
+1470=Altere-o para a adaptação de um jogo de outro sistema.
+1471=Como nas Definições ({0})
+1472=O do jogo ({0})
+1473=Pesquisa avançada
+1474=Altere-o se o jogo não for encontrado ou a correspondência estiver errada.
+1475=Elimina definitivamente a pasta do jogo e tudo o que contém para todos. Os saves são mantidos.
+1476=Áudio USB

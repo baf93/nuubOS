@@ -1467,4 +1467,11 @@
 1466=Auto ohittaa ruutuja vain, kun peli hidastuu
 1467=Rivit kiertävät
 1468=Aloitusnäytössä viimeisen kohteen jälkeen palataan ensimmäiseen
-1469=USB-ääni
+1469=Hakujärjestelmä
+1470=Muuta sitä, jos peli on käännös toisen järjestelmän pelistä.
+1471=Kuten asetuksissa ({0})
+1472=Sama kuin pelillä ({0})
+1473=Tarkka haku
+1474=Muuta sitä, jos peliä ei löydy tai osuma on väärä.
+1475=Poistaa pelin kansion ja kaiken sen sisällön pysyvästi kaikilta käyttäjiltä. Tallennukset säilyvät.
+1476=USB-ääni

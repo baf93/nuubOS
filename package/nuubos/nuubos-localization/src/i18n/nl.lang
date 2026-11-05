@@ -1467,4 +1467,11 @@
 1466=Auto slaat alleen frames over als het spel vertraagt
 1467=Rijen rondlopen
 1468=Op het startscherm ga je na het laatste item terug naar het eerste
-1469=USB-audio
+1469=Zoeksysteem
+1470=Wijzig dit voor een port van een spel van een ander systeem.
+1471=Zoals in Instellingen ({0})
+1472=Dat van het spel ({0})
+1473=Geavanceerd zoeken
+1474=Wijzig dit als het spel niet gevonden wordt of de match fout is.
+1475=Verwijdert de map van het spel met alles erin definitief voor iedereen. Savegames blijven behouden.
+1476=USB-audio

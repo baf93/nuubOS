@@ -20,6 +20,9 @@
  *   clear GAME               remove scraped metadata and media of a game
  *   provider status | provider set screenscraper|thegamesdb|libretro
  *   region set auto|us|eu|jp|wor   preferred cover region (GitHub #10)
+ *   search-system GAME ID|default   look the game up as a game of another
+ *                                     system (GitHub #29: a port)
+ *   search-region GAME auto|us|eu|jp|wor|default   its own Cover Region
  *   account status | account set NAME (password on stdin) | account clear
  *   apikey set (key on stdin) | apikey clear      TheGamesDB private key
  *
@@ -145,6 +148,11 @@ struct game_info {
 	/* Absolute ROM file and the ROM folder of its card (SD1 or SD2). */
 	char file[PATH_MAX];
 	char root[PATH_MAX];
+	/* The user's lookup choices for this game (GitHub #29, its metadata
+	 * search_system= / search_region=): another system's platform, its
+	 * own Cover Region. Such a game is looked up alone. */
+	char as_system[32];
+	char as_region[8];
 };
 
 struct account {
@@ -157,6 +165,8 @@ struct metadata {
 	char provider_id[32];
 	char match[16];
 	char search[256];
+	char search_system[32];
+	char search_region[8];
 	char title[256];
 	char description[4096];
 	char release[32];
@@ -540,6 +550,8 @@ static size_t search_names(const char *name, char out[][512])
 	return n;
 }
 
+static bool read_metadata(const struct game_info *g, struct metadata *m);
+
 static bool game_details(const char *id, struct game_info *g)
 {
 	static char buf[65536];
@@ -572,9 +584,21 @@ static bool game_details(const char *id, struct game_info *g)
 			copy_text(g->file, sizeof(g->file), line + 5);
 		} else if (!strncmp(line, "root=", 5)) {
 			copy_text(g->root, sizeof(g->root), line + 5);
+		} else if (!strncmp(line, "name=", 5)) {
+			/* libraryd's ROM name (a "<Folder>/EBOOT.PBP" game: Folder). */
+			copy_text(g->stem, sizeof(g->stem), line + 5);
 		}
 	}
-	stem_of(g->rel, g->stem, sizeof(g->stem));
+	if (!g->stem[0])
+		stem_of(g->rel, g->stem, sizeof(g->stem));
+	if (g->system[0] && g->rel[0]) {
+		static struct metadata m;
+
+		if (read_metadata(g, &m)) {
+			copy_text(g->as_system, sizeof(g->as_system), m.search_system);
+			copy_text(g->as_region, sizeof(g->as_region), m.search_region);
+		}
+	}
 	return g->system[0] && g->rel[0];
 }
 
@@ -701,6 +725,17 @@ static bool system_supported(int provider, const char *id)
 	return provider == PROV_LIBRETRO ? s->libretro[0] != NULL : s->sky != NULL;
 }
 
+static int active_provider(void);
+
+/* The platform a game is looked up on: the system the user chose for it
+ * when the active source can search that one, else its own. */
+static const struct system_map *game_system(const struct game_info *g)
+{
+	if (g->as_system[0] && system_supported(active_provider(), g->as_system))
+		return system_of(g->as_system);
+	return system_of(g->system);
+}
+
 /* Cover Region (GitHub #10): Auto follows the file name's region tag, then
  * world, USA, Europe, Japan; a region chosen here comes first for every
  * game. Skyscraper/ScreenScraper short names. */
@@ -717,10 +752,22 @@ static void cover_region(char *out, size_t size)
 				copy_text(out, size, value);
 }
 
-/* Region preference of libretro dumps: the chosen Cover Region, else the
- * file name's region tag, first; then world, USA, Europe, Japan. */
-static void region_order(const char *name, const char *out[8])
+/* A game's Cover Region: its own (GitHub #29), else the setting. */
+static void game_region(const struct game_info *g, char *out, size_t size)
 {
+	for (int i = 0; g->as_region[0] && region_ids[i]; i++)
+		if (!strcmp(g->as_region, region_ids[i])) {
+			copy_text(out, size, g->as_region);
+			return;
+		}
+	cover_region(out, size);
+}
+
+/* Region preference of libretro dumps: the game's Cover Region, else the
+ * file name's region tag, first; then world, USA, Europe, Japan. */
+static void region_order(const struct game_info *g, const char *out[8])
+{
+	const char *name = g->rel;
 	static char chosen[8];
 	static const struct { const char *tag; const char *region; } tags[] = {
 		{ "(Europe", "eu" }, { "(E)", "eu" }, { "Europe)", "eu" },
@@ -731,7 +778,7 @@ static void region_order(const char *name, const char *out[8])
 	static const char *const base[] = { "wor", "us", "eu", "jp", NULL };
 	int n = 0;
 
-	cover_region(chosen, sizeof(chosen));
+	game_region(g, chosen, sizeof(chosen));
 	if (strcmp(chosen, "auto"))
 		out[n++] = chosen;
 	for (size_t i = 0; i < sizeof(tags) / sizeof(tags[0]) && !n; i++)
@@ -1027,7 +1074,8 @@ static bool cover_exists(const struct game_info *g)
 }
 
 #define META_FIELDS(X) \
-	X(provider) X(provider_id) X(match) X(search) X(title) X(description) \
+	X(provider) X(provider_id) X(match) X(search) X(search_system) X(search_region) \
+	X(title) X(description) \
 	X(release) X(developer) X(publisher) X(genre) X(players) X(rating) \
 	X(cover_url) X(cover_region) X(lang)
 
@@ -1153,20 +1201,20 @@ static void merge_fields(struct metadata *dst, const struct metadata *src)
 
 /* The cover was fetched for another Cover Region than the chosen one
  * (Auto never asks for a new cover). TheGamesDB has one cover a game. */
-static bool region_stale(const struct metadata *m, int provider)
+static bool region_stale(const struct game_info *g, const struct metadata *m, int provider)
 {
 	char region[8];
 
 	if (provider == PROV_THEGAMESDB)
 		return false;
-	cover_region(region, sizeof(region));
+	game_region(g, region, sizeof(region));
 	return strcmp(region, "auto") && strcmp(region, m->cover_region[0] ? m->cover_region : "auto");
 }
 
 /* Data the active source can still add to this game. */
 static bool missing_data(const struct game_info *g, const struct metadata *m, int provider)
 {
-	if (!cover_exists(g) || region_stale(m, provider))
+	if (!cover_exists(g) || region_stale(g, m, provider))
 		return true;
 	if (provider == PROV_LIBRETRO)
 		return false;
@@ -1182,7 +1230,7 @@ static enum outcome libretro_lookup(const struct game_info *g, const char *name,
  * usable one (a box spine); never stops the run. */
 static void libretro_cover(const struct game_info *g, const char *base)
 {
-	const struct system_map *s = system_of(g->system);
+	const struct system_map *s = game_system(g);
 	const char *reason = stop_reason;
 	struct metadata lm;
 	char name[512], path[PATH_MAX];
@@ -1240,10 +1288,10 @@ static void ini_quote(const char *in, char *out, size_t size)
 /* Skyscraper's home on tmpfs: its config.ini carries the user's account
  * and key and never reaches USERDATA. Raw cover export (artwork.xml
  * without layers), sized for Home and the Details hero. */
-static int sky_prepare(void)
+static int sky_prepare(const char *region)
 {
 	struct account a;
-	char key[128], lang[8], q[300], region[8];
+	char key[128], lang[8], q[300];
 	char text[2048];
 	size_t o;
 
@@ -1252,7 +1300,6 @@ static int sky_prepare(void)
 	load_account(&a);
 	load_key(key, sizeof(key));
 	user_language(lang, sizeof(lang));
-	cover_region(region, sizeof(region));
 	o = (size_t)snprintf(text, sizeof(text),
 		"[main]\n"
 		"cacheFolder=\"" CACHE_ROOT "/skyscraper\"\n"
@@ -1446,10 +1493,12 @@ static int sky_run(char *const argv[], const struct sky_item *items, size_t coun
 }
 
 /* The batch item of a generated "file:" path: the same path, else the
- * same file name (Skyscraper may normalise the folder part). */
+ * only item with the same file name (Skyscraper may normalise the folder
+ * part; several "<Folder>/EBOOT.PBP" games share the name). */
 static struct sky_item *pegasus_item(struct sky_item *items, size_t count, const char *file)
 {
 	const char *base = strrchr(file, '/');
+	struct sky_item *found = NULL;
 
 	for (size_t i = 0; i < count; i++)
 		if (!strcmp(items[i].file, file))
@@ -1458,10 +1507,13 @@ static struct sky_item *pegasus_item(struct sky_item *items, size_t count, const
 	for (size_t i = 0; i < count; i++) {
 		const char *b = strrchr(items[i].file, '/');
 
-		if (!strcmp(b ? b + 1 : items[i].file, base))
-			return &items[i];
+		if (!strcmp(b ? b + 1 : items[i].file, base)) {
+			if (found)
+				return NULL;
+			found = &items[i];
+		}
 	}
-	return NULL;
+	return found;
 }
 
 /* One finished "key: value" of the list: "game" opens an entry (its
@@ -1574,12 +1626,17 @@ static enum outcome sky_lookup(int provider, const struct system_map *s, struct 
 			       const char *query, size_t offset, size_t total)
 {
 	char outdir[PATH_MAX], media[PATH_MAX], list[PATH_MAX], pegasus[PATH_MAX + 32];
-	char exts[1024] = "", q[600];
+	char exts[1024] = "", q[600], region[8];
 	char *argv[32];
 	int argc, rc;
 	FILE *fp;
 
-	if (sky_prepare() != 0)
+	/* A game with its own Cover Region runs alone (scrape_batch). */
+	if (count == 1)
+		game_region(items[0].g, region, sizeof(region));
+	else
+		cover_region(region, sizeof(region));
+	if (sky_prepare(region) != 0)
 		return FAILED;
 	snprintf(outdir, sizeof(outdir), CACHE_ROOT "/skyscraper-out/%d", (int)getpid());
 	snprintf(media, sizeof(media), "%s/media", outdir);
@@ -1838,14 +1895,14 @@ static int libretro_score(const char *name, const char *const *regions)
 
 static enum outcome libretro_lookup(const struct game_info *g, const char *name, struct metadata *m)
 {
-	const struct system_map *s = system_of(g->system);
+	const struct system_map *s = game_system(g);
 	const char *regions[8];
 	char want[512], key[512], best[512] = "", folder_best[96] = "";
 	int best_score = INT_MAX;
 	bool exact = false;
 	CURL *esc;
 
-	region_order(g->rel, regions);
+	region_order(g, regions);
 	libretro_sanitize(name, want, sizeof(want));
 	name_key(want, key, sizeof(key));
 	for (int f = 0; f < 2 && s->libretro[f] && !exact; f++) {
@@ -1962,12 +2019,14 @@ static enum outcome apply(const struct game_info *g, enum mode mode, struct meta
 {
 	struct metadata m;
 	char path[PATH_MAX], region[8];
-	bool stale = region_stale(old, active_provider());
+	bool stale = region_stale(g, old, active_provider());
 
-	cover_region(region, sizeof(region));
+	game_region(g, region, sizeof(region));
 	if (!strcmp(region, "auto"))
 		region[0] = '\0';
 	copy_text(fresh->search, sizeof(fresh->search), old->search);
+	copy_text(fresh->search_system, sizeof(fresh->search_system), old->search_system);
+	copy_text(fresh->search_region, sizeof(fresh->search_region), old->search_region);
 	if (mode == MODE_FILL && old->match[0]) {
 		/* Only what is missing; everything already there stays, except a
 		 * cover of another Cover Region. */
@@ -2026,7 +2085,7 @@ static void scrape_batch(int provider, const struct game_info *games, size_t cou
 	const struct system_map *s;
 	size_t n = 0;
 	const char *query = NULL;
-	bool mixed = false;
+	bool mixed = false, own = false;
 
 	region_refresh = false;
 	for (size_t i = 0; i < count; i++) {
@@ -2064,24 +2123,27 @@ static void scrape_batch(int provider, const struct game_info *games, size_t cou
 		snprintf(items[n].file, sizeof(items[n].file), "%s", games[i].file);
 		if (olds[n].search[0])
 			query = olds[n].search;
-		if (cover_exists(&games[i]) && region_stale(&olds[n], provider))
+		if (games[i].as_system[0] || games[i].as_region[0])
+			own = true;
+		if (cover_exists(&games[i]) && region_stale(&games[i], &olds[n], provider))
 			region_refresh = true;
 		n++;
 	}
 	if (provider == PROV_LIBRETRO || n == 0)
 		return;
-	s = system_of(games[0].system);
-	/* A search name applies to its own game, and Skyscraper takes one ROM
-	 * folder per run: such games, and a batch spread over both cards, go
-	 * alone. */
+	s = game_system(items[0].g);
+	/* A search name, system or Cover Region applies to its own game, and
+	 * Skyscraper takes one ROM folder per run: such games, and a batch
+	 * spread over both cards, go alone. */
 	for (size_t i = 1; i < n && !mixed; i++)
 		mixed = strcmp(items[i].g->root, items[0].g->root) != 0;
-	if (n > 1 && (query || mixed)) {
+	if (n > 1 && (query || mixed || own)) {
 		for (size_t i = 0; i < n && !cancelled && !stop_reason[0]; i++) {
 			struct sky_item one = items[i];
 			struct metadata old = olds[i];
 
-			(void)sky_lookup(provider, s, &one, 1, old.search[0] ? old.search : NULL, offset + i, total);
+			(void)sky_lookup(provider, game_system(one.g), &one, 1, old.search[0] ? old.search : NULL,
+					 offset + i, total);
 			if (one.found && apply(one.g, mode, &old, &one.m) != FAILED)
 				(*scraped)++;
 			if (!stop_reason[0])
@@ -2392,12 +2454,15 @@ static int cmd_reject_or_clear(const char *id, bool reject)
 		}
 	meta_path(&g, "txt", path, sizeof(path));
 	unlink(path);
-	/* The user's search name survives a rejected match. */
-	if (reject && had && m.search[0]) {
+	/* The user's search name, system and region survive a rejected
+	 * match. */
+	if (reject && had && (m.search[0] || m.search_system[0] || m.search_region[0])) {
 		struct metadata keep;
 
 		memset(&keep, 0, sizeof(keep));
 		copy_text(keep.search, sizeof(keep.search), m.search);
+		copy_text(keep.search_system, sizeof(keep.search_system), m.search_system);
+		copy_text(keep.search_region, sizeof(keep.search_region), m.search_region);
 		(void)write_metadata(&g, &keep);
 	}
 	if (reject) {
@@ -2415,13 +2480,33 @@ static int cmd_reject_or_clear(const char *id, bool reject)
 	return 0;
 }
 
+/* Stores the user's lookup choices of a game (search name, system,
+ * region): a metadata file only while something is in it, and a new
+ * choice gets a new chance (no "rejected" mark). */
+static int store_search(const struct game_info *g, struct metadata *m)
+{
+	char path[PATH_MAX];
+
+	if (!m->search[0] && !m->search_system[0] && !m->search_region[0] && !m->match[0]) {
+		meta_path(g, "txt", path, sizeof(path));
+		unlink(path);
+	} else if (write_metadata(g, m) != 0) {
+		puts("ERR storage");
+		return 1;
+	}
+	meta_path(g, "rejected", path, sizeof(path));
+	unlink(path);
+	library_rescan();
+	puts("OK");
+	return 0;
+}
+
 /* The name used to look the game up instead of its file name. */
 static int cmd_search(const char *id)
 {
 	struct game_info g;
-	struct metadata m;
+	static struct metadata m;
 	char name[256] = "", clean[256];
-	char path[PATH_MAX];
 
 	if (!valid_game(id) || !game_details(id, &g)) {
 		puts("ERR game");
@@ -2433,20 +2518,40 @@ static int cmd_search(const char *id)
 	one_line(name, clean, sizeof(clean));
 	read_metadata(&g, &m);
 	copy_text(m.search, sizeof(m.search), clean);
-	if (!m.search[0] && !m.match[0]) {
-		/* Nothing left but the search name: no metadata file. */
-		meta_path(&g, "txt", path, sizeof(path));
-		unlink(path);
-	} else if (write_metadata(&g, &m) != 0) {
-		puts("ERR storage");
+	return store_search(&g, &m);
+}
+
+/*
+ * GitHub #29: look a game up as a game of another system (a port: Daytona
+ * USA for PSP is a Dreamcast game for ScreenScraper), or with its own Cover
+ * Region. "default" clears the choice.
+ */
+static int cmd_search_choice(const char *id, bool system, const char *value)
+{
+	struct game_info g;
+	static struct metadata m;
+	bool known = !strcmp(value, "default");
+
+	if (!valid_game(id) || !game_details(id, &g)) {
+		puts("ERR game");
 		return 1;
 	}
-	/* A new name gets a new chance. */
-	meta_path(&g, "rejected", path, sizeof(path));
-	unlink(path);
-	library_rescan();
-	puts("OK");
-	return 0;
+	if (system && !known)
+		known = system_of(value) && (system_of(value)->sky || system_of(value)->libretro[0]);
+	for (int i = 0; !system && !known && region_ids[i]; i++)
+		known = !strcmp(value, region_ids[i]);
+	if (!known) {
+		puts("ERR value");
+		return 1;
+	}
+	if (!strcmp(value, "default") || (system && !strcmp(value, g.system)))
+		value = "";
+	read_metadata(&g, &m);
+	if (system)
+		copy_text(m.search_system, sizeof(m.search_system), value);
+	else
+		copy_text(m.search_region, sizeof(m.search_region), value);
+	return store_search(&g, &m);
 }
 
 static void print_status(void)
@@ -2463,6 +2568,12 @@ static void print_status(void)
 
 	cover_region(region, sizeof(region));
 	printf("provider=%s\navailable=%d\nregion=%s\n", provider_ids[provider], provider_ready(provider) ? 1 : 0, region);
+	/* What Search System can offer with this source (GitHub #29). */
+	fputs("systems=", stdout);
+	for (size_t i = 0, n = 0; i < sizeof(systems) / sizeof(systems[0]); i++)
+		if (system_supported(provider, systems[i].id))
+			printf("%s%s", n++ ? "," : "", systems[i].id);
+	putchar('\n');
 	for (int i = 0; i < PROV_COUNT; i++)
 		printf("%s=%s\n", provider_ids[i], provider_ready(i) ? "available" : "unavailable");
 	/* Only the end of the key, to recognise it. */
@@ -2609,6 +2720,10 @@ int main(int argc, char **argv)
 		rc = cmd_bulk(argv[2]);
 	else if (argc == 3 && !strcmp(argv[1], "search"))
 		rc = cmd_search(argv[2]);
+	else if (argc == 4 && !strcmp(argv[1], "search-system"))
+		rc = cmd_search_choice(argv[2], true, argv[3]);
+	else if (argc == 4 && !strcmp(argv[1], "search-region"))
+		rc = cmd_search_choice(argv[2], false, argv[3]);
 	else if (argc == 3 && !strcmp(argv[1], "accept"))
 		rc = cmd_accept(argv[2]);
 	else if (argc == 3 && !strcmp(argv[1], "reject"))
@@ -2625,7 +2740,8 @@ int main(int argc, char **argv)
 		rc = cmd_provider(argc, argv);
 	else
 		fprintf(stderr, "Usage: nuubos-scraper game GAME [force|fill] | bulk all|missing|system:ID | "
-				"search GAME | accept|reject|clear GAME | provider status|set NAME | region set REGION | "
+				"search GAME | search-system GAME ID|default | search-region GAME REGION|default | "
+				"accept|reject|clear GAME | provider status|set NAME | region set REGION | "
 				"account status|clear|set NAME | apikey set|clear\n");
 	curl_global_cleanup();
 	return rc;

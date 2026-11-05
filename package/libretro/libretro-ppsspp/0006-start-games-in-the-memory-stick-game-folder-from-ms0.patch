@@ -1,0 +1,28 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] Start games in the memory stick's GAME folder from ms0:/PSP/GAME
+
+A homebrew EBOOT.PBP was started from ms0:/PSP/GAME/<game>/ only when
+its host path contained "PSP/GAME/". With a memory stick directory
+named PSP (the /PSP compatibility mode, STRIP_PSP) its games are in
+<dir>/GAME/<game>, so they started from umd0:/ instead, and ports that
+need their ms0: path (JGR Portable) refused to start. nuubOS binds a
+game's folder there (GitHub #30).
+
+Upstream-Status: Pending
+---
+--- a/Core/PSPLoaders.cpp
++++ b/Core/PSPLoaders.cpp
+@@ -365,7 +365,12 @@
+ 
+ 	size_t pos = path.find("PSP/GAME/");
+ 	std::string ms_path;
+-	if (pos != std::string::npos) {
++	// A game in the memory stick's GAME folder, also when the memory stick
++	// directory is itself named PSP (STRIP_PSP: <dir>/GAME, no "PSP/GAME/").
++	const std::string gameDir = GetSysDirectory(DIRECTORY_GAME).ToString() + "/";
++	if (full_path.Type() == PathType::NATIVE && path.size() > gameDir.size() && startsWith(path, gameDir)) {
++		ms_path = "ms0:/PSP/GAME/" + path.substr(gameDir.size()) + "/";
++	} else if (pos != std::string::npos) {
+ 		ms_path = "ms0:/" + path.substr(pos) + "/";
+ 	} else {
+ 		// This is wrong, but it's better than not having a working directory at all.

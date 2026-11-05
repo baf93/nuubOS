@@ -9,11 +9,12 @@ nuubOS boots straight into a controller-first home screen, plays games through
 RetroArch, streams from your PC, plays music and video, and keeps itself up to date
 with signed, rollback-safe updates.
 
-> **Status: release candidate (1.0.0-rc.3).** Bug fixes only until 1.0.0; nightly
+> **Status: release candidate (1.0.0-rc.4).** Bug fixes only until 1.0.0; nightly
 > images are for testers. Keep a backup of your saves. See [Known issues](https://github.com/baf93/nuubOS/wiki/Known-Issues).
 
 **[Download](https://github.com/baf93/nuubOS/releases)** ·
 **[User guide (wiki)](https://github.com/baf93/nuubOS/wiki)** ·
+**[Discord](https://discord.gg/VHfUANfVvX)** ·
 **[Technical documentation](docs/technical/README.md)** ·
 **[Licensing](LICENSING.md)**
 
@@ -25,11 +26,13 @@ with signed, rollback-safe updates.
   collections, cover art, Find a Game, game tags, and a Quick Menu that works
   everywhere, in games too.
 - **Emulation**: about 80 systems through RetroArch and libretro cores tuned for the
-  H700. Save states with rotating slots, hotkeys, per-game settings, bezels and a CRT
-  look, RetroAchievements with Hardcore Mode, cheats and LAN netplay.
+  H700. Save states with rotating slots, hotkeys, settings and button layouts per game
+  and per system (emulator, picture, accuracy, resolution, frameskip, controls),
+  bezels and a CRT look, RetroAchievements with Hardcore Mode and offline unlocks,
+  cheats, disc change and LAN netplay.
 - **Ports**: PortMaster, downloaded from the console, installs PC games and engines
   ported to handhelds; they play from your library like any other game, each in its
-  own sandbox.
+  own sandbox, from the console's card or the SD2 card.
 - **Several users**: each person gets their own profile, saves, language, theme
   ("Mood") and settings, Confirm/Back buttons included.
 - **PC streaming**: Moonlight for Sunshine and GeForce Experience, and Steam Link (you
@@ -37,8 +40,12 @@ with signed, rollback-safe updates.
 - **Media**: a music and video player for local files, network shares and Jellyfin.
   You can turn the screen off and use the console as a music player.
 - **Connectivity**: Wi-Fi, Bluetooth audio and controllers, a web control panel over
-  HTTPS, SSH/SFTP, SMB file sharing, Syncthing sync between consoles, and screen
-  casting to Chromecast, Miracast and DLNA TVs.
+  HTTPS, SSH/SFTP and a Terminal app, SMB file sharing, Syncthing sync between consoles
+  (saves, states, covers and, if you want, games), and screen casting to Chromecast,
+  Miracast and DLNA TVs.
+- **Two cards**: games on the second card are used as they are, from most other
+  firmwares too; saves, states, BIOS files and covers can move there one kind at a
+  time when the first card is small.
 - **HDMI output** at up to 1080p, with automatic switching between the TV and the
   built-in screen.
 - **TV box mode**: runs without its battery and screen, powered from USB on your TV.

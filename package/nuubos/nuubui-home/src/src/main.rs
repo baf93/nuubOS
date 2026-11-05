@@ -873,7 +873,7 @@ fn audio_output_label(ui: &HomeWindow, output: &str) -> String {
     match output {
         "auto" => tr(ui, 122, "Automatic"),
         "bluetooth" => tr(ui, 331, "Bluetooth Audio"),
-        "usb" => tr(ui, 1469, "USB Audio"),
+        "usb" => tr(ui, 1476, "USB Audio"),
         "analog" => tr(ui, 332, "Analog Audio"),
         "headphones" => tr(ui, 330, "Headphones"),
         "hdmi" => "HDMI".to_owned(),
@@ -2461,7 +2461,7 @@ fn open_audio_output_dropdown(ui: &HomeWindow) {
     }
 
     if ui.get_audio_usb_available() {
-        options.push(("usb".to_owned(), tr(ui, 1469, "USB Audio")));
+        options.push(("usb".to_owned(), tr(ui, 1476, "USB Audio")));
     }
 
     /* Speaker/headphones are one physical analog route.  Jack insertion

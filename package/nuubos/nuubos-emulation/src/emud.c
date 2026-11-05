@@ -87,6 +87,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <sched.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -94,6 +95,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/inotify.h>
+#include <sys/mount.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -360,6 +362,10 @@ struct session {
 	char rom[PATH_MAX];
 	char states_dir[PATH_MAX];
 	char state_base[PATH_MAX];
+	/* A PSP game in a folder of its own: the folder and where RetroArch
+	 * sees it on the memory stick (psp_folder_game). */
+	char game_dir[PATH_MAX];
+	char game_mount[PATH_MAX];
 	int slot;
 	bool paused;
 	bool fast_forward;
@@ -4180,9 +4186,62 @@ static void content_base_name(const char *content, char *out, size_t size)
 		*dot = '\0';
 }
 
+/*
+ * GitHub #30: a PSP game in a folder of its own ("<Folder>/EBOOT.PBP",
+ * homebrew and PSN games) runs from ms0:/PSP/GAME/<Folder>/ as on a PSP.
+ * PPSSPP starts a game outside its memory stick from umd0:/, and some
+ * ports need the memory stick path (JGR Portable prepares its data only
+ * from there). Its states go to states/psp/<Folder>/: every such game is
+ * called EBOOT.
+ */
+static bool psp_folder_game(const char *system, const char *content, char *folder, size_t size)
+{
+	const char *name = strrchr(content, '/');
+	const char *start;
+
+	if (strcmp(system, "psp") || !name || name == content || strcasecmp(name + 1, "EBOOT.PBP"))
+		return false;
+	start = name;
+	while (start > content && start[-1] != '/')
+		start--;
+	if (start == name || (size_t)(name - start) >= size)
+		return false;
+	snprintf(folder, size, "%.*s", (int)(name - start), start);
+	return true;
+}
+
+/*
+ * In the RetroArch child: the game's folder bound on the memory stick, in
+ * <saves>/psp/GAME/<Folder> (PPSSPP's memory stick is RetroArch's save
+ * directory; named psp, it is the stick's PSP folder itself: STRIP_PSP,
+ * PPSSPP patch 0006), in RetroArch's own mount namespace: Syncthing, the backup and the rest
+ * of the system never see it, and it goes away with RetroArch. The content
+ * path then names the game there. Without it the game still starts, from
+ * umd0:/ as before.
+ */
+static void bind_game_folder(char *content, size_t size)
+{
+	const char *name = strrchr(content, '/');
+	char path[PATH_MAX];
+
+	if (!session.game_mount[0] || !name)
+		return;
+	if (unshare(CLONE_NEWNS) != 0 ||
+	    mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0 ||
+	    mount(session.game_dir, session.game_mount, NULL, MS_BIND | MS_REC, NULL) != 0) {
+		log_msg("emud: game folder not on the memory stick: %s", strerror(errno));
+		return;
+	}
+	snprintf(path, sizeof(path), "%s%s", session.game_mount, name);
+	copy_text(content, size, path);
+}
+
 static void reset_session(void)
 {
 	stop_watch();
+	/* The empty mount point of psp_folder_game (RetroArch is gone). */
+	if (session.game_mount[0])
+		(void)rmdir(session.game_mount);
 	if (session.shot_fd > 0)
 		close(session.shot_fd);
 	free_restore();
@@ -4442,6 +4501,22 @@ static const char *launch(const char *game, const char *mode, const char *net)
 	snprintf(saves, sizeof(saves), "%s/saves/%s", base, session.system);
 	snprintf(session.states_dir, sizeof(session.states_dir), "%s/states/%s",
 		 base, session.system);
+	{
+		char folder[NAME_MAX + 1];
+		const char *slash = strrchr(session.content, '/');
+
+		if (psp_folder_game(session.system, session.content, folder, sizeof(folder))) {
+			size_t len = strlen(session.states_dir);
+
+			snprintf(session.states_dir + len, sizeof(session.states_dir) - len, "/%s", folder);
+			snprintf(session.game_dir, sizeof(session.game_dir), "%.*s",
+				 (int)(slash - session.content), session.content);
+			snprintf(session.game_mount, sizeof(session.game_mount), "%s/GAME/%s",
+				 saves, folder);
+			if (mkdir_p(session.game_mount) != 0)
+				return "storage";
+		}
+	}
 	snprintf(screenshots, sizeof(screenshots), "%s/screenshots", base);
 	snprintf(path, sizeof(path), "%s/config/remaps", ra_dir);
 	if (mkdir_p(path) != 0 || mkdir_p(saves) != 0 ||
@@ -4651,6 +4726,7 @@ static const char *launch(const char *game, const char *mode, const char *net)
 			argv[argc++] = (char *)"--verbose";
 		argv[argc++] = (char *)"-L";
 		argv[argc++] = core_path;
+		bind_game_folder(session.content, sizeof(session.content));
 		argv[argc++] = session.content;
 		argv[argc] = NULL;
 		snprintf(cfg, sizeof(cfg), "%s/retroarch.cfg", ra_dir);
@@ -5824,6 +5900,7 @@ static void handle_states(struct client *c, const char *game)
 		char command[64];
 		char answer[PATH_MAX + 128];
 		char name[NAME_MAX + 1];
+		char folder[NAME_MAX + 1];
 		char *tab;
 		struct emu_settings e;
 		struct achievements a;
@@ -5848,7 +5925,11 @@ static void handle_states(struct client *c, const char *game)
 		load_achievements(user, &a);
 		hardcore = a.enabled && a.hardcore;
 		content_base_name(tab + 1, name, sizeof(name));
-		snprintf(base, sizeof(base), USERS_DIR "/%s/states/%s/%s", user, answer + 3, name);
+		if (psp_folder_game(answer + 3, tab + 1, folder, sizeof(folder)))
+			snprintf(base, sizeof(base), USERS_DIR "/%s/states/%s/%s/%s", user, answer + 3,
+				 folder, name);
+		else
+			snprintf(base, sizeof(base), USERS_DIR "/%s/states/%s/%s", user, answer + 3, name);
 	} else if (session.state == SESSION_RUNNING) {
 		slots = session.settings.slots;
 		hardcore = session.hardcore;

@@ -496,6 +496,7 @@ async function gamePage(id, from) {
       on: () => act('lib.statsreset', { id }, { topics: ['details', 'library'] }) }),
     row({ key: 'del', title: C(544, 'Delete Game'), icon: 'trash-can', danger: true,
       detail: avail === '0' ? C(1318, 'Removes the game, its cover and details from the library for every user. Saves are kept.')
+        : d.folder === '1' ? C(1475, "Permanently deletes the game's folder and everything in it for every user. Saves are kept.")
         : C(545, 'Permanently deletes the game file for every user. Saves are kept.'),
       arm: { prompt: C(546, 'Press again to delete permanently') }, on: async () => {
         await act('lib.delete', { id }, { topics: ['library'] });
@@ -1506,8 +1507,8 @@ async function overlayPage() {
 
 page('display', 'settings', () => C(7, 'Display & Audio'), async () => {
   const [d, a] = await Promise.all([get('display'), get('audio')]);
-  const outputs = { auto: C(122, 'Automatic'), analog: C(332, 'Analog Audio'), bluetooth: C(331, 'Bluetooth Audio'), usb: C(1469, 'USB Audio'), hdmi: 'HDMI' };
-  const sel = { speaker: C(240, 'Speaker'), headphones: C(330, 'Headphones'), bluetooth: C(331, 'Bluetooth Audio'), usb: C(1469, 'USB Audio'), hdmi: 'HDMI' };
+  const outputs = { auto: C(122, 'Automatic'), analog: C(332, 'Analog Audio'), bluetooth: C(331, 'Bluetooth Audio'), usb: C(1476, 'USB Audio'), hdmi: 'HDMI' };
+  const sel = { speaker: C(240, 'Speaker'), headphones: C(330, 'Headphones'), bluetooth: C(331, 'Bluetooth Audio'), usb: C(1476, 'USB Audio'), hdmi: 'HDMI' };
   const vol = a['volume.' + a.selected];
   const nodes = [section(C(728, 'DISPLAY'), 'device'), group(
     d.hdmi ? row({ key: 'bri', title: C(127, 'Brightness'), value: C(132, 'Internal display inactive'), disabled: true })

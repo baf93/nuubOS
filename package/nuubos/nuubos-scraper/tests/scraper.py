@@ -19,7 +19,8 @@ lib = os.path.join(root, 'package/nuubos/nuubos-library/src')
 t = tempfile.mkdtemp()
 run, ud, share, state = t + '/run', t + '/userdata', t + '/share', t + '/state'
 user = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-for d in (run + '/user', ud + '/roms/snes', share, state + '/users/' + user):
+for d in (run + '/user', ud + '/roms/snes', ud + '/roms/psp/Daytona USA', ud + '/roms/psp/Jet Set Radio', share,
+          state + '/users/' + user):
     os.makedirs(d, exist_ok=True)
 open(share + '/systems.conf', 'w').write(open(lib + '/systems.conf').read())
 open(run + '/user/active', 'w').write(user + '\n')
@@ -28,6 +29,9 @@ roms = ['Mario.sfc', 'Zelda.sfc', 'Unknown.sfc', 'Quota.sfc', 'Super Metroid (Eu
         'Kirby (USA) [!] v1.1.sfc', 'Disney G-Force - 2009.sfc', 'Pups.sfc', 'Mario Paint (Japan).sfc']
 for i, n in enumerate(roms):
     open(ud + '/roms/snes/' + n, 'wb').write(bytes([65 + i]) * (1000 + i))
+# PSP ports in folders of their own (GitHub #29/#30): both called EBOOT.PBP.
+for n in ('Daytona USA', 'Jet Set Radio'):
+    open(ud + '/roms/psp/%s/EBOOT.PBP' % n, 'wb').write(b'P' * 2000)
 PNG = b'\x89PNG\r\n\x1a\n' + b'x' * 200
 
 # Fake Skyscraper: gathering (-s) logs its arguments; generation (-f pegasus)
@@ -40,7 +44,7 @@ log = os.environ['HOME'] + '/calls.log'
 open(log, 'a').write(repr(a) + '\\n')
 def opt(k):
     return a[a.index(k) + 1] if k in a else None
-files = [x for x in a if x.startswith('/') and x.endswith('.sfc')]
+files = [x for x in a if x.startswith('/') and x.endswith(('.sfc', '.PBP'))]
 if opt('--includefrom'):
     files = [l.strip() for l in open(opt('--includefrom')) if l.strip()]
 known = {'Mario.sfc': 'Super Mario World', 'Zelda.sfc': 'Zelda', 'Quota.sfc': None, 'Mario Paint (Japan).sfc': 'Mario Paint'}
@@ -68,6 +72,8 @@ if opt('-f') == 'pegasus':
             title = 'G-Force'
         if b == 'Pups.sfc' and "'--query', '102+dalmatian'" in q:
             title = '102 Dalmatians'
+        if f.endswith('Daytona USA/EBOOT.PBP') and opt('-p') == 'dreamcast' and "'--query', 'Daytona+USA'" in q:
+            title = 'Daytona USA'
         if not title:
             continue
         stem = b[:-4]
@@ -96,6 +102,9 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == '/%s/Named_Boxarts/' % folder:
             body = '<html>' + ''.join('<a href="%s.png">x</a>' % quote(n) for n in thumbs) + '</html>'
             self.send_response(200); self.end_headers(); self.wfile.write(body.encode()); return
+        if p.endswith('/Named_Boxarts/'):
+            # Other systems' folders (the PSP ports): no thumbnails.
+            self.send_response(200); self.end_headers(); self.wfile.write(b'<html></html>'); return
         for kind in ('Named_Boxarts', 'Named_Snaps'):
             pre = '/%s/%s/' % (folder, kind)
             if p.startswith(pre) and p[len(pre):-4] in thumbs:
@@ -134,15 +143,15 @@ def libcmd(line):
         if not c: break
         d += c
     return d.decode()
-def meta(stem):
-    try: return open(ud + '/library/metadata/snes/%s.txt' % stem).read()
+def meta(stem, system='snes'):
+    try: return open(ud + '/library/metadata/%s/%s.txt' % (system, stem)).read()
     except OSError: return ''
 def calls():
     try: return open(run + '/scraper/calls.log').read()
     except OSError: return ''
 try:
     for _ in range(50):
-        if 'games=%d' % len(roms) in libcmd('STATUS'): break
+        if 'games=%d' % (len(roms) + 2) in libcmd('STATUS'): break
         time.sleep(0.1)
     ids = {l.split('\t')[2]: l[5:21] for l in libcmd('GAMES\tsystem:snes').splitlines() if l.startswith('game=')}
 
@@ -230,6 +239,41 @@ try:
     check('auto never asks again', 'complete' in job('game', ids['Mario'], 'fill'))
     job('game', ids['Mario'], 'force')
     check('auto: no region, no refresh', 'region=' not in open(cfg).read() and "'refresh'" not in calls())
+
+    # Search System and a game's own Cover Region (GitHub #29), on PSP ports
+    # named after their folders (GitHub #30).
+    psp = {l.split('\t')[2]: l[5:21] for l in libcmd('GAMES\tsystem:psp').splitlines() if l.startswith('game=')}
+    daytona = psp.get('Daytona USA')
+    check('PSP ports named after their folders', sorted(psp) == ['Daytona USA', 'Jet Set Radio'])
+    st = sc('provider', 'status')
+    check('systems the source can search', any(l.startswith('systems=') and ',dreamcast,' in ',' + l[8:] + ','
+          and ',psp,' in ',' + l[8:] + ',' for l in st.splitlines()))
+    check('unknown search system refused', sc('search-system', daytona, 'nosuch').startswith('ERR'))
+    check('search system stored', sc('search-system', daytona, 'dreamcast').startswith('OK')
+          and 'meta_search_system=dreamcast' in libcmd('DETAILS\t' + daytona))
+    sc('search', daytona, stdin='Daytona USA\n')
+    os.remove(run + '/scraper/calls.log')
+    out = job('game', daytona)
+    m = meta('Daytona USA', 'psp')
+    check('looked up as a Dreamcast game, stored as the PSP folder game', '@result scraped' in out
+          and "'-p', 'dreamcast'" in calls() and 'title=Daytona USA' in m and 'search_system=dreamcast' in m
+          and os.path.exists(ud + '/library/covers/psp/Daytona USA.png'))
+    os.remove(run + '/scraper/calls.log')
+    job('bulk', 'system:psp')
+    c = calls()
+    check('in a batch the game with its own system runs alone', "'-p', 'psp'" in c and "'--includefrom'" not in c)
+    check('reject keeps the search system', sc('reject', daytona).startswith('OK')
+          and 'search_system=dreamcast' in meta('Daytona USA', 'psp'))
+    check('default clears it', sc('search-system', daytona, 'default').startswith('OK')
+          and 'search_system=dreamcast' not in meta('Daytona USA', 'psp'))
+    check('region of a game stored', sc('search-region', ids['Mario'], 'jp').startswith('OK')
+          and 'search_region=jp' in meta('Mario'))
+    job('game', ids['Mario'], 'force')
+    check('its region in the Skyscraper config', 'region="jp"' in open(cfg).read() and 'cover_region=jp' in meta('Mario'))
+    check('invalid region of a game refused', sc('search-region', ids['Mario'], 'xx').startswith('ERR'))
+    sc('search-region', ids['Mario'], 'default')
+    job('game', ids['Mario'], 'force')
+    check('region of the game cleared', 'search_region=' not in meta('Mario') and 'region=' not in open(cfg).read())
 
     out = job('game', ids['Quota'])
     check('quota stops (job protocol)', '@error quota' in out)

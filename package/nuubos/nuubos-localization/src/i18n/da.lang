@@ -1467,4 +1467,11 @@
 1466=Auto springer kun billeder over, når spillet bliver langsomt
 1467=Rækker rundt
 1468=På startskærmen kommer du efter sidste element tilbage til det første
-1469=USB-lyd
+1469=Søgesystem
+1470=Ret det for en portering af et spil fra et andet system.
+1471=Som i Indstillinger ({0})
+1472=Samme som spillet ({0})
+1473=Avanceret søgning
+1474=Ret det, hvis spillet ikke findes, eller matchet er forkert.
+1475=Sletter spillets mappe med alt indhold permanent for alle brugere. Gemte spil bevares.
+1476=USB-lyd

@@ -1,0 +1,187 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: nuubOS <nuubos@localhost>
+Date: Fri, 30 Oct 2026 12:00:00 +0100
+Subject: [PATCH] Lane polygon bands and no timing for immediate geometry (nuubOS)
+
+- Three-lane soft renderer: each lane sets up only the polygons drawn on a
+  line of its band (RenderScanline's own test; the others touch neither
+  the band nor its shadow-mask state), and the per-scanline test reads
+  their Y range from a compact array instead of each polygon. In scenes
+  with ~600 polygons every lane set up and scanned all of them per line.
+- Immediate geometry (fast mode): ExecuteImmediate zeroes the engine's
+  busy time and pipeline state after every entry, so while it runs an
+  entry the timing bookkeeping (AddCycles, vertex slots, pipeline stalls
+  and delays) returns at once.
+
+Results are identical (screen hashes over 2,100 frames); emulated timing
+is unchanged.
+
+Upstream: not submitted (nuubOS H700 performance work).
+---
+ src/GPU3D.cpp      | 17 +++++++++++++++++
+ src/GPU3D_Soft.cpp | 20 ++++++++++++++------
+ src/GPU3D_Soft.h   |  4 +++-
+ 3 files changed, 34 insertions(+), 7 deletions(-)
+
+diff --git a/src/GPU3D.cpp b/src/GPU3D.cpp
+index 8118f52..70246c5 100644
+--- a/src/GPU3D.cpp
++++ b/src/GPU3D.cpp
+@@ -781,8 +781,15 @@ void UpdateClipMatrix()
+ 
+ 
+ 
++// set while ExecuteImmediate runs an entry: it zeroes the engine's busy
++// time and pipeline state afterwards, so the timing bookkeeping of that
++// entry (AddCycles, vertex slots, pipeline stalls) is skipped (nuubOS)
++static bool ImmediateEntry = false;
++
+ __attribute__((always_inline)) inline void AddCycles(s32 num)
+ {
++    if (ImmediateEntry) return;
++
+     CycleCount += num;
+ 
+     if (VertexPipeline > 0)
+@@ -814,6 +821,8 @@ __attribute__((always_inline)) inline void AddCycles(s32 num)
+ 
+ void NextVertexSlot()
+ {
++    if (ImmediateEntry) return;
++
+     s32 num = (9 - VertexSlotCounter) + 1;
+ 
+     for (;;)
+@@ -857,6 +866,8 @@ void NextVertexSlot()
+ 
+ void StallPolygonPipeline(s32 delay, s32 nonstalldelay)
+ {
++    if (ImmediateEntry) return;
++
+     if (PolygonPipeline > 0)
+     {
+         CycleCount += PolygonPipeline + delay;
+@@ -1826,7 +1837,9 @@ __attribute__((noinline)) static void ExecuteImmediate(CmdFIFOEntry& entry)
+     if (cmd == 0x11 || cmd == 0x12) NumPushPopCommands++;
+     else if (cmd >= 0x70 && cmd <= 0x72) NumTestCommands++;
+ 
++    ImmediateEntry = true;
+     ExecuteEntry(entry);
++    ImmediateEntry = false;
+ 
+     // the engine is idle again right away: no busy time, no pipeline stalls
+     // left for the next command (a SWAP_BUFFERS keeps its FlushRequest)
+@@ -1941,6 +1954,7 @@ CmdFIFOEntry CmdFIFORead()
+ inline void VertexPipelineSubmitCmd()
+ {
+     // vertex commands 0x24, 0x25, 0x26, 0x27, 0x28
++    if (ImmediateEntry) return;
+     if (!(VertexSlotsFree & 0x1)) NextVertexSlot();
+     else                          AddCycles(1);
+     NormalPipeline = 0;
+@@ -1949,6 +1963,7 @@ inline void VertexPipelineSubmitCmd()
+ inline void VertexPipelineCmdDelayed6()
+ {
+     // commands 0x20, 0x30, 0x31, 0x72 that can run 6 cycles after a vertex
++    if (ImmediateEntry) return;
+     if (VertexPipeline > 2) AddCycles((VertexPipeline - 2) + 1);
+     else                    AddCycles(NormalPipeline + 1);
+     NormalPipeline = 0;
+@@ -1957,6 +1972,7 @@ inline void VertexPipelineCmdDelayed6()
+ inline void VertexPipelineCmdDelayed8()
+ {
+     // commands 0x29, 0x2A, 0x2B, 0x33, 0x34, 0x41, 0x60, 0x71 that can run 8 cycles after a vertex
++    if (ImmediateEntry) return;
+     if (VertexPipeline > 0) AddCycles(VertexPipeline + 1);
+     else                    AddCycles(NormalPipeline + 1);
+     NormalPipeline = 0;
+@@ -1966,6 +1982,7 @@ inline void VertexPipelineCmdDelayed4()
+ {
+     // all other commands can run 4 cycles after a vertex
+     // no need to do much here since that is the minimum
++    if (ImmediateEntry) return;
+     AddCycles(NormalPipeline + 1);
+     NormalPipeline = 0;
+ }
+diff --git a/src/GPU3D_Soft.cpp b/src/GPU3D_Soft.cpp
+index 3206709..348378f 100644
+--- a/src/GPU3D_Soft.cpp
++++ b/src/GPU3D_Soft.cpp
+@@ -1346,11 +1346,12 @@ void SoftRenderer::RenderScanline(Lane* L, s32 y, int npolys)
+ {
+     for (int i = 0; i < npolys; i++)
+     {
+-        RendererPolygon* rp = &L->PolygonList[i];
+-        Polygon* polygon = rp->PolyData;
++        s32 ytop = L->PolyYRange[i][0], ybot = L->PolyYRange[i][1];
+ 
+-        if (y >= polygon->YTop && (y < polygon->YBottom || (y == polygon->YTop && polygon->YBottom == polygon->YTop)))
++        if (y >= ytop && (y < ybot || (y == ytop && ybot == ytop)))
+         {
++            RendererPolygon* rp = &L->PolygonList[i];
++            Polygon* polygon = rp->PolyData;
+             if (polygon->IsShadowMask)
+                 RenderShadowMaskScanline(L, rp, y);
+             else
+@@ -1663,13 +1664,20 @@ void SoftRenderer::ClearBuffers()
+ // Sets up the polygons of a lane for rendering from line y: edges of the
+ // polygons already started are placed at y directly (Slope::Setup computes
+ // the same position as stepping line by line).
+-int SoftRenderer::SetupLane(Lane* L, Polygon** polygons, int npolys, s32 y)
++// Only the polygons drawn on a line of [y, yend) (RenderScanline's test):
++// the others do not touch the band or its shadow-mask state (nuubOS).
++int SoftRenderer::SetupLane(Lane* L, Polygon** polygons, int npolys, s32 y, s32 yend)
+ {
+     int j = 0;
+     for (int i = 0; i < npolys; i++)
+     {
+         Polygon* polygon = polygons[i];
+         if (polygon->Degenerate) continue;
++        s32 ytop = polygon->YTop, ybot = polygon->YBottom;
++        if (ytop == ybot ? (ytop < y || ytop >= yend) : (ytop >= yend || ybot <= y))
++            continue;
++        L->PolyYRange[j][0] = ytop;
++        L->PolyYRange[j][1] = ybot;
+         RendererPolygon* rp = &L->PolygonList[j++];
+         SetupPolygon(rp, polygon);
+         if (polygon->YTop < y && polygon->YTop != polygon->YBottom)
+@@ -1699,7 +1707,7 @@ void SoftRenderer::RenderLane(int k)
+     s32 y0 = LaneStart[k], y1 = LaneStart[k+1];
+     s64 t0 = LaneClock();
+ 
+-    int j = SetupLane(L, LanePolygons, LaneNumPolygons, y0);
++    int j = SetupLane(L, LanePolygons, LaneNumPolygons, y0, y1);
+ 
+     RenderScanline(L, y0, j);
+     if (k > 0)
+@@ -1781,7 +1789,7 @@ void SoftRenderer::RenderPolygons(bool threaded, Polygon** polygons, int npolys)
+     if (!threaded)
+     {
+         Lane* L = &Lanes[0];
+-        int j = SetupLane(L, polygons, npolys, 0);
++        int j = SetupLane(L, polygons, npolys, 0, 192);
+ 
+         RenderScanline(L, 0, j);
+         for (s32 y = 1; y < 192; y++)
+diff --git a/src/GPU3D_Soft.h b/src/GPU3D_Soft.h
+index d5acd84..b59e3b0 100644
+--- a/src/GPU3D_Soft.h
++++ b/src/GPU3D_Soft.h
+@@ -464,6 +464,8 @@ private:
+     struct Lane
+     {
+         RendererPolygon PolygonList[2048];
++        // YTop/YBottom of PolygonList[i], read by every scanline (nuubOS)
++        s32 PolyYRange[2048][2];
+         u8 StencilBuffer[256*2];
+         bool PrevIsShadowMask;
+     };
+@@ -480,7 +482,7 @@ private:
+     void RenderShadowMaskScanline(Lane* L, RendererPolygon* rp, s32 y);
+     void RenderPolygonScanline(Lane* L, RendererPolygon* rp, s32 y);
+     void RenderScanline(Lane* L, s32 y, int npolys);
+-    int SetupLane(Lane* L, Polygon** polygons, int npolys, s32 y);
++    int SetupLane(Lane* L, Polygon** polygons, int npolys, s32 y, s32 yend);
+     void RenderLane(int k);
+     void LaneThreadFunc(int k);
+     void BalanceLanes();

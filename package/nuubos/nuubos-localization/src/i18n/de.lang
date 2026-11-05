@@ -1467,4 +1467,11 @@
 1466=Auto überspringt Bilder nur, wenn das Spiel langsamer wird
 1467=Reihen im Kreis
 1468=Auf dem Startbildschirm geht es nach dem letzten Eintrag zum ersten
-1469=USB-Audio
+1469=Suchsystem
+1470=Ändere es für die Portierung eines Spiels eines anderen Systems.
+1471=Wie in den Einstellungen ({0})
+1472=Wie das Spiel ({0})
+1473=Erweiterte Suche
+1474=Ändere ihn, wenn das Spiel nicht gefunden wird oder falsch zugeordnet ist.
+1475=Löscht den Ordner des Spiels mit seinem ganzen Inhalt für alle Benutzer endgültig. Spielstände bleiben erhalten.
+1476=USB-Audio

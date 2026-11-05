@@ -1467,4 +1467,11 @@
 1466=Otomatik, yalnızca oyun yavaşladığında kare atlar
 1467=Satırlarda başa dön
 1468=Ana ekranda son öğeden sonra ilk öğeye dönülür
-1469=USB Ses
+1469=Arama sistemi
+1470=Başka bir sistemin oyununun uyarlaması için değiştirin.
+1471=Ayarlar'daki gibi ({0})
+1472=Oyununki ({0})
+1473=Gelişmiş arama
+1474=Oyun bulunamazsa veya eşleşme yanlışsa değiştirin.
+1475=Oyunun klasörünü içindeki her şeyle birlikte tüm kullanıcılar için kalıcı olarak siler. Kayıtlar korunur.
+1476=USB Ses

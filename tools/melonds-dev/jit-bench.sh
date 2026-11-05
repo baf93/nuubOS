@@ -28,7 +28,8 @@ r=1; while [ $r -le $N ]; do
       sleep 1; P=$(pidof retroarch); renice -n -${m#pri} -p $P >/dev/null ;;
     esac
     t=0; fq=0; nf=0; while [ $t -lt 120 ] && [ "$(wc -l < /tmp/melon-bench.txt 2>/dev/null)" != 15 ]; do sleep 2; t=$((t+2)); fq=$((fq+$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq)/1000)); nf=$((nf+1)); done
-    nuubos-emuctl quit >/dev/null
+    # kill, not quit: a quit save with slot rotation overwrites the next slot
+    kill -9 $(pidof retroarch) 2>/dev/null
     for i in $(seq 1 25); do nuubos-emuctl status | grep -q "^state=idle" && break; sleep 1; done
     sleep 2; umount $LIB
     echo "$r $x mhz $((fq/(nf+1))) $(awk '{w+=$2; c+=$3} END {printf "wall %.3f cpu %.3f n %d", w/NR, c/NR, NR}' /tmp/melon-bench.txt) | $(awk '{printf "%s ", $2}' /tmp/melon-bench.txt)"

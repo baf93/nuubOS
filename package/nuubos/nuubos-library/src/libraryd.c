@@ -31,6 +31,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <ftw.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
@@ -385,6 +386,8 @@ static const char *rel_name(const char *rel)
 	return rel_on_sd2(rel) ? rel + SD2_PREFIX_LEN : rel;
 }
 
+static const char *rom_name(const char *rel);
+
 /*
  * Fast discovery identity (EPIC-012): system + file name + size. Moving a
  * ROM to another folder keeps its identity (and the users' history);
@@ -394,7 +397,7 @@ static void game_id_for(int sys, const char *rel, long long size, char out[17])
 {
 	char key[600];
 
-	snprintf(key, sizeof(key), "%s\x1f%lld", rel_name(rel), size);
+	snprintf(key, sizeof(key), "%s\x1f%lld", rom_name(rel), size);
 	snprintf(out, 17, "%016llx",
 		 (unsigned long long)fnv1a64(systems[sys].id, key));
 }
@@ -705,6 +708,49 @@ static int system_by_folder(const char *name)
 	return -1;
 }
 
+/*
+ * Where the ROM's name starts in rel. A game in a folder of its own
+ * (GitHub #30: PSP homebrew and PSN games, "<Folder>/EBOOT.PBP") is named
+ * after the folder, unless the folder is a system's: every such game is
+ * called EBOOT, and its covers, metadata and identity would collide.
+ */
+static const char *rom_name(const char *rel)
+{
+	const char *name = rel_name(rel);
+	const char *start;
+	char parent[NAME_MAX + 1];
+	size_t len;
+
+	if (strcasecmp(name, "EBOOT.PBP") || name == rel || name[-1] != '/')
+		return name;
+	start = name - 1;
+	while (start > rel && start[-1] != '/' && start[-1] != ':')
+		start--;
+	len = (size_t)(name - 1 - start);
+	if (!len || len >= sizeof(parent))
+		return name;
+	memcpy(parent, start, len);
+	parent[len] = '\0';
+	return system_by_folder(parent) < 0 ? start : name;
+}
+
+/* The ROM's name without extension: covers, metadata, scraper. */
+static void rom_stem(const char *rel, char *out, size_t size)
+{
+	const char *name = rom_name(rel);
+	const char *slash = strchr(name, '/');
+	char *dot;
+
+	if (slash) {
+		snprintf(out, size, "%.*s", (int)(slash - name), name);
+		return;
+	}
+	copy_text(out, size, name);
+	dot = strrchr(out, '.');
+	if (dot && dot != out)
+		*dot = '\0';
+}
+
 static const char *extension_of(const char *name)
 {
 	const char *dot = strrchr(name, '.');
@@ -792,7 +838,9 @@ static char *title_from_rel(int sys, const char *rel)
 
 	copy_text(stem, sizeof(stem), rel_name(rel));
 	ext_len = system_extension_len(sys, stem);
-	if (ext_len) {
+	if (rom_name(rel) != rel_name(rel)) {
+		rom_stem(rel, stem, sizeof(stem));
+	} else if (ext_len) {
 		stem[strlen(stem) - ext_len - 1] = '\0';
 	} else {
 		dot = strrchr(stem, '.');
@@ -1361,16 +1409,12 @@ static bool regular_file(const char *path)
 static char *find_cover(int sys, const char *rel)
 {
 	static const char *const exts[] = { "png", "jpg", "jpeg", NULL };
-	const char *name = rel_name(rel);
+	const char *name = rom_name(rel);
 	char stem[512];
 	char cover_rel[PATH_MAX];
 	char path[PATH_MAX];
-	char *dot;
 
-	copy_text(stem, sizeof(stem), name);
-	dot = strrchr(stem, '.');
-	if (dot && dot != stem)
-		*dot = '\0';
+	rom_stem(rel, stem, sizeof(stem));
 	for (int i = 0; exts[i]; i++)
 		if (pathf(path, sizeof(path), COVERS_ROOT "/%s/%s.%s", systems[sys].id, stem, exts[i]) &&
 		    regular_file(path))
@@ -1482,13 +1526,9 @@ static void read_meta_index(struct scan_item *it)
 	char stem[512];
 	char path[PATH_MAX];
 	char line[1024];
-	char *dot;
 	FILE *fp;
 
-	copy_text(stem, sizeof(stem), rel_name(it->rel));
-	dot = strrchr(stem, '.');
-	if (dot && dot != stem)
-		*dot = '\0';
+	rom_stem(it->rel, stem, sizeof(stem));
 	if (!pathf(path, sizeof(path), METADATA_ROOT "/%s/%s.txt", systems[it->sys].id, stem))
 		return;
 	fp = fopen(path, "r");
@@ -2923,16 +2963,6 @@ static void build_filters(struct strbuf *b)
 /* Game Details and Delete Game                                       */
 /* ------------------------------------------------------------------ */
 
-static void rom_stem(const char *rel, char *out, size_t size)
-{
-	char *dot;
-
-	copy_text(out, size, rel_name(rel));
-	dot = strrchr(out, '.');
-	if (dot && dot != out)
-		*dot = '\0';
-}
-
 /*
  * Provider-neutral metadata (EPIC-015): one "key=value" per line, values on
  * one line ("\n" escaped by the writer). Unknown keys are passed through as
@@ -3045,6 +3075,28 @@ static void append_metadata(struct strbuf *b, const struct game *g)
 	fclose(fp);
 }
 
+/* The catalog path of a "<Folder>/EBOOT.PBP" game's folder (rom_name). */
+static bool game_folder(const char *rel, char *out, size_t size)
+{
+	const char *name = rel_name(rel);
+
+	if (rom_name(rel) == name)
+		return false;
+	snprintf(out, size, "%.*s", (int)(name - 1 - rel), rel);
+	return true;
+}
+
+/* Another catalog game inside that folder (then only the EBOOT goes). */
+static bool folder_shared(const struct game *self, const char *folder)
+{
+	size_t len = strlen(folder);
+
+	for (size_t i = 0; i < game_count; i++)
+		if (&games[i] != self && !strncmp(games[i].rel, folder, len) && games[i].rel[len] == '/')
+			return true;
+	return false;
+}
+
 static void build_details(struct strbuf *b, const struct game *g)
 {
 	const struct history_entry *h = history_for(g->id, false);
@@ -3054,6 +3106,12 @@ static void build_details(struct strbuf *b, const struct game *g)
 	append_game(b, "game", g);
 	sb_append(b, "system_name=%s\nsessions=%d\npath=%s\nsize=%lld\nadded=%lld\n",
 		  systems[g->sys].name, h ? hist_sessions(h) : 0, g->rel, g->size, g->added);
+	/* The ROM's name for covers and metadata (rom_stem). */
+	rom_stem(g->rel, file, sizeof(file));
+	sb_append(b, "name=%s\n", file);
+	/* Delete Game removes the whole folder (delete_game). */
+	if (game_folder(g->rel, file, sizeof(file)) && !folder_shared(g, file))
+		sb_append(b, "folder=1\n");
 	/* Absolute file and the ROM folder of its card, while the card is there. */
 	if (rom_path(file, sizeof(file), g->rel))
 		sb_append(b, "file=%s\nroot=%s\n", file,
@@ -3095,6 +3153,18 @@ static bool referenced_elsewhere(const char *rel, const struct game *self)
  * or on a games card that is not inserted) loses only its library entry,
  * cover and metadata: no file is touched (user request 2026-10-20).
  */
+static int remove_entry(const char *path, const struct stat *st, int flag, struct FTW *ftw)
+{
+	(void)st;
+	(void)flag;
+	(void)ftw;
+	if (remove(path) != 0 && errno != ENOENT) {
+		log_msg("delete %s: %s", path, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
 static const char *delete_game(long idx)
 {
 	static char owned[128][PATH_MAX];
@@ -3107,6 +3177,21 @@ static const char *delete_game(long idx)
 
 	if (!g->available)
 		goto entry;
+	/* A game in a folder of its own (GitHub #30, user 2026-10-30): the
+	 * whole folder, its data beside the EBOOT.PBP included. Never another
+	 * system's folder, a mount point below it, or a folder holding other
+	 * games of the catalog. */
+	{
+		char folder[PATH_MAX];
+
+		if (game_folder(g->rel, folder, sizeof(folder)) && !folder_shared(g, folder)) {
+			if (!rom_path(path, sizeof(path), folder) ||
+			    nftw(path, remove_entry, 16, FTW_DEPTH | FTW_PHYS | FTW_MOUNT) != 0)
+				return "io";
+			sync();
+			goto entry;
+		}
+	}
 	/* .m3u -> discs (.cue) -> tracks (.bin): two descriptor levels. */
 	n = top = descriptor_entries(g->rel, owned, 64);
 	for (size_t i = 0; i < top; i++) {
@@ -3321,6 +3406,16 @@ static void handle_command(struct client *c, char *line)
 		struct strbuf b = { 0 };
 
 		build_filters(&b);
+		send_text(c, b.data, b.len);
+		free(b.data);
+	} else if (!strcmp(line, "SYSTEMS")) {
+		/* Every system of the registry, with or without games (Game
+		 * Details: Search System, GitHub #29). */
+		struct strbuf b = { 0 };
+
+		for (int i = 0; i < system_count; i++)
+			sb_append(&b, "system=%s\t%s\n", systems[i].id, systems[i].name);
+		sb_append(&b, "end=1\n");
 		send_text(c, b.data, b.len);
 		free(b.data);
 	} else if (!active_user[0] &&

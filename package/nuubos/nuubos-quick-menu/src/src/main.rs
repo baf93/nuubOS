@@ -1201,7 +1201,7 @@ fn read_audio_snapshot() -> AudioSnapshot {
 fn audio_output_name(ui: &QuickMenuWindow, output: &str) -> String {
     match output {
         "bluetooth" => tr(ui, 331, "Bluetooth Audio"),
-        "usb" => tr(ui, 1469, "USB Audio"),
+        "usb" => tr(ui, 1476, "USB Audio"),
         "analog" => tr(ui, 332, "Analog Audio"),
         "headphones" => tr(ui, 330, "Headphones"),
         "hdmi" => "HDMI".to_owned(),
@@ -1257,7 +1257,7 @@ fn audio_dropdown_options(ui: &QuickMenuWindow, snapshot: &AudioSnapshot) -> Vec
     }
 
     if snapshot.usb_available {
-        options.push(("usb", tr(ui, 1469, "USB Audio")));
+        options.push(("usb", tr(ui, 1476, "USB Audio")));
     }
 
     if snapshot.headphones_available {

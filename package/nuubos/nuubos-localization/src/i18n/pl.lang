@@ -1467,4 +1467,11 @@
 1466=Auto pomija klatki tylko, gdy gra zwalnia
 1467=Zapętlone rzędy
 1468=Na ekranie głównym po ostatnim elemencie wraca się do pierwszego
-1469=Dźwięk USB
+1469=System wyszukiwania
+1470=Zmień dla portu gry z innego systemu.
+1471=Jak w Ustawieniach ({0})
+1472=Jak gra ({0})
+1473=Wyszukiwanie zaawansowane
+1474=Zmień, jeśli gra nie została znaleziona lub dopasowanie jest błędne.
+1475=Trwale usuwa folder gry z całą zawartością dla wszystkich użytkowników. Zapisy zostają.
+1476=Dźwięk USB
