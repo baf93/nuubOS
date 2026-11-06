@@ -1,0 +1,71 @@
+Build host tools without the removed OpenSSL 4 ENGINE API.
+
+--- a/lib/rsa/rsa-sign.c
++++ b/lib/rsa/rsa-sign.c
+@@ -101,6 +101,9 @@
+ static int rsa_engine_get_pub_key(const char *keydir, const char *name,
+ 				  ENGINE *engine, EVP_PKEY **evpp)
+ {
++#if OPENSSL_VERSION_MAJOR >= 4
++	return -ENOTSUP;
++#else
+ 	const char *engine_id;
+ 	char key_id[1024];
+ 	EVP_PKEY *key = NULL;
+@@ -156,6 +159,7 @@
+ 	*evpp = key;
+ 
+ 	return 0;
++#endif
+ }
+ 
+ /**
+@@ -230,6 +234,9 @@
+ 				   const char *keyfile,
+ 				   ENGINE *engine, EVP_PKEY **evpp)
+ {
++#if OPENSSL_VERSION_MAJOR >= 4
++	return -ENOTSUP;
++#else
+ 	const char *engine_id;
+ 	char key_id[1024];
+ 	EVP_PKEY *key = NULL;
+@@ -292,6 +299,7 @@
+ 	*evpp = key;
+ 
+ 	return 0;
++#endif
+ }
+ 
+ /**
+@@ -327,6 +335,10 @@
+ 
+ static int rsa_engine_init(const char *engine_id, ENGINE **pe)
+ {
++#if OPENSSL_VERSION_MAJOR >= 4
++	fprintf(stderr, "OpenSSL engines are not supported by OpenSSL 4\n");
++	return -ENOTSUP;
++#else
+ 	const char *key_pass;
+ 	ENGINE *e;
+ 	int ret;
+@@ -371,14 +383,19 @@
+ err_engine_init:
+ 	ENGINE_free(e);
+ 	return ret;
++#endif
+ }
+ 
+ static void rsa_engine_remove(ENGINE *e)
+ {
++#if OPENSSL_VERSION_MAJOR >= 4
++	(void)e;
++#else
+ 	if (e) {
+ 		ENGINE_finish(e);
+ 		ENGINE_free(e);
+ 	}
++#endif
+ }
+ 
+ static int rsa_sign_with_key(EVP_PKEY *pkey, struct padding_algo *padding_algo,
