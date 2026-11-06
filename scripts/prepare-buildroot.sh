@@ -7,6 +7,7 @@ PATCHES=(
     "$ROOT/patches/buildroot/0001-graphics-mesa25-wlroots0202-buildroot-2026.08.patch"
     "$ROOT/patches/buildroot/0002-ffmpeg-7.1.5-buildroot-2026.08.patch"
     "$ROOT/patches/buildroot/0003-libopenssl-4.0.3-buildroot-2026.08.patch"
+    "$ROOT/patches/buildroot/0004-ca-certificates-openssl-rehash.patch"
 )
 MODE="${1:-apply}"
 
