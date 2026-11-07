@@ -1,0 +1,29 @@
+Start the RG40XX-H backlight before applying its lowest brightness.
+
+--- a/drivers/video/backlight/pwm_bl.c
++++ b/drivers/video/backlight/pwm_bl.c
+@@ -8,6 +8,7 @@
+ #include <linux/delay.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/module.h>
++#include <linux/of.h>
+ #include <linux/kernel.h>
+ #include <linux/init.h>
+ #include <linux/platform_device.h>
+@@ -99,6 +100,16 @@
+ 
+ 	if (brightness > 0) {
+ 		pwm_get_state(pb->pwm, &state);
++		if (of_machine_is_compatible("anbernic,rg40xx-h") &&
++		    bl->props.max_brightness == 100 && brightness == 1 &&
++		    state.duty_cycle == 0) {
++			state.duty_cycle = compute_duty_cycle(pb, 2, &state);
++			state.enabled = true;
++			if (!pwm_apply_might_sleep(pb->pwm, &state)) {
++				pwm_backlight_power_on(pb);
++				msleep(200);
++			}
++		}
+ 		state.duty_cycle = compute_duty_cycle(pb, brightness, &state);
+ 		state.enabled = true;
+ 		pwm_apply_might_sleep(pb->pwm, &state);
