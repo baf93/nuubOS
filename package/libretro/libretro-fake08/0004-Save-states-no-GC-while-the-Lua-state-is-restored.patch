@@ -1,0 +1,36 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] Save states: no GC while the Lua state is restored
+
+eris rebuilds function prototypes and links them to their parent without
+GC write barriers. An incremental GC step during the restore (RetroArch
+saves an undo state right before every load, which leaves the collector
+mid-cycle) could sweep a child prototype while it was still being filled
+in: use after free in u_proto, "malloc(): unaligned tcache chunk
+detected", RetroArch killed. Found with AddressSanitizer and a libretro
+test host (save, undo save, load). The collector is stopped for the
+restore and restarted afterwards.
+
+Upstream-Status: Pending
+---
+--- a/source/vm.cpp
++++ b/source/vm.cpp
+@@ -1518,7 +1518,18 @@
+ 	lua_getfield(_luaState, -1, "restore_all");
+ 	lua_pushlstring(_luaState, src, len);
+ 
+-	if (lua_pcall(_luaState, 1, 0, 0) != 0) {
++	// nuubOS: eris links the objects it rebuilds (child function
++	// prototypes, constants, names) without GC write barriers, so an
++	// incremental GC step during the restore could free a prototype still
++	// being filled in (heap corruption, "malloc(): unaligned tcache chunk").
++	// No collection while the state is restored.
++	int gcRunning = lua_gc(_luaState, LUA_GCISRUNNING, 0);
++	lua_gc(_luaState, LUA_GCSTOP, 0);
++	int status = lua_pcall(_luaState, 1, 0, 0);
++	if (gcRunning)
++		lua_gc(_luaState, LUA_GCRESTART, 0);
++
++	if (status != 0) {
+ 		std::string e = lua_tostring(_luaState, -1);
+ 		fprintf(stderr, "[fake08] Lua state not restored: %s\n", e.c_str());
+ 		lua_pop(_luaState, 2);
