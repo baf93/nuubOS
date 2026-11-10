@@ -40,6 +40,7 @@ tools/ota/make-update.sh ~/nuubos-release nightly ~/nuubos-release-notes.txt
 tools/ota/add-image.sh ~/nuubos-release
 ```
 
+- Other download hosts: `NUUBOS_UPDATE_SOURCES="https://host1/path https://host2/path"` in front of `make-update.sh` writes them into the signed manifest; consoles that install that release try them before GitHub (same folder layout as the GitHub releases). Without it the consoles use GitHub only.
 - `make-update.sh` asks for the passphrase, checks it against `update-key.pub`,
   compresses `rootfs.ext4` into the payload and signs the manifest. The notes file
   is plain text, at most 4000 bytes, one item per line: it appears on the console

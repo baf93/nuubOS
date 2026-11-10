@@ -17,6 +17,9 @@
 # post-build.sh from VERSION and the image's channel, which must be CHANNEL). The manifest is signed with the release key,
 # derived from the release passphrase (tools/ota/release-key.py: asked once
 # here, checked against update-key.pub before the long compression).
+# NUUBOS_UPDATE_SOURCES: other https hosts with the same layout, space
+# separated, tried before GitHub by the consoles that install this release
+# (empty: GitHub only).
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="${1:-}"; CHANNEL="${2:-}"; NOTES_FILE="${3:-}"
@@ -60,8 +63,8 @@ gzip -9 -n -c "$IMG" > "$OUT/$TAG/$PAYLOAD" || exit 1
 SHA="$(sha256sum < "$OUT/$TAG/$PAYLOAD" | cut -d' ' -f1)"
 SIZE="$(stat -c %s "$OUT/$TAG/$PAYLOAD")"
 M="$OUT/channel-$CHANNEL/nuubos-update.manifest"
-printf 'format=2\nchannel=%s\nversion=%s\nserial=%s\nbuild=%s\npayload=%s/%s\nsize=%s\nsha256=%s\nimage_size=%s\nimage_sha256=%s\nnotes=%s\n' \
-    "$CHANNEL" "$VERSION" "$SERIAL" "$BUILD" "$TAG" "$PAYLOAD" "$SIZE" "$SHA" "$IMAGE_SIZE" "$IMAGE_SHA" "$NOTES" > "$M"
+printf 'format=2\nchannel=%s\nversion=%s\nserial=%s\nbuild=%s\npayload=%s/%s\nsize=%s\nsha256=%s\nimage_size=%s\nimage_sha256=%s\nnotes=%s\nsources=%s\n' \
+    "$CHANNEL" "$VERSION" "$SERIAL" "$BUILD" "$TAG" "$PAYLOAD" "$SIZE" "$SHA" "$IMAGE_SIZE" "$IMAGE_SHA" "$NOTES" "${NUUBOS_UPDATE_SOURCES:-}" > "$M"
 python3 "$KEYTOOL" sign "$M" "$M.sig" || exit 1
 printf 'TAG=%s\nCHANNEL=%s\nVERSION=%s\nPAYLOAD=%s\n' "$TAG" "$CHANNEL" "$VERSION" "$PAYLOAD" > "$OUT/release.env"
 if [ -n "$NOTES_FILE" ]; then cp "$NOTES_FILE" "$OUT/release-notes.txt"; else rm -f "$OUT/release-notes.txt"; fi

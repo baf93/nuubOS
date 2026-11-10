@@ -23,6 +23,13 @@
  * (replaced at every publication); the manifest names the payload by
  * "<release tag>/<file>", a versioned release of its own.
  *
+ * Sources: the same layout can be served from other hosts. A verified
+ * manifest may carry "sources=" (up to MAX_SOURCES https base URLs, space
+ * separated); the list is kept in SOURCES_FILE and tried in order, with
+ * UPDATE_URL always last, for the manifests and the payload. Only a
+ * signed manifest changes the list, so moving the downloads elsewhere is
+ * one release away and a host can never redirect the consoles by itself.
+ *
  * Trust comes from the signature, never from the transport: the manifest
  * (a small key=value file) is signed with the nuubOS release key (Ed25519)
  * and carries the payload size and SHA-256 and the SHA-256 of the system
@@ -84,6 +91,14 @@
 #endif
 #ifndef UPDATE_LOCK
 #define UPDATE_LOCK "/run/nuubos-update.lock"
+#endif
+#ifndef SOURCES_FILE
+#define SOURCES_FILE "/state/update/sources"
+#endif
+#define MAX_SOURCES 4
+/* Host tests serve the sources over plain http. */
+#ifndef SOURCE_SCHEME
+#define SOURCE_SCHEME "https://"
 #endif
 #ifndef UPDATE_DEFAULT_CHANNEL
 #define UPDATE_DEFAULT_CHANNEL "stable"
@@ -444,6 +459,48 @@ static bool manifest_offers_update(void)
 	       atoll(serial) > current_serial();
 }
 
+/* The download sources in order: SOURCES_FILE, then UPDATE_URL. */
+static int sources(char list[MAX_SOURCES + 1][512])
+{
+	char line[512];
+	int n = 0;
+	FILE *fp = fopen(SOURCES_FILE, "r");
+
+	while (fp && n < MAX_SOURCES && fgets(line, sizeof(line), fp)) {
+		line[strcspn(line, "\r\n")] = '\0';
+		if (!strncmp(line, SOURCE_SCHEME, strlen(SOURCE_SCHEME)) && strcmp(line, UPDATE_URL))
+			snprintf(list[n++], sizeof(list[0]), "%s", line);
+	}
+	if (fp)
+		fclose(fp);
+	snprintf(list[n++], sizeof(list[0]), "%s", UPDATE_URL);
+	return n;
+}
+
+/* sources= of the verified manifest becomes the list (none: removed). */
+static void save_sources(const char *manifest)
+{
+	char value[MAX_SOURCES * 512], *save = NULL, *url;
+	FILE *fp;
+	int n = 0;
+
+	if (!file_value(manifest, "sources", value, sizeof(value)) || !value[0]) {
+		unlink(SOURCES_FILE);
+		return;
+	}
+	if (!(fp = fopen(SOURCES_FILE ".tmp", "w")))
+		return;
+	for (url = strtok_r(value, " ", &save); url && n < MAX_SOURCES; url = strtok_r(NULL, " ", &save))
+		if (!strncmp(url, SOURCE_SCHEME, strlen(SOURCE_SCHEME)) && strlen(url) < 500 && !strpbrk(url, "\"'\\")) {
+			fprintf(fp, "%s\n", url);
+			n++;
+		}
+	if (fflush(fp) == 0 && fsync(fileno(fp)) == 0 && fclose(fp) == 0)
+		rename(SOURCES_FILE ".tmp", SOURCES_FILE);
+	else
+		unlink(SOURCES_FILE ".tmp");
+}
+
 /* No answer at all (DNS, connection, timeout) = the network; an HTTP error
  * (GitHub rate limit, 5xx) = the update service. */
 static const char *http_failure(long status)
@@ -459,30 +516,44 @@ static const char *http_failure(long status)
 static const char *fetch_channel(const char *channel, long long *serial)
 {
 	char url[1024], format[16], name[32], text[32];
+	char list[MAX_SOURCES + 1][512];
+	const char *failure = "";
 	long status;
+	int n = sources(list);
 
-	snprintf(url, sizeof(url), "%s/channel-%s/nuubos-update.manifest", UPDATE_URL, channel);
-	status = fetch(url, UPDATE_DIR "/manifest.cand", false, 30);
-	if (status == 404) {
-		unlink(UPDATE_DIR "/manifest.cand");
-		return "";
+	/* The first source with a manifest that verifies; a source that has
+	 * nothing (404) or fails lets the next one answer. */
+	for (int i = 0; i < n; i++) {
+		snprintf(url, sizeof(url), "%s/channel-%s/nuubos-update.manifest", list[i], channel);
+		status = fetch(url, UPDATE_DIR "/manifest.cand", false, 30);
+		if (status != 200) {
+			if (status != 404 && !*failure)
+				failure = http_failure(status);
+			continue;
+		}
+		snprintf(url, sizeof(url), "%s/channel-%s/nuubos-update.manifest.sig", list[i], channel);
+		status = fetch(url, UPDATE_DIR "/manifest.cand.sig", false, 30);
+		if (status != 200) {
+			if (!*failure)
+				failure = http_failure(status);
+			continue;
+		}
+		if (!manifest_file_verified(UPDATE_DIR "/manifest.cand", UPDATE_DIR "/manifest.cand.sig")) {
+			failure = "signature";
+			continue;
+		}
+		file_value(UPDATE_DIR "/manifest.cand", "format", format, sizeof(format));
+		file_value(UPDATE_DIR "/manifest.cand", "channel", name, sizeof(name));
+		file_value(UPDATE_DIR "/manifest.cand", "serial", text, sizeof(text));
+		/* Signed but for another channel or format: nothing usable there. */
+		if (atoi(format) != MANIFEST_FORMAT || strcmp(name, channel))
+			return "";
+		*serial = atoll(text);
+		return NULL;
 	}
-	if (status != 200)
-		return http_failure(status);
-	snprintf(url, sizeof(url), "%s/channel-%s/nuubos-update.manifest.sig", UPDATE_URL, channel);
-	status = fetch(url, UPDATE_DIR "/manifest.cand.sig", false, 30);
-	if (status != 200)
-		return http_failure(status);
-	if (!manifest_file_verified(UPDATE_DIR "/manifest.cand", UPDATE_DIR "/manifest.cand.sig"))
-		return "signature";
-	file_value(UPDATE_DIR "/manifest.cand", "format", format, sizeof(format));
-	file_value(UPDATE_DIR "/manifest.cand", "channel", name, sizeof(name));
-	file_value(UPDATE_DIR "/manifest.cand", "serial", text, sizeof(text));
-	/* Signed but for another channel or format: nothing usable there. */
-	if (atoi(format) != MANIFEST_FORMAT || strcmp(name, channel))
-		return "";
-	*serial = atoll(text);
-	return NULL;
+	unlink(UPDATE_DIR "/manifest.cand");
+	/* Nothing published anywhere (every source answered 404): "". */
+	return failure;
 }
 
 /*
@@ -532,6 +603,7 @@ static int cmd_check(void)
 	}
 	rename(UPDATE_DIR "/manifest.new", UPDATE_DIR "/manifest");
 	rename(UPDATE_DIR "/manifest.sig.new", UPDATE_DIR "/manifest.sig");
+	save_sources(UPDATE_DIR "/manifest");
 	file_value(UPDATE_DIR "/manifest", "version", version, sizeof(version));
 	if (manifest_offers_update())
 		printf("OK available %s\n", version);
@@ -620,10 +692,22 @@ static int cmd_download(void)
 	unlink(UPDATE_DIR "/payload");
 	if (!room_for(size))
 		return fail("space");
-	snprintf(url, sizeof(url), "%s/%s", UPDATE_URL, payload);
 	trim_part();
 	unlink(PART_CLEAN);
-	status = fetch(url, UPDATE_DIR "/payload.part", true, 0);
+	/* Source after source; the part resumes on the next one (the checksum
+	 * below covers the whole file whichever host gave each piece). */
+	{
+		char list[MAX_SOURCES + 1][512];
+		int n = sources(list);
+
+		status = -1;
+		for (int i = 0; i < n && !cancelled; i++) {
+			snprintf(url, sizeof(url), "%s/%s", list[i], payload);
+			status = fetch(url, UPDATE_DIR "/payload.part", true, 0);
+			if (status == 200 || status == 206 || status == 416 || status == -2)
+				break;
+		}
+	}
 	if (status != -2)
 		mark_part_clean();
 	if (cancelled)
