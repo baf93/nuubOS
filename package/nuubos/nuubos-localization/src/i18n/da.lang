@@ -1492,3 +1492,6 @@
 1491=Tryk på den knap, du vil bekræfte med. Den anden går tilbage. Du kan ændre det senere i Indstillinger.
 1492=Nederste knap
 1493=Højre knap
+1494=Åbn låget for at vække
+1495=Når låget åbnes, vågner konsollen. Dvale med lukket låg bruger mere strøm.
+1496=Med lukket låg bruges HyperSleep: kun tænd/sluk-knappen vækker den.

@@ -78,6 +78,7 @@ struct config_state {
     bool hypersleep;            /* sleep with the SoC off (default) */
     bool fast_startup;          /* cold starts reuse the DRAM training (experimental, off) */
     bool power_key_sleep;       /* power key: press = Sleep, hold = power menu */
+    bool lid_wake;              /* clamshells: a lid-close sleep opens with the lid */
 };
 
 struct runtime_state {
@@ -285,6 +286,7 @@ static int atomic_save_config(const struct config_state *cfg)
     fprintf(f, "HYPERSLEEP=%d\n", cfg->hypersleep ? 1 : 0);
     fprintf(f, "EXPERIMENTAL_FAST_STARTUP=%d\n", cfg->fast_startup ? 1 : 0);
     fprintf(f, "POWER_KEY_SLEEP=%d\n", cfg->power_key_sleep ? 1 : 0);
+    fprintf(f, "LID_WAKE=%d\n", cfg->lid_wake ? 1 : 0);
     if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
         fclose(f); unlink(tmp); return -1;
     }
@@ -318,6 +320,9 @@ static void config_defaults(struct config_state *cfg)
     /* On (user decision 2026-10-27, EPIC-045): a press sleeps, a hold
      * opens the power menu. */
     cfg->power_key_sleep = true;
+    /* On (user decision 2026-11-10): opening a clamshell wakes it, as
+     * users expect; that sleep keeps the SoC powered (~3-4 %/h). */
+    cfg->lid_wake = true;
 }
 
 /* Charge limit: 80..100 in steps of 5 (100 = charge to full). */
@@ -362,6 +367,8 @@ static void load_config(struct config_state *cfg)
             cfg->fast_startup = strcmp(val, "0") != 0;
         } else if (!strcmp(key, "POWER_KEY_SLEEP")) {
             cfg->power_key_sleep = strcmp(val, "0") != 0;
+        } else if (!strcmp(key, "LID_WAKE")) {
+            cfg->lid_wake = strcmp(val, "0") != 0;
         }
     }
     fclose(f);
@@ -538,12 +545,14 @@ static int connect_unix(const char *path)
  * Hypersleep (user decision 2026-10-22, on by default): the SoC is powered
  * off during sleep, ~0.x %/h, only the power key wakes it. Off: the SoC
  * stays powered, START and a lid wake it too, ~3-4 %/h. nuubos-suspend
- * tells the firmware which one (platform.md).
+ * tells the firmware which one (platform.md). A sleep started by closing a
+ * clamshell's lid with Lid Wake on is a quick one, so opening the lid
+ * wakes it (HyperSleep powers the lid's GPIO bank off).
  */
-static int run_suspend(const struct runtime_state *st)
+static int run_suspend(const struct runtime_state *st, bool by_lid)
 {
-    char *argv[]={"/usr/sbin/nuubos-suspend",
-                  st->cfg.hypersleep ? "hypersleep" : "quick",NULL};
+    bool hyper = st->cfg.hypersleep && !(by_lid && st->cfg.lid_wake);
+    char *argv[]={"/usr/sbin/nuubos-suspend", hyper ? "hypersleep" : "quick",NULL};
     return run_argv(argv);
 }
 
@@ -647,7 +656,7 @@ static void run_restart(struct runtime_state *st)
     mark_activity(st);
 }
 
-static void enter_sleep(struct runtime_state *st)
+static void enter_sleep_mode(struct runtime_state *st, bool by_lid)
 {
     int suspend_rc;
 
@@ -659,7 +668,7 @@ static void enter_sleep(struct runtime_state *st)
     snprintf(st->last_wake_reason,sizeof(st->last_wake_reason),"sleeping");
     notify_subscribers();
 
-    suspend_rc = run_suspend(st);
+    suspend_rc = run_suspend(st, by_lid);
     st->last_sleep_elapsed_ms = boottime_ms() - st->stage_enter_ms;
     if (run_lifecycle_helper(LIFECYCLE_POST_WAKE, "wake") != 0)
         fprintf(stderr, "systemd: post-wake hook failed\n");
@@ -675,6 +684,11 @@ static void enter_sleep(struct runtime_state *st)
     }
     mark_activity(st);
     notify_subscribers();
+}
+
+static void enter_sleep(struct runtime_state *st)
+{
+    enter_sleep_mode(st, false);
 }
 
 static bool test_bit(const unsigned long *bits, unsigned int bit)
@@ -759,7 +773,7 @@ static void lid_policy(struct runtime_state *st)
     if (!st->lid_closed || was_closed || st->idle_stage != IDLE_ACTIVE)
         return;
     for (int i = 0; i <= LID_MAX_RESLEEPS && st->lid_closed && !hdmi_active(); i++) {
-        enter_sleep(st);
+        enter_sleep_mode(st, true);
         refresh_lid(st);
         if (!strcmp(st->last_wake_reason, "suspend-failed"))
             break;
@@ -1117,6 +1131,7 @@ static void reply_status(int fd, const struct runtime_state *st)
         "hypersleep=%d\n"
         "fast_startup=%d\n"
         "power_key_sleep=%d\n"
+        "lid_wake=%d\n"
         "battery.percent=%d\n"
         "battery.state=%s\n"
         "cpu.freq_khz=%lld\n"
@@ -1169,6 +1184,7 @@ static void reply_status(int fd, const struct runtime_state *st)
         st->cfg.hypersleep ? 1 : 0,
         st->cfg.fast_startup ? 1 : 0,
         st->cfg.power_key_sleep ? 1 : 0,
+        st->cfg.lid_wake ? 1 : 0,
         st->battery_percent,st->battery_state,
         cpu,gpu,tcpu,tgpu,mem_total_kib,mem_available_kib,uptime,model,kernel,ip,
         sv.sd1_health,sv.sd1_action,sv.userdata_total,sv.userdata_free,
@@ -1282,6 +1298,12 @@ static void handle_command(struct client *c, struct runtime_state *st, const cha
         st->cfg.fast_startup=x==1;
         if(atomic_save_config(&st->cfg)!=0){(void)write_all(c->fd,"ERR persist failed\n");return;}
         apply_fast_startup(&st->cfg);
+        (void)write_all(c->fd,"OK\n"); notify_subscribers(); return;
+    }
+    if(sscanf(line,"SET LID_WAKE %d",&x)==1){
+        if(x!=0 && x!=1){(void)write_all(c->fd,"ERR invalid value\n");return;}
+        st->cfg.lid_wake=x==1;
+        if(atomic_save_config(&st->cfg)!=0){(void)write_all(c->fd,"ERR persist failed\n");return;}
         (void)write_all(c->fd,"OK\n"); notify_subscribers(); return;
     }
     if(sscanf(line,"SET POWER_KEY_SLEEP %d",&x)==1){

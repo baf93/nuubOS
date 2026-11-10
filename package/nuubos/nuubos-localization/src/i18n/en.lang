@@ -1492,3 +1492,6 @@
 1491=Press the button you want to confirm with. The other one goes back. You can change this later in Settings.
 1492=Bottom Button
 1493=Right Button
+1494=Open Lid to Wake
+1495=Opening the lid wakes the console. Sleep with the lid closed uses more battery.
+1496=Closing the lid uses HyperSleep: only the power button wakes it.

@@ -1492,3 +1492,6 @@
 1491=Pressione o botão com o qual deseja confirmar. O outro volta. Você pode mudar isso depois em Configurações.
 1492=Botão inferior
 1493=Botão direito
+1494=Abrir a tampa para despertar
+1495=Abrir a tampa desperta o console. A suspensão com a tampa fechada gasta mais bateria.
+1496=Ao fechar a tampa usa HyperSleep: só o botão liga/desliga desperta.

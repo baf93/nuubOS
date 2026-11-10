@@ -1492,3 +1492,6 @@
 1491=Paina painiketta, jolla haluat vahvistaa. Toinen palaa takaisin. Voit muuttaa tätä myöhemmin kohdassa Asetukset.
 1492=Alapainike
 1493=Oikea painike
+1494=Herätä kantta avaamalla
+1495=Kannen avaaminen herättää konsolin. Lepotila kansi kiinni kuluttaa enemmän akkua.
+1496=Kansi kiinni käytetään HyperSleepiä: vain virtapainike herättää sen.

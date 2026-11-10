@@ -1492,3 +1492,6 @@
 1491=Naciśnij przycisk, którym chcesz zatwierdzać. Drugi służy do powrotu. Możesz to później zmienić tutaj: Ustawienia.
 1492=Dolny przycisk
 1493=Prawy przycisk
+1494=Wybudzaj po otwarciu klapki
+1495=Otwarcie klapki wybudza konsolę. Uśpienie z zamkniętą klapką zużywa więcej baterii.
+1496=Po zamknięciu klapki HyperSleep: budzi ją tylko przycisk zasilania.

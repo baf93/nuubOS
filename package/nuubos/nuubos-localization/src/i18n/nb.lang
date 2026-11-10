@@ -1492,3 +1492,6 @@
 1491=Trykk på knappen du vil bekrefte med. Den andre går tilbake. Du kan endre dette senere i Innstillinger.
 1492=Nederste knapp
 1493=Høyre knapp
+1494=Åpne lokket for å vekke
+1495=Når lokket åpnes, våkner konsollen. Hvilemodus med lukket lokk bruker mer batteri.
+1496=Lukket lokk bruker HyperSleep: bare av/på-knappen vekker den.

@@ -1492,3 +1492,6 @@
 1491=Stiskni tlačítko, kterým chceš potvrzovat. Druhé slouží k návratu. Později to můžeš změnit v položce Nastavení.
 1492=Spodní tlačítko
 1493=Pravé tlačítko
+1494=Probudit otevřením víka
+1495=Otevření víka konzoli probudí. Spánek při zavřeném víku spotřebuje víc baterie.
+1496=Po zavření víka HyperSleep: probudí ji jen tlačítko napájení.

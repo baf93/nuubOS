@@ -1492,3 +1492,6 @@
 1491=Onaylamak için kullanmak istediğin düğmeye bas. Diğeri geri gider. Bunu daha sonra Ayarlar bölümünden değiştirebilirsin.
 1492=Alt düğme
 1493=Sağ düğme
+1494=Kapak açılınca uyandır
+1495=Kapağı açmak konsolu uyandırır. Kapak kapalıyken uyku daha fazla pil kullanır.
+1496=Kapak kapanınca HyperSleep: yalnızca güç düğmesi uyandırır.

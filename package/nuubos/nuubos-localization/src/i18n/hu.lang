@@ -1492,3 +1492,6 @@
 1491=Nyomd meg azt a gombot, amellyel meg szeretnél erősíteni. A másik visszalép. Ezt később itt módosíthatod: Beállítások.
 1492=Alsó gomb
 1493=Jobb gomb
+1494=Ébresztés fedélnyitással
+1495=A fedél kinyitása felébreszti a konzolt. Csukott fedéllel az alvás több akkumulátort használ.
+1496=Csukott fedélnél HyperSleep: csak a bekapcsológomb ébreszti.

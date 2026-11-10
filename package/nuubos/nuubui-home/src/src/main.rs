@@ -197,6 +197,8 @@ struct SystemSnapshot {
     hypersleep: bool,
     fast_startup: bool,
     power_key_sleep: bool,
+    lid_wake: bool,
+    lid_present: bool,
     /* Diagnostic mode (nuubos-systemd): boots still to log, running boot. */
     diag_boots: i32,
     diag_active: bool,
@@ -228,6 +230,8 @@ impl Default for SystemSnapshot {
             hypersleep: true,
             fast_startup: true,
             power_key_sleep: true,
+            lid_wake: true,
+            lid_present: false,
             diag_boots: 0,
             diag_active: false,
             cpu_freq_khz: -1,
@@ -651,6 +655,8 @@ fn parse_system_snapshot(reply: &str) -> SystemSnapshot {
             "hypersleep" => s.hypersleep = value != "0",
             "fast_startup" => s.fast_startup = value != "0",
             "power_key_sleep" => s.power_key_sleep = value == "1",
+            "lid_wake" => s.lid_wake = value != "0",
+            "lifecycle.lid" => s.lid_present = value != "none",
             "diagnostics.boots" => s.diag_boots = value.parse().unwrap_or(0),
             "diagnostics.active" => s.diag_active = value == "1",
             "cpu.freq_khz" => s.cpu_freq_khz = value.parse().unwrap_or(-1),
@@ -696,6 +702,8 @@ fn apply_system_snapshot(ui: &HomeWindow, s: &SystemSnapshot) {
     ui.set_system_hypersleep(s.hypersleep);
     ui.set_system_fast_startup(s.fast_startup);
     ui.set_system_power_key_sleep(s.power_key_sleep);
+    ui.set_system_lid_wake(s.lid_wake);
+    ui.set_system_lid_present(s.lid_present);
     /* Diagnostic Mode row: Off, or the starts still to log (1351); On (222)
      * for the last logged start. */
     ui.set_diag_mode_on(s.diag_active || s.diag_boots > 0);
@@ -4719,11 +4727,11 @@ const POWER_VIEW: i32 = 69;
 const POWER_HYPERSLEEP_ROW: i32 = 3;
 const POWER_FAST_STARTUP_ROW: i32 = 4;
 const POWER_KEY_SLEEP_ROW: i32 = 5;
-const POWER_BATTERY_START: i32 = 6;
-const POWER_CHARGE_LIMIT_ROW: i32 = 8;
+/* Clamshells only: row 6, the BATTERY rows one lower. */
+const POWER_LID_WAKE_ROW: i32 = 6;
 
 fn power_devices_start(ui: &HomeWindow) -> i32 {
-    if ui.get_system_charge_limit_supported() { 9 } else { 8 }
+    ui.get_power_devices_start()
 }
 
 fn power_row_count(ui: &HomeWindow) -> i32 {
@@ -4736,7 +4744,7 @@ fn update_power_scroll(ui: &HomeWindow) {
         ui.get_power_index(),
         power_row_count(ui),
         ui.get_power_scroll_offset(),
-        (POWER_BATTERY_START, power_devices_start(ui), 0),
+        (ui.get_power_battery_start(), power_devices_start(ui), 0),
     ));
 }
 
@@ -5432,7 +5440,11 @@ fn handle_settings_action(
                     let next = if ui.get_system_power_key_sleep() { 0 } else { 1 };
                     system_set(ui, format!("SET POWER_KEY_SLEEP {next}"));
                 }
-                POWER_CHARGE_LIMIT_ROW if ui.get_system_charge_limit_supported() => open_charge_limit_dropdown(ui),
+                POWER_LID_WAKE_ROW if ui.get_system_lid_present() => {
+                    let next = if ui.get_system_lid_wake() { 0 } else { 1 };
+                    system_set(ui, format!("SET LID_WAKE {next}"));
+                }
+                n if n == ui.get_power_battery_start() + 2 && ui.get_system_charge_limit_supported() => open_charge_limit_dropdown(ui),
                 /* Battery and device rows are read-only. */
                 _ => {}
             },
