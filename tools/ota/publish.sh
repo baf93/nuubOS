@@ -1,5 +1,7 @@
 #!/bin/sh
-# Publish an OTA release made by tools/ota/make-update.sh on GitHub (EPIC-048).
+# Publish a stable OTA release made by tools/ota/make-update.sh on GitHub
+# (EPIC-048), after tools/ota/publish-sf.sh. GitHub is the fallback of the
+# consoles and the page of the stable releases.
 #
 #   tools/ota/publish.sh OUTDIR
 #
@@ -18,6 +20,13 @@ OUT="${1:-}"
 [ -f "$OUT/release.env" ] || { echo "Usage: $0 OUTDIR (made by tools/ota/make-update.sh)" >&2; exit 2; }
 command -v gh >/dev/null || { echo "[FAIL] GitHub CLI (gh) not installed" >&2; exit 1; }
 . "$OUT/release.env"
+# GitHub carries stable releases only (maintainer decision 2026-11-10:
+# SourceForge is the backend, tools/ota/publish-sf.sh). 1.0.0-rc.5 is the
+# one exception: consoles on RC4 only know GitHub.
+if [ "$CHANNEL" != stable ] && [ "${NUUBOS_GITHUB_PRERELEASE:-}" != 1 ]; then
+    echo "[FAIL] $CHANNEL releases go to SourceForge only (tools/ota/publish-sf.sh); NUUBOS_GITHUB_PRERELEASE=1 overrides" >&2
+    exit 2
+fi
 M="$OUT/channel-$CHANNEL/nuubos-update.manifest"
 [ -f "$OUT/$TAG/$PAYLOAD" ] && [ -f "$M" ] && [ -f "$M.sig" ] || { echo "[FAIL] $OUT is incomplete" >&2; exit 1; }
 COMMIT="$(git -C "$(dirname "$0")/../.." rev-parse HEAD)"

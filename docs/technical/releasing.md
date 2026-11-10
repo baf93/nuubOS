@@ -55,15 +55,27 @@ tools/ota/add-image.sh ~/nuubos-release
 
 ## 4. Publish
 
+SourceForge is the download and update backend of every channel (since
+1.0.0-rc.5). GitHub Releases carry the stable releases only, and serve the consoles
+as a fallback when SourceForge does not answer.
+
 ```sh
 git push
+NUUBOS_SF_USER=<sourceforge user> tools/ota/publish-sf.sh ~/nuubos-release
+# stable releases only, afterwards:
 tools/ota/publish.sh ~/nuubos-release
 ```
 
-`publish.sh` creates the versioned release `v<version>` with every file
-(a pre-release unless the channel is stable), then replaces the manifest and
-signature in `channel-<channel>`. Devices on that channel see the update at their
-next check (within a day, or at once with Check).
+`publish-sf.sh` uploads `v<version>/` (payload, image, legal-info, checksums and the
+notes as `README.txt`) with rsync over SSH, then the manifest and signature to
+`channel-<channel>/`. `publish.sh` does the same on GitHub: the versioned release,
+then the manifest in the `channel-<channel>` release; it refuses nightly and RC
+releases (`NUUBOS_GITHUB_PRERELEASE=1` overrides it, used once for 1.0.0-rc.5, the
+last release the RC4 consoles find on GitHub). Devices on that channel see the
+update at their next check (within a day, or at once with Check).
+
+Space out the GitHub steps (account suspended on 2026-10-30 after a burst of
+automated actions on release day).
 
 ## 5. After publishing
 

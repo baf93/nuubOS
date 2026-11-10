@@ -23,12 +23,17 @@
  * (replaced at every publication); the manifest names the payload by
  * "<release tag>/<file>", a versioned release of its own.
  *
- * Sources: the same layout can be served from other hosts. A verified
- * manifest may carry "sources=" (up to MAX_SOURCES https base URLs, space
- * separated); the list is kept in SOURCES_FILE and tried in order, with
- * UPDATE_URL always last, for the manifests and the payload. Only a
- * signed manifest changes the list, so moving the downloads elsewhere is
- * one release away and a host can never redirect the consoles by itself.
+ * Sources (user decision 2026-11-10): the same layout is served by
+ * SourceForge (UPDATE_SOURCES, the backend for every channel) and, for
+ * stable releases, by GitHub (UPDATE_URL, the emergency fallback only). A
+ * verified manifest may carry "sources=" (up to MAX_SOURCES https base
+ * URLs, space separated), kept in SOURCES_FILE, which then replaces
+ * UPDATE_SOURCES. Every check asks all those sources and keeps the newest
+ * verified manifest (a host that syncs late cannot hide an update); GitHub
+ * is asked only when none of them answers at all, so consoles do not poll
+ * it. The payload is fetched from them in order, GitHub last. Only a
+ * signed manifest changes the list, and a host can never redirect the
+ * consoles by itself.
  *
  * Trust comes from the signature, never from the transport: the manifest
  * (a small key=value file) is signed with the nuubOS release key (Ed25519)
@@ -96,6 +101,9 @@
 #define SOURCES_FILE "/state/update/sources"
 #endif
 #define MAX_SOURCES 4
+#ifndef UPDATE_SOURCES
+#define UPDATE_SOURCES "https://downloads.sourceforge.net/project/nuubos"
+#endif
 /* Host tests serve the sources over plain http. */
 #ifndef SOURCE_SCHEME
 #define SOURCE_SCHEME "https://"
@@ -459,10 +467,11 @@ static bool manifest_offers_update(void)
 	       atoll(serial) > current_serial();
 }
 
-/* The download sources in order: SOURCES_FILE, then UPDATE_URL. */
+/* The download sources in order: SOURCES_FILE (else UPDATE_SOURCES), then
+ * UPDATE_URL, the fallback. Returns how many come before the fallback. */
 static int sources(char list[MAX_SOURCES + 1][512])
 {
-	char line[512];
+	char line[512], compiled[MAX_SOURCES * 512], *save = NULL, *url;
 	int n = 0;
 	FILE *fp = fopen(SOURCES_FILE, "r");
 
@@ -473,7 +482,12 @@ static int sources(char list[MAX_SOURCES + 1][512])
 	}
 	if (fp)
 		fclose(fp);
-	snprintf(list[n++], sizeof(list[0]), "%s", UPDATE_URL);
+	if (!n) {
+		snprintf(compiled, sizeof(compiled), "%s", UPDATE_SOURCES);
+		for (url = strtok_r(compiled, " ", &save); url && n < MAX_SOURCES; url = strtok_r(NULL, " ", &save))
+			snprintf(list[n++], sizeof(list[0]), "%s", url);
+	}
+	snprintf(list[n], sizeof(list[0]), "%s", UPDATE_URL);
 	return n;
 }
 
@@ -513,47 +527,78 @@ static const char *http_failure(long status)
  * a verified manifest of a format this build understands, published for
  * that channel; 1 = nothing published there (404); else the failure.
  */
-static const char *fetch_channel(const char *channel, long long *serial)
+/* One host's manifest of the channel into manifest.cand: NULL = verified,
+ * "" = nothing published there (404 or another channel/format), else the
+ * failure. */
+static const char *fetch_from(const char *base, const char *channel, long long *serial)
 {
 	char url[1024], format[16], name[32], text[32];
-	char list[MAX_SOURCES + 1][512];
-	const char *failure = "";
 	long status;
+
+	snprintf(url, sizeof(url), "%s/channel-%s/nuubos-update.manifest", base, channel);
+	status = fetch(url, UPDATE_DIR "/manifest.cand", false, 30);
+	if (status == 404)
+		return "";
+	if (status != 200)
+		return http_failure(status);
+	snprintf(url, sizeof(url), "%s/channel-%s/nuubos-update.manifest.sig", base, channel);
+	status = fetch(url, UPDATE_DIR "/manifest.cand.sig", false, 30);
+	if (status != 200)
+		return status == 404 ? "" : http_failure(status);
+	if (!manifest_file_verified(UPDATE_DIR "/manifest.cand", UPDATE_DIR "/manifest.cand.sig"))
+		return "signature";
+	file_value(UPDATE_DIR "/manifest.cand", "format", format, sizeof(format));
+	file_value(UPDATE_DIR "/manifest.cand", "channel", name, sizeof(name));
+	file_value(UPDATE_DIR "/manifest.cand", "serial", text, sizeof(text));
+	/* Signed but for another channel or format: nothing usable there. */
+	if (atoi(format) != MANIFEST_FORMAT || strcmp(name, channel))
+		return "";
+	*serial = atoll(text);
+	return NULL;
+}
+
+/*
+ * The newest verified manifest of one channel into manifest.cand: NULL =
+ * found, "" = nothing published there, else the failure. GitHub (the
+ * fallback) only when no other source answered at all.
+ */
+static const char *fetch_channel(const char *channel, long long *serial)
+{
+	char list[MAX_SOURCES + 1][512];
+	const char *failure = NULL;
+	bool answered = false;
 	int n = sources(list);
 
-	/* The first source with a manifest that verifies; a source that has
-	 * nothing (404) or fails lets the next one answer. */
-	for (int i = 0; i < n; i++) {
-		snprintf(url, sizeof(url), "%s/channel-%s/nuubos-update.manifest", list[i], channel);
-		status = fetch(url, UPDATE_DIR "/manifest.cand", false, 30);
-		if (status != 200) {
-			if (status != 404 && !*failure)
-				failure = http_failure(status);
+	*serial = -1;
+	for (int i = 0; i <= n; i++) {
+		long long s = -1;
+		const char *rc;
+
+		if (i == n && (answered || *serial >= 0))
+			break;
+		rc = fetch_from(list[i], channel, &s);
+		/* A 404 or a bad signature is an answer: only silence or HTTP
+		 * errors from every source bring in the fallback. */
+		if (!rc || !*rc || !strcmp(rc, "signature"))
+			answered = true;
+		if (rc) {
+			if (*rc && (!failure || !strcmp(rc, "signature")))
+				failure = rc;
 			continue;
 		}
-		snprintf(url, sizeof(url), "%s/channel-%s/nuubos-update.manifest.sig", list[i], channel);
-		status = fetch(url, UPDATE_DIR "/manifest.cand.sig", false, 30);
-		if (status != 200) {
-			if (!*failure)
-				failure = http_failure(status);
-			continue;
+		if (s > *serial) {
+			*serial = s;
+			rename(UPDATE_DIR "/manifest.cand", UPDATE_DIR "/manifest.best");
+			rename(UPDATE_DIR "/manifest.cand.sig", UPDATE_DIR "/manifest.best.sig");
 		}
-		if (!manifest_file_verified(UPDATE_DIR "/manifest.cand", UPDATE_DIR "/manifest.cand.sig")) {
-			failure = "signature";
-			continue;
-		}
-		file_value(UPDATE_DIR "/manifest.cand", "format", format, sizeof(format));
-		file_value(UPDATE_DIR "/manifest.cand", "channel", name, sizeof(name));
-		file_value(UPDATE_DIR "/manifest.cand", "serial", text, sizeof(text));
-		/* Signed but for another channel or format: nothing usable there. */
-		if (atoi(format) != MANIFEST_FORMAT || strcmp(name, channel))
-			return "";
-		*serial = atoll(text);
-		return NULL;
 	}
 	unlink(UPDATE_DIR "/manifest.cand");
-	/* Nothing published anywhere (every source answered 404): "". */
-	return failure;
+	unlink(UPDATE_DIR "/manifest.cand.sig");
+	if (*serial < 0)
+		return failure ? failure : "";
+	rename(UPDATE_DIR "/manifest.best", UPDATE_DIR "/manifest.cand");
+	rename(UPDATE_DIR "/manifest.best.sig", UPDATE_DIR "/manifest.cand.sig");
+	return NULL;
 }
 
 /*
@@ -701,7 +746,7 @@ static int cmd_download(void)
 		int n = sources(list);
 
 		status = -1;
-		for (int i = 0; i < n && !cancelled; i++) {
+		for (int i = 0; i <= n && !cancelled; i++) {
 			snprintf(url, sizeof(url), "%s/%s", list[i], payload);
 			status = fetch(url, UPDATE_DIR "/payload.part", true, 0);
 			if (status == 200 || status == 206 || status == 416 || status == -2)
