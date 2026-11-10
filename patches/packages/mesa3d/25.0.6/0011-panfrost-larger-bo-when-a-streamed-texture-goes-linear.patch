@@ -1,0 +1,68 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] panfrost: a larger BO when a streamed texture goes linear
+
+After a few complete overwrites a u-interleaved texture is switched to
+linear in place, in the same BO, with only an assert that the linear
+layout fits. Linear rows are aligned to 64 bytes and tiled ones to 16,
+so at some widths it does not: an R8 plane of a 1480x1080 video needs
+1536 x 1080 bytes linear (0x195000) against 1488 x 1088 tiled (0x18c000
+in pages). The copy then ran off the mapping: mpv segfaulted about eight
+frames into the video, with software decoding too, or corrupted whatever
+followed when the BO cache had handed out a larger BO. Allocate a BO
+that fits, stay tiled when that fails, and re-emit the descriptors,
+whose layout just changed.
+
+Signed-off-by: nuubOS
+---
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -1915,16 +1915,40 @@
+                panfrost_resource_setup(screen, prsrc, DRM_FORMAT_MOD_LINEAR,
+                                        prsrc->image.layout.format);
+ 
+-               /* converting the resource from tiled to linear and back
+-                * shouldn't increase memory usage...
+-                */
+-               assert(prsrc->image.layout.data_size <= panfrost_bo_size(bo));
++               /* Linear rows are aligned to 64 bytes, so at some widths the
++                * linear layout needs more than the tiled one (R8 1480x1080:
++                * 1536 x 1080 bytes against 1488 x 1088, 0x195000 and
++                * 0x18c000 in pages): it takes a larger BO then. */
++               if (prsrc->image.layout.data_size > panfrost_bo_size(bo)) {
++                  struct panfrost_bo *newbo = panfrost_bo_create(
++                     dev, prsrc->image.layout.data_size,
++                     bo->flags & ~PAN_BO_DELAY_MMAP, bo->label);
+ 
+-               util_copy_rect(
+-                  bo->ptr.cpu + prsrc->image.layout.slices[0].offset,
+-                  prsrc->base.format, prsrc->image.layout.slices[0].row_stride,
+-                  0, 0, transfer->box.width, transfer->box.height, trans->map,
+-                  transfer->stride, 0, 0);
++                  if (newbo) {
++                     panfrost_bo_unreference(bo);
++                     bo = prsrc->bo = newbo;
++                     prsrc->image.data.base = newbo->ptr.gpu;
++                  } else {
++                     panfrost_resource_setup(
++                        screen, prsrc,
++                        DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED,
++                        prsrc->image.layout.format);
++                     panfrost_store_tiled_images(trans, prsrc);
++                     bo = NULL;
++                  }
++               }
++
++               if (bo) {
++                  /* The layout changed: new descriptors. */
++                  panfrost_dirty_state_all(ctx);
++
++                  util_copy_rect(
++                     bo->ptr.cpu + prsrc->image.layout.slices[0].offset,
++                     prsrc->base.format,
++                     prsrc->image.layout.slices[0].row_stride, 0, 0,
++                     transfer->box.width, transfer->box.height, trans->map,
++                     transfer->stride, 0, 0);
++               }
+             } else {
+                panfrost_store_tiled_images(trans, prsrc);
+             }
