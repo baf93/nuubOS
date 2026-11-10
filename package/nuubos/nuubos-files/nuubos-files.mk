@@ -7,7 +7,7 @@
 NUUBOS_FILES_VERSION = 0.1.0
 NUUBOS_FILES_SITE = $(BR2_EXTERNAL_NUUBOS_PATH)/package/nuubos/nuubos-files/src
 NUUBOS_FILES_SITE_METHOD = local
-NUUBOS_FILES_LICENSE = PolyForm-Noncommercial-1.0.0, CC-BY-4.0 (Files icon)
+NUUBOS_FILES_LICENSE = GPL-3.0+, CC-BY-4.0 (Files icon)
 NUUBOS_FILES_LICENSE_FILES = LICENSE app/ATTRIBUTION.txt app/LICENSE-CC-BY-4.0.txt
 # libsmb2: the shared folders of a server for Add Network Location.
 NUUBOS_FILES_DEPENDENCIES = libsmb2

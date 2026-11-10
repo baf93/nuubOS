@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""nuubOS System Sound Set v5 + Test Sound (original synthesis, PolyForm Noncommercial 1.0.0).
+"""nuubOS System Sound Set v5 + Test Sound (original synthesis, GPL-3.0-or-later).
 
 One warm, low family for the whole console (user request 2026-10-10: v4
 was too high). Felt-mallet tones (a sine with soft, quickly damped octave

@@ -108,12 +108,11 @@ A first build takes several hours.
 
 ## License
 
-nuubOS is **source-available for noncommercial use** under the
-[PolyForm Noncommercial License 1.0.0](LICENSE). You may use, study, modify and share
-it for any noncommercial purpose. Selling it, or shipping it on hardware that is sold,
-is not allowed. nuubUI and the Quick Menu are GPL-3.0, because they are built with the
-Slint toolkit. All bundled third-party software keeps its own license. See
-[LICENSING.md](LICENSING.md).
+nuubOS is **free and open-source software** under the
+[GNU General Public License v3.0 or later](LICENSE). nuubUI and the Quick Menu are
+GPL-3.0-only, because they are built with the Slint toolkit. All bundled third-party
+software keeps its own license; some bundled emulators forbid commercial use under
+their own terms. See [LICENSING.md](LICENSING.md).
 
 nuubOS is an independent project. It is not affiliated with Anbernic, Valve, NVIDIA,
 Google, Microsoft or the RetroArch project.

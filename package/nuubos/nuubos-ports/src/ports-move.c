@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubos-ports-move — moves the ports folder between the console's card and
  * the SD2 card for nuubos-portsd (PortMaster page, Ports on SD2, GitHub #21).

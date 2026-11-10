@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Host test of the download sources (nuubos-updatectl): two local http
 # hosts, a throw-away release key. Needs cc, libcurl, libsodium, openssl,
 # python3.

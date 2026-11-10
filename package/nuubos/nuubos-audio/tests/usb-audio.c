@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Exercise the actual daemon policy, registry callbacks and public snapshot. */
 #define main audiod_main
 #include "../src/audiod.c"

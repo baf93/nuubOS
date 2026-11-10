@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Dev harness (not shipped): drives moonlight's Wayland/V4L2 request
  * renderer with an Annex B file split on access unit delimiters, paced at
  * a fixed rate, and prints the renderer statistics. */

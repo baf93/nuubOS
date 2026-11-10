@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubos-syncd — the Syncthing capability of the active user (EPIC-034).
  *

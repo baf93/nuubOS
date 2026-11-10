@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Captured screen → I420 (YUV 4:2:0, BT.601 limited range) at the encoded
  * size: output transform undone, scaled, letterboxed when the aspect ratio

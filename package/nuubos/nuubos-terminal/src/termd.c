@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubos-termd — Terminal application service (RC4, user decision
  * 2026-10-27; EPIC-001 US-UI-001: never needed for ordinary flows).

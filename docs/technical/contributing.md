@@ -45,8 +45,8 @@ wizard greeting, services that map language codes): see "Catalogs" in
 
 ## License of contributions
 
-nuubOS is licensed under the PolyForm Noncommercial License 1.0.0, with nuubUI
-and the Quick Menu under GPL-3.0 (see [LICENSING.md](../../LICENSING.md)). By
+nuubOS is licensed under the GPL-3.0-or-later, with nuubUI and the Quick Menu
+under GPL-3.0-only (see [LICENSING.md](../../LICENSING.md)). By
 submitting a contribution you agree that it is licensed under the license of the
 files it changes, and that the maintainer may also offer it under other terms (for
 example a commercial license), so the project can keep a single licensor.

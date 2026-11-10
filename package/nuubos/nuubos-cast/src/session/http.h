@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Live HTTP stream server: the receiver fetches the screen from the
  * console (DLNA renderers, the Google Cast Default Media Receiver). One

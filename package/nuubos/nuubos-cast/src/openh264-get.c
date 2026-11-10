@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubos-openh264-get — downloads Cisco's OpenH264 binary on the user's
  * request (Miracast needs H.264).

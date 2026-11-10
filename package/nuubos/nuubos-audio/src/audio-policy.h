@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef NUUBOS_AUDIO_POLICY_H
 #define NUUBOS_AUDIO_POLICY_H
 

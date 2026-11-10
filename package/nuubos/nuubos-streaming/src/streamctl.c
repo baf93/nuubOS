@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubos-streamctl — command line client of nuubos-streamd (tests,
  * lifecycle hooks). Prints the reply; exits 0 on OK, 1 on ERR or no

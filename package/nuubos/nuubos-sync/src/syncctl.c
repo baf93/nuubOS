@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubos-syncctl — command line of the Syncthing capability (EPIC-034),
  * a client of nuubos-syncd (/run/nuubos/syncd.sock) for the active user.

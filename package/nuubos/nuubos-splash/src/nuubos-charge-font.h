@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Generated: the charge screen dot font (5 columns, 9 rows: capitals and
  * digits rows 0-6, x-height rows 2-6, descenders 7-8, lowercase accents
  * row 0). NULL rows are empty. Codepoints are Unicode. */

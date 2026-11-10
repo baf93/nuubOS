@@ -3,7 +3,7 @@ nuubOS System Sound Set v5
 Original synthetic PCM assets created for nuubOS by
 tools/sounds/make-system-sounds.py (pure synthesis, reproducible). No
 third-party samples are used. They are distributed under the same license
-as the nuubos-audio package (PolyForm Noncommercial 1.0.0).
+as the nuubos-audio package (GPL-3.0-or-later).
 
 One warm, low family (fundamentals D3-D5, felt-mallet tones, gentle
 low-pass, a small shared room) in D major. Forward gestures rise, back and

@@ -1,5 +1,5 @@
 /*
- * nuubOS CRT, written for nuubOS (PolyForm Noncommercial 1.0.0, LICENSING.md).
+ * nuubOS CRT, written for nuubOS (GPL-3.0-or-later, LICENSING.md).
  *
  * A very light CRT look for systems made for TV screens, on top of the
  * pixel perfect (integer scaled) picture: neighbouring pixels melt into

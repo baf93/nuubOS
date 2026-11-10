@@ -72,8 +72,8 @@ the game does not start.
 
 Decision (2026-10-06, project owner): the non-commercial cores are included
 because nuubOS is distributed free of charge; they must be removed or replaced
-before any commercial distribution (nuubOS itself is licensed for
-noncommercial use only since 2026-10-16, LICENSING.md). Every package records
+before any commercial distribution (nuubOS itself is GPL-3.0-or-later since
+2026-11-10, LICENSING.md). Every package records
 its licence and licence file, so `make legal-info` lists them.
 
 VICE ROMs (resolved 2026-10-16): upstream VICE carries the Commodore
@@ -103,7 +103,7 @@ Other redistributed material:
   CC-BY-4.0, `COPYING` installed in `/usr/share/retroarch/assets`.
 - `libretro-core-info`: MIT.
 - `nuubos-emulation` data (defaults, shaders, gamepad autoconfig): written
-  for nuubOS, PolyForm Noncommercial 1.0.0 like the rest of nuubOS.
+  for nuubOS, GPL-3.0-or-later like the rest of nuubOS.
 
 ## Adding a core
 

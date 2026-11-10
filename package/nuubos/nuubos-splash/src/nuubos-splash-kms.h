@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * KMS helpers shared by nuubos-splash and nuubos-charge: panel
  * orientation, the output policy's mode, CRTC choice, the rotation of a

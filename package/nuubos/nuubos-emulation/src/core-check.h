@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Downloaded cores nuubOS cannot run (GitHub #22: a game set to the
  * buildbot's Flycast closed at once). Shared by nuubos-emud (such a core is

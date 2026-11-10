@@ -7,7 +7,7 @@
 NUUBOS_PORTS_VERSION = 0.1.0
 NUUBOS_PORTS_SITE = $(BR2_EXTERNAL_NUUBOS_PATH)/package/nuubos/nuubos-ports/src
 NUUBOS_PORTS_SITE_METHOD = local
-NUUBOS_PORTS_LICENSE = PolyForm-Noncommercial-1.0.0
+NUUBOS_PORTS_LICENSE = GPL-3.0+
 NUUBOS_PORTS_LICENSE_FILES = LICENSE
 NUUBOS_PORTS_DEPENDENCIES = bubblewrap python3 sdl2 sdl2_image sdl2_ttf sdl2_mixer sdl2_gfx openal libvorbis \
 	libtheora libcurl openssl

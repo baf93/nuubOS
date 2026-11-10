@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Cast Streaming sender for one stream (audio or video): Cast RTP
  * packetization, AES-128-CTR frame encryption, RTCP sender reports,

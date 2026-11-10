@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Audio encoders: Opus (libopus, Google Cast), AAC-LC (FFmpeg native
  * encoder, Miracast), MPEG-1 Layer II (FFmpeg, patents expired, DLNA).

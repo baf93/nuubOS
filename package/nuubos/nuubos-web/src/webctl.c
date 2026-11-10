@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubos-webctl — command line client of nuubos-webd (tests, the
  * pre-power hook): sends one command line, prints the reply.

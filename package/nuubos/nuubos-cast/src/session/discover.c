@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Receiver discovery, one shot (no daemon):
  *   mDNS  _googlecast._tcp  Google Cast (TXT fn = friendly name, md = model)

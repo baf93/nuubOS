@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Host regression: USB audio routing with fake wpctl, no audio hardware.
 
 Requires cc, pkg-config and ALSA/D-Bus/PipeWire development headers.

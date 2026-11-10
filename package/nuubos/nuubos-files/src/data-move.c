@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubos-data-move — moves user data folders between SD1 and the SD2 card
  * for nuubos-storagectl (Settings → Storage, Data on SD2, GitHub #24).

@@ -7,7 +7,7 @@
 NUUBOS_AUDIO_VERSION = 1.0
 NUUBOS_AUDIO_SITE = $(BR2_EXTERNAL_NUUBOS_PATH)/package/nuubos/nuubos-audio/src
 NUUBOS_AUDIO_SITE_METHOD = local
-NUUBOS_AUDIO_LICENSE = PolyForm-Noncommercial-1.0.0
+NUUBOS_AUDIO_LICENSE = GPL-3.0+
 NUUBOS_AUDIO_LICENSE_FILES = LICENSE
 NUUBOS_AUDIO_DEPENDENCIES = alsa-lib alsa-utils dbus mpg123 pipewire wireplumber nuubos-notify
 

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Small UPnP helpers: HTTP GET/POST with a timeout (device descriptions,
  * SOAP actions) and the bits of XML DLNA needs.

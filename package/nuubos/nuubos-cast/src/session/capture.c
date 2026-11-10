@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Screen capture: one wlr-screencopy frame at a time into shared memory
  * buffers the session converts and encodes. Two buffers alternate, so the

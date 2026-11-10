@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Audio for the receiver: a PipeWire null sink "nuubos_cast" owned by this
  * process (nuubos-audiod routes the console's sound to it while it exists,

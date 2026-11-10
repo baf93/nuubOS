@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubOS lifecycle splash (boot, restart, power off): the one raster every
  * stage of the handoff shows, so kernel → compositor → nuubUI → shutdown

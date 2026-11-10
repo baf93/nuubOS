@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef NUUBOS_RGB_COMMON_H
 #define NUUBOS_RGB_COMMON_H
 

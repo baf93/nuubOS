@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubos-steamlink-get — downloads the Valve Steam Link application
  * (EPIC-026) for nuubos-streamd.

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * Live container writer (libavformat): MPEG-TS (DLNA, Miracast) or WebM
  * (Google Cast Default Media Receiver fallback). Output goes to a callback

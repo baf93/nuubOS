@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
  * nuubos-emuctl — command line client of nuubos-emud (tests, lifecycle
  * hooks). Prints the reply; exits 0 on OK, 1 on ERR or no service.

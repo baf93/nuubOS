@@ -2,7 +2,7 @@
 """Generates the built-in nuubOS Moods (theme.conf FORMAT=1) from one accent
 colour each: neutrals are the nuubOS dark/matte greys tinted toward the
 accent hue, like the hand-made Ember/Mint. Output is committed under
-package/nuubos/nuubos-themes/src/themes/<id>/theme.conf (nuubOS, PolyForm Noncommercial 1.0.0).
+package/nuubos/nuubos-themes/src/themes/<id>/theme.conf (nuubOS, GPL-3.0-or-later).
 
 Usage: tools/moods/make-moods.py   (rewrites only the generated Moods)
 """
@@ -70,7 +70,7 @@ for mid, name, desc, accent in MOODS:
     tokens = mood(accent)
     with open(os.path.join(d, 'theme.conf'), 'w') as f:
         f.write('FORMAT=1\nID=%s\nNAME=%s\nAUTHOR=nuubOS\nVERSION=1.0\nMIN_NUUBUI=0.5\n'
-                'DESCRIPTION=%s\nLICENSE=PolyForm-Noncommercial-1.0.0\n' % (mid, name, desc))
+                'DESCRIPTION=%s\nLICENSE=GPL-3.0-or-later\n' % (mid, name, desc))
         for k in ORDER:
             f.write('%s=%s\n' % (k, tokens[k]))
 print(' '.join(m[0] for m in MOODS))

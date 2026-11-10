@@ -1,31 +1,37 @@
 # Licensing
 
-nuubOS is **source-available for noncommercial use**. The source is public and you may
-use, study, modify and share it for any noncommercial purpose: personal use, hobby
-projects, research, education, charities and public institutions. Commercial use is
-not permitted, for example selling nuubOS, preinstalling it on hardware that is sold,
-or bundling it in a paid product or service.
-
-Because it restricts commercial use, this is not an "open source" license in the OSI
-sense. For a commercial license, open an issue at
-<https://github.com/baf93/nuubOS/issues>.
+nuubOS is **free and open-source software** under the
+[GNU General Public License, version 3 or later](LICENSE) (SPDX: `GPL-3.0-or-later`).
+You may use, study, modify and share it for any purpose, commercial use included.
+If you distribute nuubOS or a modified version, you must make the complete source
+code available under the same license.
 
 ## What the license covers
 
-The original nuubOS work in this repository is licensed under the
-[PolyForm Noncommercial License 1.0.0](LICENSE)
-(SPDX: `PolyForm-Noncommercial-1.0.0`). This covers the nuubOS services, the web
-administration, scripts, tools, board configuration and overlays, documentation,
-translations, and the original sounds and images.
+The original nuubOS work in this repository is licensed under the GPL-3.0-or-later.
+This covers the nuubOS services, the web administration, scripts, tools, board
+configuration and overlays, documentation, translations, and the original sounds and
+images.
 
-Code published in this repository before 2026-10-16 was under the MIT License.
-Copies obtained under those terms keep them.
+History: code published in this repository before 2026-10-16 was under the MIT
+License; from 2026-10-16 to 2026-11-10 (up to and including 1.0.0-rc.4) under the
+PolyForm Noncommercial License 1.0.0. Copies obtained under those terms keep them.
+From 2026-11-10 on (1.0.0-rc.5 and later), nuubOS is GPL-3.0-or-later. Contributions made under the
+contribution terms in [docs/technical/contributing.md](docs/technical/contributing.md)
+are covered by this change.
+
+## Name and logo
+
+The license covers the code, not the name. "nuubOS" and the nuubOS logo identify the
+official builds published by the maintainer. You may say that your work is based on
+nuubOS, but a modified or rebuilt version must use another name and logo, and must
+not suggest that it is an official release.
 
 ## What it does not cover
 
 | Path / component | License |
 |---|---|
-| `package/nuubos/nuubui-home` (nuubUI) and `package/nuubos/nuubos-quick-menu` | GPL-3.0-only. Both are built with the [Slint](https://slint.dev) toolkit, which a console OS can use for free only under the GPL-3.0. Anyone may reuse these two programs under the GPL terms, commercial use included. |
+| `package/nuubos/nuubui-home` (nuubUI) and `package/nuubos/nuubos-quick-menu` | GPL-3.0-only. Both are built with the [Slint](https://slint.dev) toolkit, which a console OS can use for free only under the GPL-3.0. |
 | `patches/linux/`, `patches/u-boot/`, `patches/buildroot/`, `patches/packages/` | The license of the project each patch applies to (Linux: GPL-2.0; see each patch's SPDX lines) |
 | Buildroot recipes (`*.mk`, `Config.in`, `external.*`, `configs/*_defconfig`) | GPL-2.0-or-later, like Buildroot |
 | `package/nuubos/labwc` (patched labwc) | GPL-2.0-or-later |
@@ -34,7 +40,8 @@ Copies obtained under those terms keep them.
 
 Some bundled libretro cores (FBNeo, Genesis Plus GX, MAME 2003-Plus, PicoDrive,
 Snes9x and others) forbid commercial use under their own terms, independently of the
-nuubOS license.
+nuubOS license: a nuubOS image that includes them cannot be sold or shipped on
+hardware that is sold.
 
 ## Images and source code
 

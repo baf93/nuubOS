@@ -7,7 +7,7 @@
 NUUBOS_CAST_VERSION = 0.1.0
 NUUBOS_CAST_SITE = $(BR2_EXTERNAL_NUUBOS_PATH)/package/nuubos/nuubos-cast/src
 NUUBOS_CAST_SITE_METHOD = local
-NUUBOS_CAST_LICENSE = PolyForm-Noncommercial-1.0.0, BSD-2-Clause (OpenH264 API headers)
+NUUBOS_CAST_LICENSE = GPL-3.0+, BSD-2-Clause (OpenH264 API headers)
 NUUBOS_CAST_LICENSE_FILES = LICENSE third_party/openh264/LICENSE
 NUUBOS_CAST_DEPENDENCIES = nuubos-notify cjson libcurl openssl libvpx opus ffmpeg pipewire \
 	wayland host-wayland
