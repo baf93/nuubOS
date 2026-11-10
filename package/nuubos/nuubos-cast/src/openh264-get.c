@@ -103,6 +103,24 @@ static int run_bzcat(const char *in, const char *out)
 	return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
 }
 
+/* The folder and its parents (/userdata/cast does not exist on a new card). */
+static int mkdir_parents(const char *dir)
+{
+	char path[512];
+
+	if (snprintf(path, sizeof(path), "%s", dir) >= (int)sizeof(path))
+		return -1;
+	for (char *p = path + 1; *p; p++) {
+		if (*p != '/')
+			continue;
+		*p = '\0';
+		if (mkdir(path, 0755) != 0 && errno != EEXIST)
+			return -1;
+		*p = '/';
+	}
+	return mkdir(path, 0755) != 0 && errno != EEXIST ? -1 : 0;
+}
+
 static int install(const char *dir)
 {
 	char staging[512], bz2[600], so[600], final[600], digest[65];
@@ -113,7 +131,7 @@ static int install(const char *dir)
 	long http = 0;
 
 	snprintf(staging, sizeof(staging), "%s/.staging", dir);
-	if ((mkdir(dir, 0755) != 0 && errno != EEXIST) || (mkdir(staging, 0755) != 0 && errno != EEXIST)) {
+	if (mkdir_parents(dir) != 0 || (mkdir(staging, 0755) != 0 && errno != EEXIST)) {
 		say("@error write");
 		return 1;
 	}

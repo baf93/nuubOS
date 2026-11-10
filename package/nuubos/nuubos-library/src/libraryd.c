@@ -209,6 +209,7 @@ struct scan_item {
 	int year;
 	int players;
 	char *genre;
+	char *meta_title; /* arcade_names() systems only */
 };
 
 struct scan_result {
@@ -1520,7 +1521,20 @@ static void walk(struct scan_ctx *ctx, const char *sub, int depth, int folder_sy
 	closedir(dir);
 }
 
-/* Year, players and genre of a game's metadata file (scan thread). */
+/* Arcade ROMs are short set names ("sf2ce.zip"): these systems show the
+ * scraped title instead of the file name. */
+static bool arcade_names(int sys)
+{
+	static const char *const ids[] = { "arcade", "fbneo", "mame", "neogeo", "atomiswave", "naomi" };
+
+	for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++)
+		if (!strcmp(systems[sys].id, ids[i]))
+			return true;
+	return false;
+}
+
+/* Year, players, genre and arcade title of a game's metadata file (scan
+ * thread). */
 static void read_meta_index(struct scan_item *it)
 {
 	char stem[512];
@@ -1563,6 +1577,9 @@ static void read_meta_index(struct scan_item *it)
 		} else if (!strncmp(line, "genre=", 6) && line[6] && tsv_safe(line + 6)) {
 			free(it->genre);
 			it->genre = xstrdup(line + 6);
+		} else if (!strncmp(line, "title=", 6) && line[6] && tsv_safe(line + 6) && arcade_names(it->sys)) {
+			free(it->meta_title);
+			it->meta_title = xstrdup(line + 6);
 		}
 	}
 	fclose(fp);
@@ -1810,7 +1827,8 @@ static bool reconcile(struct scan_result *scan)
 			copy_text(g->id, sizeof(g->id), id);
 			g->sys = it->sys;
 			g->rel = it->rel;
-			g->title = title_from_rel(it->sys, it->rel);
+			g->title = it->meta_title ? it->meta_title : title_from_rel(it->sys, it->rel);
+			it->meta_title = NULL;
 			g->cover = it->cover;
 			g->size = it->size;
 			g->mtime = it->mtime;
@@ -1839,6 +1857,11 @@ static bool reconcile(struct scan_result *scan)
 		free(g->genre);
 		g->genre = it->genre;
 		it->genre = NULL;
+		if (arcade_names(g->sys)) {
+			free(g->title);
+			g->title = it->meta_title ? it->meta_title : title_from_rel(g->sys, it->rel);
+			it->meta_title = NULL;
+		}
 		if (strcmp(g->rel, it->rel)) {
 			/* Moved to another folder: same game, new location. */
 			free(g->rel);
@@ -1899,6 +1922,7 @@ static void free_scan(struct scan_result *scan)
 		free(scan->items[i].rel);
 		free(scan->items[i].cover);
 		free(scan->items[i].genre);
+		free(scan->items[i].meta_title);
 	}
 	free(scan->items);
 	free(scan);

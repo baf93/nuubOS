@@ -1962,6 +1962,10 @@ static void handle_command(struct client *c, char *line)
 			reply(c, "ERR game\n");
 			return;
 		}
+		/* portsd starts before the SD2 card is mounted: the folder now,
+		 * as launch_session() does, or the path below never matches. */
+		if (session.state == SESSION_IDLE && pm_job() < 0)
+			refresh_ports_root();
 		snprintf(command, sizeof(command), "RESOLVE\t%s", args[0]);
 		library_request(command, answer, sizeof(answer));
 		/* "unavailable" stays PortMaster's absence: a game whose card
