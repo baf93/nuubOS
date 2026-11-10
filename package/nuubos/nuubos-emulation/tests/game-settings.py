@@ -175,6 +175,10 @@ try:
     check('reject core that cannot run', cmd('emud.sock', 'GAME_SET\t%s\tsnes\tcore\tneedsgl' % game).startswith('ERR')
           and cmd('emud.sock', 'GAME_SET\t%s\tsnes\tcore\tlisted' % game).startswith('ERR'))
     check('reject bad aspect', cmd('emud.sock', 'GAME_SET\t%s\tsnes\taspect\t5:4' % game).startswith('ERR'))
+    # Scaling a policy independent of aspect (shape), no
+    # longer one of the aspect values ("integer" used to be).
+    check('reject integer as aspect', cmd('emud.sock', 'GAME_SET\t%s\tsnes\taspect\tinteger' % game).startswith('ERR'))
+    check('reject bad scaling', cmd('emud.sock', 'GAME_SET\t%s\tsnes\tscaling\tsmart' % game).startswith('ERR'))
     check('set core', cmd('emud.sock', 'GAME_SET\t%s\tsnes\tcore\tbsnes' % game).startswith('OK'))
     check('set aspect', cmd('emud.sock', 'GAME_SET\t%s\tsnes\taspect\t4:3' % game).startswith('OK'))
     check('set filter', cmd('emud.sock', 'GAME_SET\t%s\tsnes\tfilter\tpixel' % game).startswith('OK'))
@@ -498,6 +502,32 @@ try:
           and open(t + '/bezel').read() == '\n')
     cmd('emud.sock', 'QUIT'); wait(lambda: 'state=idle' in cmd('emud.sock', 'STATUS'))
     cmd('emud.sock', 'GAME_SET\t%s\tsnes\taspect\t' % game)
+    # Scaling policy, independent of aspect (shape): combines freely
+    # (2026-10-30), e.g. a shape ("4:3") was never expressible with true
+    # Integer Scaling before this split, since "aspect" alone used to pick
+    # both shape and policy as a single choice.
+    check('set 4:3 + integer', cmd('emud.sock', 'GAME_SET\t%s\tsnes\taspect\t4:3' % game).startswith('OK')
+          and cmd('emud.sock', 'GAME_SET\t%s\tsnes\tscaling\tinteger' % game).startswith('OK'))
+    launch('new')
+    check('4:3 shape with integer policy', 'aspect_ratio_index = "0"' in session()
+          and 'video_scale_integer = "true"' in session() and 'video_scale_integer_scaling = "0"' in session()
+          and 'video_crop_overscan = "true"' in session())
+    cmd('emud.sock', 'QUIT'); wait(lambda: 'state=idle' in cmd('emud.sock', 'STATUS'))
+    check('set core shape + overscale', cmd('emud.sock', 'GAME_SET\t%s\tsnes\taspect\t' % game).startswith('OK')
+          and cmd('emud.sock', 'GAME_SET\t%s\tsnes\tscaling\toverscale' % game).startswith('OK'))
+    launch('new')
+    # Overscale already crops a little to reach its bigger clean factor
+    # RetroArch's own global Crop Overscan would needlessly
+    # crop more on top of that, so it is turned off only here.
+    check('core shape with overscale policy', 'aspect_ratio_index = "22"' in session()
+          and 'video_scale_integer = "true"' in session() and 'video_scale_integer_scaling = "1"' in session()
+          and 'video_crop_overscan = "false"' in session())
+    cmd('emud.sock', 'QUIT'); wait(lambda: 'state=idle' in cmd('emud.sock', 'STATUS'))
+    check('set scaling off', cmd('emud.sock', 'GAME_SET\t%s\tsnes\tscaling\toff' % game).startswith('OK'))
+    launch('new')
+    check('scaling off', 'video_scale_integer = "false"' in session())
+    cmd('emud.sock', 'QUIT'); wait(lambda: 'state=idle' in cmd('emud.sock', 'STATUS'))
+    cmd('emud.sock', 'GAME_SET\t%s\tsnes\tscaling\t' % game)
     cmd('emud.sock', 'SET\tposition\tcenter')
 
     # CRT look and bezels.

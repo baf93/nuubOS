@@ -1103,6 +1103,7 @@ struct AudioSnapshot {
     volume: i32,
     volume_supported: bool,
     bluetooth_available: bool,
+    usb_available: bool,
     headphones_available: bool,
     hdmi_available: bool,
     system_volume: i32,
@@ -1119,6 +1120,7 @@ impl Default for AudioSnapshot {
             volume: 100,
             volume_supported: true,
             bluetooth_available: false,
+            usb_available: false,
             headphones_available: false,
             hdmi_available: false,
             system_volume: 60,
@@ -1153,6 +1155,7 @@ fn parse_audio_snapshot(reply: &str) -> AudioSnapshot {
             "mode" => snapshot.mode = value.to_owned(),
             "selected" => snapshot.selected = value.to_owned(),
             "available.bluetooth" => snapshot.bluetooth_available = value == "1",
+            "available.usb" => snapshot.usb_available = value == "1",
             "available.headphones" => snapshot.headphones_available = value == "1",
             "available.hdmi" => snapshot.hdmi_available = value == "1",
             "volume.speaker" if snapshot.selected == "speaker" => {
@@ -1163,6 +1166,9 @@ fn parse_audio_snapshot(reply: &str) -> AudioSnapshot {
             }
             "volume.bluetooth" if snapshot.selected == "bluetooth" => {
                 snapshot.volume = value.parse::<i32>().unwrap_or(100);
+            }
+            "volume.usb" if snapshot.selected == "usb" => {
+                snapshot.volume = value.parse::<i32>().unwrap_or(50);
             }
             "volume.hdmi" if snapshot.selected == "hdmi" => {
                 snapshot.volume_supported = value != "unsupported";
@@ -1195,6 +1201,7 @@ fn read_audio_snapshot() -> AudioSnapshot {
 fn audio_output_name(ui: &QuickMenuWindow, output: &str) -> String {
     match output {
         "bluetooth" => tr(ui, 331, "Bluetooth Audio"),
+        "usb" => tr(ui, 1476, "USB Audio"),
         "analog" => tr(ui, 332, "Analog Audio"),
         "headphones" => tr(ui, 330, "Headphones"),
         "hdmi" => "HDMI".to_owned(),
@@ -1249,6 +1256,10 @@ fn audio_dropdown_options(ui: &QuickMenuWindow, snapshot: &AudioSnapshot) -> Vec
         options.push(("bluetooth", tr(ui, 331, "Bluetooth Audio")));
     }
 
+    if snapshot.usb_available {
+        options.push(("usb", tr(ui, 1476, "USB Audio")));
+    }
+
     if snapshot.headphones_available {
         options.push(("analog", tr(ui, 330, "Headphones")));
     } else {
@@ -1272,6 +1283,7 @@ fn open_audio_dropdown(ui: &QuickMenuWindow) {
     let selected_mode = match snapshot.mode.as_str() {
         "auto" => "auto",
         "bluetooth" => "bluetooth",
+        "usb" => "usb",
         "hdmi" => "hdmi",
         "analog" | "speaker" | "headphones" => "analog",
         _ => "auto",
@@ -1356,6 +1368,10 @@ fn cycle_audio_output(
 
     if snapshot.bluetooth_available {
         modes.push("bluetooth");
+    }
+
+    if snapshot.usb_available {
+        modes.push("usb");
     }
 
     /* The codec exposes one physical analog route.  Jack insertion chooses

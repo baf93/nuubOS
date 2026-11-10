@@ -2860,7 +2860,7 @@ export component HomeWindow inherits Window {
     changed height => { if (root.lifecycle-on) { root.splash-size-changed(); } }
     /* The Settings dialog belongs to the page that opened it. */
     changed settings-open => { if (!root.settings-open) { root.settings-dialog-open = false; } }
-    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Automatic Backup", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Back Up Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Back Up to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores power, display, audio, backup and controller mapping settings to their defaults.", "Games, BIOS, saves, users and network settings are kept.", "Press again to reset system settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Solid", "Breathing", "Orbit", "Aurora", "Spectrum", "Battery Level", "Console Colors", "Speed", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Effect", "Brightness", "Color", "SYSTEM SIGNALS", "LIGHTING", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "Slow", "Normal", "Fast", "Startup & Sleep", "Connections", "Games", "Tasks", "Welcome, sleep, wake and power off", "Low battery, charging and full charge", "Controllers, headphones, Wi-Fi and USB drives", "Save states, screenshots and errors", "Downloads, backups and failures", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Mood", "Default mood", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Save Diagnostic Report", "Saving diagnostic report…", "Report saved", "The report could not be saved", "Useful for getting help. It contains no games, saves, passwords or Wi-Fi keys and is saved in the diagnostics folder.", "Repair Settings", "Check complete", "The operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Full Factory Reset", "Finds and fixes damaged settings files. Games and saves are not touched.", "Resets the current user's preferences, controls and app settings. Saves are kept. The console restarts.", "Erases users, settings, Wi-Fi networks and Bluetooth pairings, then starts the initial setup. Games and BIOS are kept.", "Like Factory Reset, and also erases every user's saves, states, screenshots and app data. Games and BIOS are kept.", "Press again to confirm • the console restarts", "Press once more to also erase all saves", "Safe Mode", "The interface closed unexpectedly several times. nuubOS started with the default theme so you can fix the problem.", "Restart Normally", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Integer Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Diagnostic report", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in as root with the device password", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Mood", "Mood installed", "This is not a valid nuubOS mood", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY", "Connect with WPS", "Cancel WPS", "Press the WPS button on your router…", "WPS timed out. Press the router button and try again.", "Several routers are in WPS mode. Try again in a few minutes.", "WPS failed: {0}", "WPS connection failed", "Leaves safe mode and restarts with your theme and settings.", "Connect to Wi-Fi or turn on Remote Services to get help remotely. Back returns here.", "Nothing played yet", "Your adventure log is a blank page. Pick a game and write chapter one!", "Fresh save file", "No games played so far. The controller is warmed up and ready.", "Player 1, ready?", "Your recently played games will appear here. Go make some history!", "Zero high scores… for now", "Start any game and it will be waiting right here for you.", "This shelf is gathering dust", "Insert coin… or better, some games", "The arcade is quiet. Too quiet.", "Nothing to launch yet", "Applications you add will appear here.", "SERVICES", "DISPLAY", "AUDIO", "SOUNDS", "POWER", "STORAGE & SOFTWARE", "TROUBLESHOOTING", "CONTROLLERS", "RUMBLE & LIGHTING", "Saved Backups", "Backup deleted", "The backup could not be deleted", "Network name (SSID)", "Press together to exit", "Lights up only for system signals", "One steady color", "Slowly fades in and out", "A comet of light circles the stick", "Soft shades drift around the ring", "Every color, slowly turning", "Charge left at a glance, pulses while charging", "The color of the system you are playing", "Mood Color", "Cyan", "Mint", "Lime", "Amber", "Orange", "Red", "Pink", "Violet", "White", "Custom", "YOUR SYSTEMS", "OTHER SYSTEMS", "Start Game", "Continue", "Start from the Beginning", "Automatic Save", "Saved {0}", "Console Boot Screens", "Shows the console's start-up logo when its BIOS is available", "Save State Slots", "Rotate Save Slots", "Each save goes to the next slot, then starts again from slot 0", "Game Hotkeys", "Hold Hotkey and press a button", "Performance Overlay", "Bezels", "Frames the game when it does not fill the screen", "CRT Effect", "Scanlines for consoles played on TVs", "Next Slot", "Previous Slot", "Fast Forward", "Show Overlay", "Frame Rate", "Temperature", "Power Draw", "Battery", "Clock", "Empty", "{0}%", "The metadata service is busy, try again later", "Uppercase", "Metadata Source", "Covers, descriptions and ratings in your language. A free ScreenScraper account gives more requests.", "Covers and descriptions in English. A free private API key gives more requests.", "Covers only. No account needed.", "TheGamesDB API Key", "Not set", "Fill Missing Data", "Adds only what is missing, such as covers or descriptions. What is already there is kept.", "Search Name", "Searched as \"{0}\". Change it if the game is not found or the match is wrong.", "Source: {0}", "Optional: more requests per day", "Scan for New Games", "Finds games copied to the SD card since the last scan", "New games found: {0}", "No new games found", "BACKGROUND TASK", "Stop", "Stopping…", "Starting game…", "Muted", "Power", "BATTERY", "ACCESSORY BATTERIES", "Charge", "Battery Health", "Discharging", "Not charging", "Good", "Overheating", "Too cold", "Worn out", "Check the battery", "No accessories connected", "ENERGY SAVING", "Find a Game", "Find", "Random Game", "Random Unplayed Game", "Title", "Decade", "Any", "Never Played Only", "Show Results ({0})", "No games match these filters", "Results", "Add to Collection", "Delete Collection", "Systems", "SURPRISE ME", "SEARCH", "Rename Collection", "Clear Filters", "Picks one of your games for you", "Added to {0}", "Removed from {0}", "Collection deleted", "Manage", "Games stay in your library; only the collection goes away", "Notification Sounds", "Automatic Updates", "Restore Version {0}", "The new version did not start", "Version {0} restored", "New versions install when you open Steam Link; one that does not start is undone automatically", "VIDEO", "PC", "Audio Channels", "Stereo", "5.1 Surround", "7.1 Surround", "Play Audio on the PC", "Optimize Game Settings", "Lets the PC adapt the game to the stream resolution", "Quit the App on the PC After Streaming", "Left and right change it", "Metadata in Your Language", "Gets descriptions and genres in your language; the languages already downloaded stay saved", "Every game with missing data", "Not tried in the last hour", "Not tried in the last day", "Not tried in the last week", "Not tried in the last month", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Day", "Month", "Year", "Hour", "Minute", "RUMBLE", "Charge Limit", "Recharging extra lives...", "Full power. Let's play!", "Press POWER or START to start nuubOS", "SAVE STATES", "Latest", "No saved states yet", "Turn On Hardcore Mode?", "Achievements are earned as on the original console, with no help. While Hardcore Mode is on, save states and fast-forward are off: every game starts from the beginning and only the game's own saves are kept. RetroArch also blocks cheats, rewind and slow motion. You can turn it off at any time.", "Turn On", "Not available in Hardcore Mode", "Save states are off in Hardcore Mode", "SD1", "System and saves", "{0} free of {1}", "Games card", "No card", "Checking…", "Read-only", "The card has errors: games can be played, nothing can be written to it", "Unreadable", "No supported file system (exFAT, FAT32, ext4)", "Ejected", "SD2 ejected: safe to remove", "Eject SD2", "Use SD2 Again", "Create Game Folders", "Adds a folder for each system. Nothing is deleted.", "Format SD2", "Erases everything on the card", "Press again • everything on SD2 will be erased", "BACKUP TO SD2", "SD2 inserted", "Last backup: {0}", "Never backed up", "Insert an SD2 card to back up", "Backup Content", "All", "{0} of {1}", "SD2 removed", "Restore from SD2", "Replaces the data on SD1 with a backup", "Backup of a previous SD1", "Restore it, or keep it aside and start a new backup", "SD2 is read-only", "Profiles & Settings", "Always included. Passwords and accounts are never copied.", "Saves", "Save States", "Game Library", "Play history and collections", "Screenshots & Recordings", "You can format it in Settings › System › Storage", "Covers & Metadata", "Downloaded game information; it can take a lot of space", "New SD2 card: no games found", "Don't Use", "SD2 can't be read", "Erase everything on SD2 ({0})?", "Format", "Restore \"{0}\"?", "SD2 removed: game saved and closed", "This console", "Backup found on SD2", "Start from Scratch", "Restoring…", "Backing up…", "Backup to SD2", "The backup could not be completed", "Formatting SD2", "Formatting…", "SD2 formatted", "The card could not be formatted", "Creating game folders", "Insert the SD2 card with this game", "Its games come back when you insert it again", "Errors found: open Recovery", "Close the game first", "Not in use", "Use SD2", "nuubOS leaves this card alone until you choose to use it", "PROFILE BACKUP", "Backup", "REPAIR & RESET", "Installing update", "Update Channel", "Stable", "RC", "Nightly", "RC and Nightly get new versions first and may have bugs", "The update could not be installed", "Install it from Settings › System › Software Update", "Check Automatically", "Once a day, when connected to Wi-Fi", "Restoring your console", "Keep the console on: it restarts by itself when it is done", "Try Again", "Dusting off your save files…", "Putting the cartridges back in their cases…", "Reminding your games where you left off…", "Untangling the controller cables…", "Giving the high scores back to their owners…", "Polishing every pixel…", "Blowing into the cartridge, just in case…", "Teaching the console your favourite games again…", "What's New", "Scroll", "Polishing the new version…", "Checking every byte twice…", "Making room for new features…", "Tightening a few screws…", "Teaching old buttons new tricks…", "Charge the battery above 30% to install", "The update service cannot be reached. Try again later", "RESTORE", "Destination", "USB Drive", "Restore from Backup", "Entire Console", "What do you want to restore?", "The whole console or a single profile", "Connect a USB drive to back up", "Lost if SD1 is formatted or replaced", "Backup found", "BACKUP", "Starting…", "Waiting for your devices", "No devices yet", "Add a Device", "Another console, a computer or a phone", "DEVICES", "WHAT TO SYNC", "Wants to sync with you", "Accept", "Ignore", "Sync Away from Home", "Finds your devices over the Internet; your data still goes straight between them", "This Console", "Code {0} • Press to show the full ID", "{0}% synced", "Sync Your Saves", "Syncthing keeps your saves the same on all your devices. They travel straight over your network: no account, no cloud. It is not a backup: a save deleted on one device is deleted on the others too.", "What do you want to sync with?", "Another Console", "Two nuubOS consoles share the same saves", "Computer or Server", "A PC or NAS that stays on: where all your consoles meet", "Android Phone", "With the Syncthing-Fork app", "What to Sync", "Choose what this profile shares. Use the same profile on every device: each profile has its own saves.", "On the Other Console", "Turn it on and connect it to the same Wi-Fi network.", "Choose a profile with the same name.", "Open {0}.", "This console: {0}", "Choose the Other Console", "Pick the code the other console shows. If it found this console first, accept its request.", "Looking for consoles on your network…", "Device {0}", "Confirm on the Other Console", "On the other console, accept the request from {0}. The saves start syncing as soon as both consoles connect.", "Waiting for the other device…", "Install Syncthing on the Computer", "Download Syncthing from syncthing.net (Windows, macOS, Linux) or install the Syncthing app on your NAS.", "Start it: its page opens in the browser.", "Keep it running: it is where all your consoles meet.", "Add This Console", "In Syncthing on the computer choose Add Remote Device and pick this console among the nearby devices (code {0}), or type its ID:", "Waiting for the request from the computer…", "Accept the Folders", "The computer now asks to add the nuubOS folders: accept them and choose where to keep them.", "For more consoles, repeat this guide on each one; on the computer, add them to the folders you already have.", "Install Syncthing-Fork", "On your Android phone install Syncthing-Fork from F-Droid or Google Play and open it.", "Connect the phone to the same Wi-Fi network.", "Scan This Code", "In Syncthing-Fork open Devices, tap + and scan this code. Then accept the request that appears here.", "Waiting for the request from the phone…", "The phone now asks to add the nuubOS folders: accept them and choose where to keep them.", "You're All Set", "{0} is connected. From now on your saves sync by themselves whenever both devices are on.", "Add it on your other device, or scan the code with your phone.", "New sync request", "Cannot sync", "Syncthing is still starting. Try again in a moment.", "Device ID", "Allow Relays", "If a direct connection is impossible, the encrypted data may pass through public Syncthing servers", "Covers & Metadata", "Shared by every profile on this console", "Play Activity", "Time played and Recently Played, added up across your devices", "Saves match when the game file has the same name on every device.", "SYNCTHING", "Continue Watching", "Videos", "Recordings", "Music", "Playlists", "Browse", "Shuffle All", "New Playlist", "Playlist name", "Add to Playlist", "Remove from Playlist", "Delete Playlist", "Rename Playlist", "Removed from the playlist", "Shuffle", "Play from the Beginning", "Resume from {0}", "{0} tracks", "{0} videos", "NOW PLAYING", "UP NEXT", "Music Volume", "Screen Off", "The music keeps playing. Press POWER or START to turn the screen back on.", "Songs", "Unknown Artist", "Put videos in the Videos folder and music in the Music folder: on Internal Storage, SD2, a USB drive or a network location.", "Jellyfin", "Sign in to your Jellyfin server", "Signed in as {0}", "Connect to open it", "This playlist is empty. Add songs from an album with Add to Playlist.", "Episode {0}", "Network Location", "Album", "Folder", "Options", "MUSIC", "Pause", "Next Track", "Previous Track", "Game Volume", "Stop Music", "Places", "Copy to Other Panel", "Move to Other Panel", "{0} selected", "{0} items", "Select All", "Clear Selection", "Sort", "Name", "Size", "Date", "Same Folder in Other Panel", "Calculating…", "Delete {0} items?", "Actions", "Mark", "Copying {0}", "Moving {0}", "Loading…", "Open a folder in the other panel first", "A folder cannot go inside itself", "Modified {0}", "Sort: {0}", "Done: {0}", "Remove Location", "Subtitles", "Play", "Albums", "Artists", "{0} albums", "Put your music in a Music folder: on Internal Storage, SD2, a USB drive or a network location.", "Put your videos in a Videos folder: on Internal Storage, SD2, a USB drive or a network location.", "No music yet", "No videos yet", "Add Network Location", "A folder on a PC or NAS", "Server address, for example 192.168.1.10 or nas.local", "Folder on {0}, for example Music", "User name on {0} (empty = guest)", "Password for {0}", "Connected to {0}", "Wrong user name or password", "The server has no folder named {0}", "Cannot reach {0}: check the address and that the computer is on", "Connecting to {0}…", "PC Home Button", "Steam Quick Access", "Wake PC", "Waking up…", "Sends a Wake-on-LAN signal to the PC", "{0} did not wake up", "Check that Wake-on-LAN is enabled on the PC", "Net", "Decode", "Host", "Lost", "Cast Screen", "Stop Casting", "Searching for TVs and receivers…", "No receivers found", "Google Cast", "Miracast", "DLNA • with delay", "Allow the cast on the TV", "Screen Cast", "Casting to {0}", "The picture reaches the TV a few seconds late", "Casting ended", "Casting connection lost", "Casting could not start", "The receiver could not be reached", "The receiver refused the connection", "The receiver cannot show this stream", "Miracast encoder installed", "The Miracast encoder could not be downloaded", "Screen Casting", "Sound on the TV", "Casting Latency", "Low", "Smooth", "Miracast Encoder", "OpenH264 Video Codec provided by Cisco Systems, Inc.", "Installed", "Downloading {0}%", "Low suits playing; Smooth copes with a weak Wi-Fi", "Cisco's H.264 encoder, downloaded from Cisco (about 0.6 MB)", "SCREEN CASTING", "Audio track", "Show track progress", "Off: your global lighting", "Keep lit with the screen off", "Off: the lights turn off with the screen", "Tags", "Backlog", "Playing", "Completed", "100%", "Dropped", "Broken", "Mark your progress, or a game that does not work", "Cheats", "Netplay", "No cheats for this game", "Download Cheats", "Downloading cheats", "Cheat List", "{0} on", "Not available during netplay", "Host Game", "Stop Hosting", "Leave Game", "Hosting • {0} connected", "Connected to {0}", "Waiting for players…", "Cheat {0}", "Get More Emulators", "Downloading emulator", "No other emulators for this system", "Emulator installed", "Cheat Collection", "Not downloaded", "Updated {0}", "About 37 MB from libretro, with cheats for thousands of games", "Update", "Play together with consoles on the same network running nuubOS or RetroArch.", "Search Again", "Searching for netplay games…", "No games found. On the other console, start a game and choose Host Game in its Quick Menu.", "Not in your library", "Needs the emulator {0}", "Hosted by {0}", "Join", "The game could not be joined", "The game restarts from this point as a host", "Looking for emulators…", "Starting netplay…", "Needs a password", "Add to Library", "Which system is {0}?", "Adding {0} to the library", "{0} files added to the library", "Already in the library", "No games found here", "Looking for PCs and NAS on the network…", "Choose a PC or NAS", "Type an Address", "Choose a Folder on {0}", "Type a Folder Name", "Closing game…", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December", "{0} {1} {2}", "{3} {0} {1} {2}", "No battery", "Screen Layout", "Two Screens", "Large Top Screen", "Picture in Picture", "Single Screen", "Stylus", "Stylus on", "Stylus off", "Right Stick", "Left Stick", "D-Pad", "{0} moves it, L2 touches", "Emulation Accuracy", "Fast", "Accurate", "Choose Accurate if the game misbehaves", "Removes the game, its cover and details from the library for every user. Saves are kept.", "Show Unavailable Games", "Games whose file is missing or on an SD2 card that is not inserted", "Use an Existing Folder", "Join saves, states or screenshots your other devices already share", "Folder ID", "Folder ID {0}", "Shared by {0}", "Leave empty to use the nuubOS folder", "Enter a Folder ID", "Tailscale", "Reach this console from anywhere through your tailnet", "Tailscale's own app, about 25 MB, downloaded from tailscale.com", "Sign in to your tailnet", "Scan the code with your phone, or open the address on another device, and sign in to Tailscale.", "Tailscale could not be downloaded", "Waiting for approval in your tailnet", "Removes Tailscale and takes this console out of your tailnet", "SSH, File Sharing and Web Administration, when on, answer at this address too", "Caps Lock", "Lowercase", "Controller Accessory", "Rumble Pak", "Controller Pak", "One fits at a time: choose Controller Pak if the game saves on it", "AVAILABLE FOLDERS", "Sync {0} as", "Turn Off", "Use the nuubOS Folder", "HyperSleep", "Almost no battery use. Wake with the power button.", "START and the lid also wake it. Uses more battery.", "Diagnostic Mode", "Next {0} starts", "Logs everything for the next 10 starts and saves a report at each restart or power off. Off by default: logging costs performance and card writes.", "No battery: keep the power cable connected until the update is complete", "Fast Startup", "Experimental: starts about 5 seconds faster, but can make the console freeze or restart by itself.", "Checks the memory at every start. Can help if the console freezes or restarts by itself.", "Install PortMaster first", "PortMaster", "Download PortMaster", "Downloading PortMaster", "PortMaster could not be downloaded", "Open PortMaster", "Browse, install and update ports over Wi-Fi", "Remove PortMaster", "The installed ports stay, but need PortMaster to start", "PortMaster could not be started", "Open-source manager of ports: games and engines made for handhelds, downloaded over Wi-Fi. Some ports need files from a game you own.", "New versions install when this page checks for updates", "PORTMASTER", "Quit PortMaster", "Swap Confirm/Back Buttons", "Use the opposite face button to confirm in menus. Games are not affected.", "Experimental: it can make the console unstable. Press again to turn it on.", "1 port", "{0} ports", "Music & Videos Access", "Off: this port cannot see your music and videos", "On: this port can read your music and videos, not change them", "1x", "2x", "Auto: 1x on the console, 2x on a TV", "2x is sharper but can slow the game down", "Fast can draw smoke and glass wrong", "Terminal", "TERMINAL", "Quit Terminal", "The terminal could not be opened", "Press Power to Sleep", "Hold the power button for the power menu.", "The power button opens the power menu.", "RetroArch in the Quick Menu", "Opens RetroArch's own menu during a game", "RetroArch could not be opened", "RETROARCH", "Quit RetroArch", "Reset RetroArch Settings", "Puts the current user's RetroArch options, core options and remaps back to the defaults. Games, saves and states are kept.", "RetroArch settings reset", "Disc", "Disc {0}", "{0} of {1}", "Vibration Intensity", "Light", "Strong", "Skips the faintest vibration some games keep sending", "Every vibration the game asks for", "Vibration", "Picture Position", "Where the game sits when it does not fill the screen", "Top", "Center", "Bottom", "Square Pixels", "Games", "The ROM folder on this console's card, shared by every profile", "Games on SD2", "The SD2 card's ROM folder; it waits while the card is out", "Volume Button Step", "Cover Region", "Box art from this region when there is one. Fill Missing Data changes the covers already downloaded.", "USA", "Europe", "Japan", "World", "Small Screen Position", "Bottom Right", "Bottom Left", "Top Right", "Top Left", "Ports on SD2", "PortMaster and the ports in the ports folder of the SD2 card. The ports of the other card stay there.", "Moving ports", "{0} ports were already there: their copies stayed on the other card", "The ports could not be moved", "Data on SD2", "Moving…", "Waiting for the SD2 card", "{0} files were already there: the other copies are in the conflicts folder", "Saves, states, BIOS and covers", "Use SD1 without the card's data?", "Use SD1", "SD2 holds your data: move it to SD1 first", "Insert the SD2 card with your data", "The data could not be moved", "Offline Achievements", "Sent when you are back online", "Casual only: off in Hardcore Mode", "System ({0})", "{0} games use their own settings", "Apply to All Games", "Reset System Settings", "{0} Settings", "Settings shared by every game of this system", "System Settings", "Emulator and picture for all the games of a system", "Controls", "Choose what each button does in the game", "Reset Controls", "Cross", "Circle", "Triangle", "Square", "Custom", "Frameskip", "Auto (up to 3)", "Auto skips frames only when the game slows down", "Wrap Around Rows", "On Home, going past the last item returns to the first", "Search System", "Change it for a port of a game from another system.", "As in Settings ({0})", "Same as the game ({0})", "Advanced Search", "Change it if the game is not found or the match is wrong.", "Permanently deletes the game's folder and everything in it for every user. Saves are kept."];
+    in-out property <[string]> i18n-strings: ["Recently Played", "Systems & Collections", "Copy your games to the roms folder on the SD card, one folder per system.", "Settings", "General", "Connectivity", "Controllers & Input", "Display & Audio", "System", "Connect to Wi-Fi", "Saved Networks", "Connect New Device", "My Devices", "Player Assignment", "Controllers", "Input Tester", "Controller Mapping", "Internal Rumble", "RGB Lighting", "Storage", "System Information", "Restore Defaults", "Profiles, language and time", "Scanning nearby networks…", "Refreshing nearby networks…", "Choose a network or add a hidden network", "Saved device-global Wi-Fi networks", "Password is hidden while typing", "Controller or physical keyboard", "Scanning nearby Bluetooth devices…", "Choose a nearby Bluetooth device", "Paired and connected Bluetooth devices", "Preferred slots are compacted when a controller is unavailable", "Available built-in, USB and Bluetooth controllers", "All buttons and axes • Hotkey + Start to exit", "Press the new button now…", "Select an action to remap", "User preference for the internal console rumble", "Screen Reactive • follows compositor color feed", "User RGB baseline and system effects", "Device-global user storage", "Live read-only device information", "Reset System settings without deleting user content", "Sections", "User & Profile", "Language & Region", "Date & Time", "Rumble & RGB", "Updates & Recovery", "SYSTEM", "Performance Profile", "Battery Saver", "Auto", "Automatic Battery Saver", "Off", "Screensaver After", "Sleep After", "After screensaver", "Power Off", "After Sleep • RTC wake unavailable", "After Sleep", "After Screensaver", "Active Storage", "User Data", "SD2", "Not inserted", "Ready", "Available", "Not yet managed by nuubOS", "Automatic Backup", "Daily", "Weekly", "Monthly", "Backup completed", "Backup due", "Clock unavailable", "Clock check needed", "Move User Data to SD1", "Use SD2 for User Data", "Move User Data to SD2", "Working…", "Insert SD2", "Confirm", "Erase & migrate", "Sync & switch", "Activate", "Press again • SD2 will be erased", "Press again • sync & switch to SD1", "Back Up Now", "Requires active SD2", "Storage Job", "Running", "Completed", "Failed", "Idle", "Move to SD2", "Move to SD1", "Back Up to SD1", "Device", "Kernel", "Battery", "CPU", "GPU", "Network", "RAM", "Uptime", "Restores power, display, audio, backup and controller mapping settings to their defaults.", "Games, BIOS, saves, users and network settings are kept.", "Press again to reset system settings", "Reset System Settings", "CONTROLLERS & INPUT", "P1–P8", "Enabled", "Disabled", "Solid", "Breathing", "Orbit", "Aurora", "Spectrum", "Battery Level", "Console Colors", "Speed", "Automatic", "Left Stick Deadzone", "Right Stick Deadzone", "Test Rumble", "Effect", "Brightness", "Color", "SYSTEM SIGNALS", "LIGHTING", "DISPLAY & AUDIO", "Internal display inactive", "Audio Output", "Volume", "Applications", "System Sounds", "Navigation Sounds", "Power Sounds", "Home Music", "Test Sound", "Stop", "Play", "Color Temperature", "Slow", "Normal", "Fast", "Startup & Sleep", "Connections", "Games", "Tasks", "Welcome, sleep, wake and power off", "Low battery, charging and full charge", "Controllers, headphones, Wi-Fi and USB drives", "Save states, screenshots and errors", "Downloads, backups and failures", "WI-FI", "Wi-Fi", "Connect", "Not connected", "BLUETOOTH", "Bluetooth", "Add Hidden Network", "Scanning…", "Searching for nearby networks…", "No saved Wi-Fi networks", "No new Bluetooth devices found", "No paired Bluetooth devices", "Pair & Connect", "Disconnect", "Forget Device", "Pair with PIN", "Password", "None", "Change", "IPv4", "Manual", "Address", "Subnet Mask", "Gateway", "DNS", "Apply Changes", "Forget Network", "Small System. Big Adventures.", "Navigate", "Select", "Back", "Menu", "POWER MENU", "Sleep", "Restart", "Press again to confirm", "Profile", "Language", "Mood", "Default mood", "Current user", "Interface language", "Connected", "Saved", "Excellent", "Good", "Fair", "Weak", "Player", "Unavailable", "Waiting for Wi-Fi service", "Waiting for Bluetooth service", "Waiting for input", "Blue", "Automatic • Speaker", "Unknown", "Open", "System effect • ", "Effective: ", " min", "ABSENT", "SD2 → SD1", "Failed (", " available", "Player ", " • unavailable", "On", "TV / Receiver", " K", " saved", " devices", " • Runtime P", " • Saved", " • Connected", " • Paired", "CONTEXT", "nuubOS Quick Menu", "Quick Menu", "DISPLAY / AUDIO", "Audio", "Performance", "Reboot", "Adjust", "Close", "Speaker", "Unavailable", "Enabling Bluetooth…", "Disabling Bluetooth…", "Bluetooth toggle failed: {0}", "Discovery failed: {0}", "Bluetooth operation failed: {0}", "Pairing with PIN…", "Bluetooth PIN pairing failed: {0}", "Press any control", "Enabling Wi-Fi…", "Disabling Wi-Fi…", "Wi-Fi toggle failed: {0}", "Scan failed: {0}", "Connecting to {0}…", "Connect failed: {0}", "Disconnecting…", "Disconnect failed: {0}", "Forgetting {0}…", "Forget failed: {0}", "IP configuration failed: {0}", "Applying network settings…", "SSID is required", "Password must contain at least 8 characters", "Hidden", "Enter a valid IPv4 address", "Prefix must be between 0 and 32", "Gateway must be empty or a valid IPv4 address", "DNS must contain IPv4 addresses separated by comma or space", "Enter a contiguous IPv4 subnet mask", "PIN/passkey must contain 1 to 16 characters", "This network security mode is not supported", "TV", "Volume controlled by TV / receiver", "Player", "Users", "Startup", "User Picker", "Direct Login", "Default User", "Timezone", "Automatic Time", "Sync Now", "Keyboard Layout", "Edit Profile", "Username", "Profile Picture", "Manage Users", "Add User", "Delete User", "Press again to delete", "Choose Profile", "Switch User", "Profile Pictures", "Custom pictures from your profile folder", "Create User", "Enter username", "Cannot delete the active user", "At least one user is required", "Time synchronized", "Time synchronization failed", "Last Sync", "Never", "Default", "Active", "Profile data only; shared games and apps are kept", "Select a default user", "Show user picker at boot", "Load the default user at boot", "Automatic network time", "Use NTP when network is available", "Physical and virtual keyboard", "USER", "DEVICE", "Avatar {0}", "Custom", "No custom pictures found", "Place PNG or JPG files in {0}", "User created", "User deleted", "Profile updated", "Choose an avatar", "Automatic time is off", "Syncing…", "Boot User", "Other Users", "Date", "Time", "Power Off After", "Skip Track", "Headphones", "Bluetooth Audio", "Analog Audio", "PROFILE", "USERS", "DATE & TIME", "KEYBOARD", "Face South", "Face East", "Face North", "Face West", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right", "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select", "Hotkey", "Left Stick X", "Left Stick Y", "Right Stick X", "Right Stick Y", "Button {0}", "Axis {0}", "Inverted", "Not assigned", "Press the new control • wait 5 s to cancel", "Move the stick right • any button cancels", "Move the stick down • any button cancels", "Restore Default Mapping", "Press again to restore defaults", "BUTTONS", "STICKS", "Now Playing", "Controller connected", "Controller disconnected", "Headphones connected", "Headphones disconnected", "Bluetooth audio connected", "Bluetooth audio disconnected", "Battery Saver on", "Battery at {0}%", "Low battery", "{0}% remaining", "Battery critically low", "{0}% remaining • connect the charger", "Charging", "Fully charged", "Wi-Fi connected", "Wi-Fi connection lost", "Setup", "Welcome", "Welcome to nuubOS", "Let's get your console ready in a few quick steps.", "Get Started", "Continue", "Skip", "You can connect later from Settings", "You're all set", "Your console is ready. You can change these choices at any time in Settings.", "Let's Play", "Finish", "No games yet", "Favorites", "{0} games", "1 game", "today", "yesterday", "{0} days ago", "Never played", "Played {0}", "{0} h {1} min", "{0} min", "Last played {0}", "Searching for games…", "Launching is not available yet", "Favorite", "Play", "Open", "GAME", "Resume", "Save State", "Load State", "State Slot", "Restart Game", "RetroArch", "Quit Game", "Slot {0}", "State saved", "State loaded", "Slot {0} is empty", "The state could not be saved", "The state could not be loaded", "Fast-forward on", "Fast-forward off", "The game could not be started", "The game closed unexpectedly", "No emulator is installed for this system", "This game is not available", "Moonlight", "PCs", "Stream Settings", "Search for PCs", "Add PC by Address", "Searching for PCs…", "PC address", "Paired", "Not paired", "Online", "Offline", "Checking…", "Pair", "Cancel Pairing", "Enter this PIN on your PC", "Remove PC", "Loading applications…", "The PC could not be reached", "No applications", "Resolution", "Frame Rate", "Video Codec", "Bitrate", "No PCs yet", "Enter a valid address", "{0} fps", "{0} Mbps", "PC paired", "Pairing failed", "The stream could not be started", "The stream was interrupted", "The PC must be paired again", "The application is not available on the PC", "STREAM", "Quit Stream", "Quit and Close Application", "Network Latency", "Decode Time", "Video", "PIN", "Waiting for the PC…", "Unavailable while streaming", "Steam Link", "STEAM LINK", "Download Steam Link", "Valve's application, about 35 MB. Downloading it means you accept the Steam Subscriber Agreement.", "Downloading Steam Link", "Press to cancel", "Open Steam Link", "Choose and pair your PC in Steam Link", "Version", "Update to {0}", "Check for Updates", "Checking…", "Up to date", "Remove Steam Link", "Steam Link installed", "Steam Link could not be downloaded", "Not enough free space", "Check the network connection", "Steam Link closed unexpectedly", "Quit Steam Link", "Steam Link could not be started", "Diagnostics", "Recovery", "Save Diagnostic Report", "Saving diagnostic report…", "Report saved", "The report could not be saved", "Useful for getting help. It contains no games, saves, passwords or Wi-Fi keys and is saved in the diagnostics folder.", "Repair Settings", "Check complete", "The operation failed", "Reset User Profile", "Profile reset", "Factory Reset", "Full Factory Reset", "Finds and fixes damaged settings files. Games and saves are not touched.", "Resets the current user's preferences, controls and app settings. Saves are kept. The console restarts.", "Erases users, settings, Wi-Fi networks and Bluetooth pairings, then starts the initial setup. Games and BIOS are kept.", "Like Factory Reset, and also erases every user's saves, states, screenshots and app data. Games and BIOS are kept.", "Press again to confirm • the console restarts", "Press once more to also erase all saves", "Safe Mode", "The interface closed unexpectedly several times. nuubOS started with the default theme so you can fix the problem.", "Restart Normally", "Output Folder", "Game Details", "Details", "Game Settings", "Emulator", "Aspect Ratio", "Video Filter", "Default ({0})", "As the game", "Full Screen", "Scaling", "Sharp", "Smooth", "Pixel Perfect", "Reset Game Settings", "Changes apply the next time the game starts", "Collections", "New Collection", "Collection name", "Hide Game", "Hidden Games", "No hidden games", "Only for you; the game stays available to other users", "Delete Game", "Permanently deletes the game file for every user. Saves are kept.", "Press again to delete permanently", "Game deleted", "The game could not be deleted", "Reset Play Statistics", "Sessions", "Last Played", "Time Played", "Developer", "Publisher", "Release Date", "Genre", "Players", "File", "Get Metadata", "Update Metadata", "Check this match", "Accept Match", "Reject Match", "Game Metadata", "ScreenScraper Account", "Not signed in", "Sign Out", "Get Metadata for All Games", "Uses the Internet only when you ask. Games without metadata keep their file name.", "The metadata service is not available", "Getting metadata", "Metadata updated", "No metadata found for this game", "Daily metadata limit reached, try again later", "Check the account", "BIOS Files", "Missing", "Invalid", "Optional", "Not verifiable", "Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.", "{0} of {1} present", "BIOS missing for this system", "RetroAchievements", "Hardcore Mode", "No save states or fast-forward; achievements count double", "Sign In", "Signed in", "Sign-in failed", "Signing in…", "Your password is used once and never stored", "Screenshot", "Screenshot saved", "The screenshot could not be saved", "Diagnostic report", "Cancelled", "Network", "Press again to reset", "Remote Services", "SSH, SCP and SFTP", "Sign in as root with the device password", "File Sharing (SMB)", "Web Administration", "Only on networks you trust. Never exposed to the Internet.", "Address", "Regenerate Password", "The old password stops working", "Press to show", "Files", "Internal Storage", "Network Shares", "New Folder", "Folder name", "Paste Here", "Copy", "Move", "Rename", "Delete", "Cancel", "Delete \"{0}\"?", "Empty folder", "{0} free", "Copying files", "Moving files", "Removable Media", "Eject", "Safe to remove", "In use; close what uses it first", "No removable media", "Backup & Restore", "Back Up Now", "Include Screenshots", "Include App Data", "No backups found", "Restore", "Replaces this profile's saves, save states and settings. ROMs and BIOS are not affected.", "Backup created", "Restore complete", "The backup could not be created", "The backup could not be restored", "Add Share", "Share name", "Share address (//server/share)", "Remove", "The share could not be reached", "USB drive connected", "USB drive removed", "Install Mood", "Mood installed", "This is not a valid nuubOS mood", "Software Update", "nuubOS {0} available", "Download", "Install and Restart", "Updates are not available in this build", "The update could not be verified", "Your games, saves and settings are kept", "The previous version was restored", "Update installed", "Downloading update", "Online Services", "nuubOS works fully offline. These services use the network only when you enable or start them.", "Only when you check", "Not in use", "Media", "Server address (http://server:8096)", "The media could not be played", "The server could not be reached", "Syncthing", "Keeps your saves in sync with your other devices. It is not a backup.", "This Console's ID", "Add it on your other device; it then appears here to accept", "Saves", "Save States", "Screenshots", "Wants to connect • press to accept", "Syncthing stopped unexpectedly", "Web", "Enter Address", "Web address or search", "Bookmarks", "History", "No bookmarks yet", "Add Bookmark", "Bookmark added", "Clear History", "Clear Browsing Data", "Removes cookies, site sign-ins and cached pages of this profile. Bookmarks are kept.", "The browser could not be started", "The browser closed unexpectedly", "WEB", "Go Back", "Go Forward", "Reload", "Zoom", "Quit Web", "Done", "D-pad moves between links, the left stick moves the pointer and the right stick scrolls.", "Keyboard", "Select a text field first", "Close the browser first", "Gaming", "GAMING", "LIBRARY", "Connect with WPS", "Cancel WPS", "Press the WPS button on your router…", "WPS timed out. Press the router button and try again.", "Several routers are in WPS mode. Try again in a few minutes.", "WPS failed: {0}", "WPS connection failed", "Leaves safe mode and restarts with your theme and settings.", "Connect to Wi-Fi or turn on Remote Services to get help remotely. Back returns here.", "Nothing played yet", "Your adventure log is a blank page. Pick a game and write chapter one!", "Fresh save file", "No games played so far. The controller is warmed up and ready.", "Player 1, ready?", "Your recently played games will appear here. Go make some history!", "Zero high scores… for now", "Start any game and it will be waiting right here for you.", "This shelf is gathering dust", "Insert coin… or better, some games", "The arcade is quiet. Too quiet.", "Nothing to launch yet", "Applications you add will appear here.", "SERVICES", "DISPLAY", "AUDIO", "SOUNDS", "POWER", "STORAGE & SOFTWARE", "TROUBLESHOOTING", "CONTROLLERS", "RUMBLE & LIGHTING", "Saved Backups", "Backup deleted", "The backup could not be deleted", "Network name (SSID)", "Press together to exit", "Lights up only for system signals", "One steady color", "Slowly fades in and out", "A comet of light circles the stick", "Soft shades drift around the ring", "Every color, slowly turning", "Charge left at a glance, pulses while charging", "The color of the system you are playing", "Mood Color", "Cyan", "Mint", "Lime", "Amber", "Orange", "Red", "Pink", "Violet", "White", "Custom", "YOUR SYSTEMS", "OTHER SYSTEMS", "Start Game", "Continue", "Start from the Beginning", "Automatic Save", "Saved {0}", "Console Boot Screens", "Shows the console's start-up logo when its BIOS is available", "Save State Slots", "Rotate Save Slots", "Each save goes to the next slot, then starts again from slot 0", "Game Hotkeys", "Hold Hotkey and press a button", "Performance Overlay", "Bezels", "Frames the game when it does not fill the screen", "CRT Effect", "Scanlines for consoles played on TVs", "Next Slot", "Previous Slot", "Fast Forward", "Show Overlay", "Frame Rate", "Temperature", "Power Draw", "Battery", "Clock", "Empty", "{0}%", "The metadata service is busy, try again later", "Uppercase", "Metadata Source", "Covers, descriptions and ratings in your language. A free ScreenScraper account gives more requests.", "Covers and descriptions in English. A free private API key gives more requests.", "Covers only. No account needed.", "TheGamesDB API Key", "Not set", "Fill Missing Data", "Adds only what is missing, such as covers or descriptions. What is already there is kept.", "Search Name", "Searched as \"{0}\". Change it if the game is not found or the match is wrong.", "Source: {0}", "Optional: more requests per day", "Scan for New Games", "Finds games copied to the SD card since the last scan", "New games found: {0}", "No new games found", "BACKGROUND TASK", "Stop", "Stopping…", "Starting game…", "Muted", "Power", "BATTERY", "ACCESSORY BATTERIES", "Charge", "Battery Health", "Discharging", "Not charging", "Good", "Overheating", "Too cold", "Worn out", "Check the battery", "No accessories connected", "ENERGY SAVING", "Find a Game", "Find", "Random Game", "Random Unplayed Game", "Title", "Decade", "Any", "Never Played Only", "Show Results ({0})", "No games match these filters", "Results", "Add to Collection", "Delete Collection", "Systems", "SURPRISE ME", "SEARCH", "Rename Collection", "Clear Filters", "Picks one of your games for you", "Added to {0}", "Removed from {0}", "Collection deleted", "Manage", "Games stay in your library; only the collection goes away", "Notification Sounds", "Automatic Updates", "Restore Version {0}", "The new version did not start", "Version {0} restored", "New versions install when you open Steam Link; one that does not start is undone automatically", "VIDEO", "PC", "Audio Channels", "Stereo", "5.1 Surround", "7.1 Surround", "Play Audio on the PC", "Optimize Game Settings", "Lets the PC adapt the game to the stream resolution", "Quit the App on the PC After Streaming", "Left and right change it", "Metadata in Your Language", "Gets descriptions and genres in your language; the languages already downloaded stay saved", "Every game with missing data", "Not tried in the last hour", "Not tried in the last day", "Not tried in the last week", "Not tried in the last month", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Day", "Month", "Year", "Hour", "Minute", "RUMBLE", "Charge Limit", "Recharging extra lives...", "Full power. Let's play!", "Press POWER or START to start nuubOS", "SAVE STATES", "Latest", "No saved states yet", "Turn On Hardcore Mode?", "Achievements are earned as on the original console, with no help. While Hardcore Mode is on, save states and fast-forward are off: every game starts from the beginning and only the game's own saves are kept. RetroArch also blocks cheats, rewind and slow motion. You can turn it off at any time.", "Turn On", "Not available in Hardcore Mode", "Save states are off in Hardcore Mode", "SD1", "System and saves", "{0} free of {1}", "Games card", "No card", "Checking…", "Read-only", "The card has errors: games can be played, nothing can be written to it", "Unreadable", "No supported file system (exFAT, FAT32, ext4)", "Ejected", "SD2 ejected: safe to remove", "Eject SD2", "Use SD2 Again", "Create Game Folders", "Adds a folder for each system. Nothing is deleted.", "Format SD2", "Erases everything on the card", "Press again • everything on SD2 will be erased", "BACKUP TO SD2", "SD2 inserted", "Last backup: {0}", "Never backed up", "Insert an SD2 card to back up", "Backup Content", "All", "{0} of {1}", "SD2 removed", "Restore from SD2", "Replaces the data on SD1 with a backup", "Backup of a previous SD1", "Restore it, or keep it aside and start a new backup", "SD2 is read-only", "Profiles & Settings", "Always included. Passwords and accounts are never copied.", "Saves", "Save States", "Game Library", "Play history and collections", "Screenshots & Recordings", "You can format it in Settings › System › Storage", "Covers & Metadata", "Downloaded game information; it can take a lot of space", "New SD2 card: no games found", "Don't Use", "SD2 can't be read", "Erase everything on SD2 ({0})?", "Format", "Restore \"{0}\"?", "SD2 removed: game saved and closed", "This console", "Backup found on SD2", "Start from Scratch", "Restoring…", "Backing up…", "Backup to SD2", "The backup could not be completed", "Formatting SD2", "Formatting…", "SD2 formatted", "The card could not be formatted", "Creating game folders", "Insert the SD2 card with this game", "Its games come back when you insert it again", "Errors found: open Recovery", "Close the game first", "Not in use", "Use SD2", "nuubOS leaves this card alone until you choose to use it", "PROFILE BACKUP", "Backup", "REPAIR & RESET", "Installing update", "Update Channel", "Stable", "RC", "Nightly", "RC and Nightly get new versions first and may have bugs", "The update could not be installed", "Install it from Settings › System › Software Update", "Check Automatically", "Once a day, when connected to Wi-Fi", "Restoring your console", "Keep the console on: it restarts by itself when it is done", "Try Again", "Dusting off your save files…", "Putting the cartridges back in their cases…", "Reminding your games where you left off…", "Untangling the controller cables…", "Giving the high scores back to their owners…", "Polishing every pixel…", "Blowing into the cartridge, just in case…", "Teaching the console your favourite games again…", "What's New", "Scroll", "Polishing the new version…", "Checking every byte twice…", "Making room for new features…", "Tightening a few screws…", "Teaching old buttons new tricks…", "Charge the battery above 30% to install", "The update service cannot be reached. Try again later", "RESTORE", "Destination", "USB Drive", "Restore from Backup", "Entire Console", "What do you want to restore?", "The whole console or a single profile", "Connect a USB drive to back up", "Lost if SD1 is formatted or replaced", "Backup found", "BACKUP", "Starting…", "Waiting for your devices", "No devices yet", "Add a Device", "Another console, a computer or a phone", "DEVICES", "WHAT TO SYNC", "Wants to sync with you", "Accept", "Ignore", "Sync Away from Home", "Finds your devices over the Internet; your data still goes straight between them", "This Console", "Code {0} • Press to show the full ID", "{0}% synced", "Sync Your Saves", "Syncthing keeps your saves the same on all your devices. They travel straight over your network: no account, no cloud. It is not a backup: a save deleted on one device is deleted on the others too.", "What do you want to sync with?", "Another Console", "Two nuubOS consoles share the same saves", "Computer or Server", "A PC or NAS that stays on: where all your consoles meet", "Android Phone", "With the Syncthing-Fork app", "What to Sync", "Choose what this profile shares. Use the same profile on every device: each profile has its own saves.", "On the Other Console", "Turn it on and connect it to the same Wi-Fi network.", "Choose a profile with the same name.", "Open {0}.", "This console: {0}", "Choose the Other Console", "Pick the code the other console shows. If it found this console first, accept its request.", "Looking for consoles on your network…", "Device {0}", "Confirm on the Other Console", "On the other console, accept the request from {0}. The saves start syncing as soon as both consoles connect.", "Waiting for the other device…", "Install Syncthing on the Computer", "Download Syncthing from syncthing.net (Windows, macOS, Linux) or install the Syncthing app on your NAS.", "Start it: its page opens in the browser.", "Keep it running: it is where all your consoles meet.", "Add This Console", "In Syncthing on the computer choose Add Remote Device and pick this console among the nearby devices (code {0}), or type its ID:", "Waiting for the request from the computer…", "Accept the Folders", "The computer now asks to add the nuubOS folders: accept them and choose where to keep them.", "For more consoles, repeat this guide on each one; on the computer, add them to the folders you already have.", "Install Syncthing-Fork", "On your Android phone install Syncthing-Fork from F-Droid or Google Play and open it.", "Connect the phone to the same Wi-Fi network.", "Scan This Code", "In Syncthing-Fork open Devices, tap + and scan this code. Then accept the request that appears here.", "Waiting for the request from the phone…", "The phone now asks to add the nuubOS folders: accept them and choose where to keep them.", "You're All Set", "{0} is connected. From now on your saves sync by themselves whenever both devices are on.", "Add it on your other device, or scan the code with your phone.", "New sync request", "Cannot sync", "Syncthing is still starting. Try again in a moment.", "Device ID", "Allow Relays", "If a direct connection is impossible, the encrypted data may pass through public Syncthing servers", "Covers & Metadata", "Shared by every profile on this console", "Play Activity", "Time played and Recently Played, added up across your devices", "Saves match when the game file has the same name on every device.", "SYNCTHING", "Continue Watching", "Videos", "Recordings", "Music", "Playlists", "Browse", "Shuffle All", "New Playlist", "Playlist name", "Add to Playlist", "Remove from Playlist", "Delete Playlist", "Rename Playlist", "Removed from the playlist", "Shuffle", "Play from the Beginning", "Resume from {0}", "{0} tracks", "{0} videos", "NOW PLAYING", "UP NEXT", "Music Volume", "Screen Off", "The music keeps playing. Press POWER or START to turn the screen back on.", "Songs", "Unknown Artist", "Put videos in the Videos folder and music in the Music folder: on Internal Storage, SD2, a USB drive or a network location.", "Jellyfin", "Sign in to your Jellyfin server", "Signed in as {0}", "Connect to open it", "This playlist is empty. Add songs from an album with Add to Playlist.", "Episode {0}", "Network Location", "Album", "Folder", "Options", "MUSIC", "Pause", "Next Track", "Previous Track", "Game Volume", "Stop Music", "Places", "Copy to Other Panel", "Move to Other Panel", "{0} selected", "{0} items", "Select All", "Clear Selection", "Sort", "Name", "Size", "Date", "Same Folder in Other Panel", "Calculating…", "Delete {0} items?", "Actions", "Mark", "Copying {0}", "Moving {0}", "Loading…", "Open a folder in the other panel first", "A folder cannot go inside itself", "Modified {0}", "Sort: {0}", "Done: {0}", "Remove Location", "Subtitles", "Play", "Albums", "Artists", "{0} albums", "Put your music in a Music folder: on Internal Storage, SD2, a USB drive or a network location.", "Put your videos in a Videos folder: on Internal Storage, SD2, a USB drive or a network location.", "No music yet", "No videos yet", "Add Network Location", "A folder on a PC or NAS", "Server address, for example 192.168.1.10 or nas.local", "Folder on {0}, for example Music", "User name on {0} (empty = guest)", "Password for {0}", "Connected to {0}", "Wrong user name or password", "The server has no folder named {0}", "Cannot reach {0}: check the address and that the computer is on", "Connecting to {0}…", "PC Home Button", "Steam Quick Access", "Wake PC", "Waking up…", "Sends a Wake-on-LAN signal to the PC", "{0} did not wake up", "Check that Wake-on-LAN is enabled on the PC", "Net", "Decode", "Host", "Lost", "Cast Screen", "Stop Casting", "Searching for TVs and receivers…", "No receivers found", "Google Cast", "Miracast", "DLNA • with delay", "Allow the cast on the TV", "Screen Cast", "Casting to {0}", "The picture reaches the TV a few seconds late", "Casting ended", "Casting connection lost", "Casting could not start", "The receiver could not be reached", "The receiver refused the connection", "The receiver cannot show this stream", "Miracast encoder installed", "The Miracast encoder could not be downloaded", "Screen Casting", "Sound on the TV", "Casting Latency", "Low", "Smooth", "Miracast Encoder", "OpenH264 Video Codec provided by Cisco Systems, Inc.", "Installed", "Downloading {0}%", "Low suits playing; Smooth copes with a weak Wi-Fi", "Cisco's H.264 encoder, downloaded from Cisco (about 0.6 MB)", "SCREEN CASTING", "Audio track", "Show track progress", "Off: your global lighting", "Keep lit with the screen off", "Off: the lights turn off with the screen", "Tags", "Backlog", "Playing", "Completed", "100%", "Dropped", "Broken", "Mark your progress, or a game that does not work", "Cheats", "Netplay", "No cheats for this game", "Download Cheats", "Downloading cheats", "Cheat List", "{0} on", "Not available during netplay", "Host Game", "Stop Hosting", "Leave Game", "Hosting • {0} connected", "Connected to {0}", "Waiting for players…", "Cheat {0}", "Get More Emulators", "Downloading emulator", "No other emulators for this system", "Emulator installed", "Cheat Collection", "Not downloaded", "Updated {0}", "About 37 MB from libretro, with cheats for thousands of games", "Update", "Play together with consoles on the same network running nuubOS or RetroArch.", "Search Again", "Searching for netplay games…", "No games found. On the other console, start a game and choose Host Game in its Quick Menu.", "Not in your library", "Needs the emulator {0}", "Hosted by {0}", "Join", "The game could not be joined", "The game restarts from this point as a host", "Looking for emulators…", "Starting netplay…", "Needs a password", "Add to Library", "Which system is {0}?", "Adding {0} to the library", "{0} files added to the library", "Already in the library", "No games found here", "Looking for PCs and NAS on the network…", "Choose a PC or NAS", "Type an Address", "Choose a Folder on {0}", "Type a Folder Name", "Closing game…", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December", "{0} {1} {2}", "{3} {0} {1} {2}", "No battery", "Screen Layout", "Two Screens", "Large Top Screen", "Picture in Picture", "Single Screen", "Stylus", "Stylus on", "Stylus off", "Right Stick", "Left Stick", "D-Pad", "{0} moves it, L2 touches", "Emulation Accuracy", "Fast", "Accurate", "Choose Accurate if the game misbehaves", "Removes the game, its cover and details from the library for every user. Saves are kept.", "Show Unavailable Games", "Games whose file is missing or on an SD2 card that is not inserted", "Use an Existing Folder", "Join saves, states or screenshots your other devices already share", "Folder ID", "Folder ID {0}", "Shared by {0}", "Leave empty to use the nuubOS folder", "Enter a Folder ID", "Tailscale", "Reach this console from anywhere through your tailnet", "Tailscale's own app, about 25 MB, downloaded from tailscale.com", "Sign in to your tailnet", "Scan the code with your phone, or open the address on another device, and sign in to Tailscale.", "Tailscale could not be downloaded", "Waiting for approval in your tailnet", "Removes Tailscale and takes this console out of your tailnet", "SSH, File Sharing and Web Administration, when on, answer at this address too", "Caps Lock", "Lowercase", "Controller Accessory", "Rumble Pak", "Controller Pak", "One fits at a time: choose Controller Pak if the game saves on it", "AVAILABLE FOLDERS", "Sync {0} as", "Turn Off", "Use the nuubOS Folder", "HyperSleep", "Almost no battery use. Wake with the power button.", "START and the lid also wake it. Uses more battery.", "Diagnostic Mode", "Next {0} starts", "Logs everything for the next 10 starts and saves a report at each restart or power off. Off by default: logging costs performance and card writes.", "No battery: keep the power cable connected until the update is complete", "Fast Startup", "Experimental: starts about 5 seconds faster, but can make the console freeze or restart by itself.", "Checks the memory at every start. Can help if the console freezes or restarts by itself.", "Install PortMaster first", "PortMaster", "Download PortMaster", "Downloading PortMaster", "PortMaster could not be downloaded", "Open PortMaster", "Browse, install and update ports over Wi-Fi", "Remove PortMaster", "The installed ports stay, but need PortMaster to start", "PortMaster could not be started", "Open-source manager of ports: games and engines made for handhelds, downloaded over Wi-Fi. Some ports need files from a game you own.", "New versions install when this page checks for updates", "PORTMASTER", "Quit PortMaster", "Swap Confirm/Back Buttons", "Use the opposite face button to confirm in menus. Games are not affected.", "Experimental: it can make the console unstable. Press again to turn it on.", "1 port", "{0} ports", "Music & Videos Access", "Off: this port cannot see your music and videos", "On: this port can read your music and videos, not change them", "1x", "2x", "Auto: 1x on the console, 2x on a TV", "2x is sharper but can slow the game down", "Fast can draw smoke and glass wrong", "Terminal", "TERMINAL", "Quit Terminal", "The terminal could not be opened", "Press Power to Sleep", "Hold the power button for the power menu.", "The power button opens the power menu.", "RetroArch in the Quick Menu", "Opens RetroArch's own menu during a game", "RetroArch could not be opened", "RETROARCH", "Quit RetroArch", "Reset RetroArch Settings", "Puts the current user's RetroArch options, core options and remaps back to the defaults. Games, saves and states are kept.", "RetroArch settings reset", "Disc", "Disc {0}", "{0} of {1}", "Vibration Intensity", "Light", "Strong", "Skips the faintest vibration some games keep sending", "Every vibration the game asks for", "Vibration", "Picture Position", "Where the game sits when it does not fill the screen", "Top", "Center", "Bottom", "Square Pixels", "Games", "The ROM folder on this console's card, shared by every profile", "Games on SD2", "The SD2 card's ROM folder; it waits while the card is out", "Volume Button Step", "Cover Region", "Box art from this region when there is one. Fill Missing Data changes the covers already downloaded.", "USA", "Europe", "Japan", "World", "Small Screen Position", "Bottom Right", "Bottom Left", "Top Right", "Top Left", "Ports on SD2", "PortMaster and the ports in the ports folder of the SD2 card. The ports of the other card stay there.", "Moving ports", "{0} ports were already there: their copies stayed on the other card", "The ports could not be moved", "Data on SD2", "Moving…", "Waiting for the SD2 card", "{0} files were already there: the other copies are in the conflicts folder", "Saves, states, BIOS and covers", "Use SD1 without the card's data?", "Use SD1", "SD2 holds your data: move it to SD1 first", "Insert the SD2 card with your data", "The data could not be moved", "Offline Achievements", "Sent when you are back online", "Casual only: off in Hardcore Mode", "System ({0})", "{0} games use their own settings", "Apply to All Games", "Reset System Settings", "{0} Settings", "Settings shared by every game of this system", "System Settings", "Emulator and picture for all the games of a system", "Controls", "Choose what each button does in the game", "Reset Controls", "Cross", "Circle", "Triangle", "Square", "Custom", "Frameskip", "Auto (up to 3)", "Auto skips frames only when the game slows down", "Wrap Around Rows", "On Home, going past the last item returns to the first", "Search System", "Change it for a port of a game from another system.", "As in Settings ({0})", "Same as the game ({0})", "Advanced Search", "Change it if the game is not found or the match is wrong.", "Permanently deletes the game's folder and everything in it for every user. Saves are kept.", "USB Audio", "Integer", "Integer (Overscale)", "Smart", "Library", "PICTURE", "SAVES", "EXTRAS", "COVERS & INFO", "FILES", "SPEED", "EMULATOR", "CONTROLS", "Buttons", "Which button confirms?", "Press the button you want to confirm with. The other one goes back. You can change this later in Settings.", "Bottom Button", "Right Button"];
 
     in-out property <string> topbar-time: "--:--";
     in-out property <string> current-user-name: root.i18n-strings[204];
@@ -3193,7 +3193,6 @@ export component HomeWindow inherits Window {
     in-out property <string> rumble-mode: "light";
     property <string> rumble-mode-label: root.rumble-mode == "off" ? root.i18n-strings[54]
         : root.rumble-mode == "strong" ? root.i18n-strings[1404] : root.i18n-strings[1403];
-    in-out property <int> rumble-index: 0;
 
     /* RGB Lighting (nuubos-lightingd): LIGHTING rows 0-3 (Effect, Color,
      * Brightness, Speed), SYSTEM SIGNALS rows 4-8 (one toggle per signal
@@ -3222,6 +3221,7 @@ export component HomeWindow inherits Window {
     in-out property <int> audio-volume: 100;
     in-out property <bool> audio-volume-supported: true;
     in-out property <bool> audio-bluetooth-available: false;
+    in-out property <bool> audio-usb-available: false;
     in-out property <bool> audio-headphones-available: false;
     in-out property <bool> audio-hdmi-available: false;
     in-out property <bool> audio-speaker-available: true;
@@ -3254,19 +3254,17 @@ export component HomeWindow inherits Window {
     in-out property <string> cast-h264: "absent";
     /* Installed / Downloading n% / Download (set by castui.rs). */
     in-out property <string> cast-encoder-value: "";
-    out property <int> da-cast-start: 12 + root.da-temp;
-    property <int> da-cast-section: root.cast-available ? root.da-cast-start : 0;
 
     /* System is a device-global Product Service surface. The same real page is
      * rendered while the category rail owns focus and after entering it. */
     in-out property <int> system-index: 0;
     in-out property <int> system-scroll-offset: 0;
-    /* System sections: STORAGE & SOFTWARE (0 Storage, 1 Software Update,
-     * 2 System Information) and TROUBLESHOOTING (3 Diagnostics, 4 Backup,
+    /* System sections: STORAGE & SOFTWARE (0 Storage, 1 Backup, 2 Software
+     * Update, 3 System Information) and TROUBLESHOOTING (4 Diagnostics,
      * 5 Recovery).
      * Power has its own category (settings-view 69). */
     out property <int> system-storage-start: 0;
-    out property <int> system-support-start: 3;
+    out property <int> system-support-start: 4;
     /* Power (category 5, settings-view 69): POWER (0-5), BATTERY (6-7, 8
      * Charge Limit when the battery driver has one), CONNECTED DEVICES
      * (after them; one "none" row when empty). */
@@ -3426,9 +3424,10 @@ export component HomeWindow inherits Window {
     /* Initial setup / OOB (EPIC-002). nuubos-usersd owns the setup state; the
      * OOB is the Settings shell with a step rail instead of the categories and
      * reuses the real Settings pages and dropdowns. oob-step: 0 Language,
-     * 1 Date & Time (settings-view 30), 2 Wi-Fi (31, then the Wi-Fi pages 2/4
-     * and keyboard 6), 3 Users (32, user detail 26, keyboard 6), 4 Ready.
-     * Language and Ready are full-screen. */
+     * 1 Buttons (which face button confirms), 2 Date & Time (settings-view 30),
+     * 3 Wi-Fi (31, then the Wi-Fi pages 2/4 and keyboard 6), 4 Users (32, user
+     * detail 26, keyboard 6), 5 Ready. Language, Buttons and Ready are
+     * full-screen. */
     in-out property <bool> oob-active: false;
     in-out property <int> oob-step: 0;
     in-out property <int> oob-index: 0;
@@ -3609,7 +3608,8 @@ export component HomeWindow inherits Window {
      * 58 Files and 60 Network Shares (the Files shell), 61 Removable Media,
      * 62 Backup (and 28 Recovery, generic rows), 63 Software Update,
      * 65 Media (its own shell), 66 Syncthing (generic rows, gen-rows),
-     * 67 Web (Details shell, generic rows), 68 Gaming, 73 Tailscale (generic rows). */
+     * 67 Web (Details shell, generic rows), 68 Gaming, 78 Library (the Gaming
+     * page with the library rows), 73 Tailscale (generic rows). */
     in-out property <int> settings-view: 0;
     /* The page title: the system keyboard (6) keeps the title of the page it
      * was opened from; its field label names what is entered. */
@@ -3620,7 +3620,7 @@ export component HomeWindow inherits Window {
     property <bool> settings-select-hint-visible: root.settings-open && (
         root.settings-choice-open || root.settings-dialog-open ? true
         : root.gen-view ? root.gen-select
-        : root.settings-view == 68 ? root.gaming-select
+        : root.settings-view == 68 || root.settings-view == 78 ? root.gaming-select
         : root.settings-view == 69 ? root.power-index < root.power-battery-start
         : root.settings-view >= 30 ? true
         : root.settings-view == 23 ? true
@@ -3632,7 +3632,7 @@ export component HomeWindow inherits Window {
         : root.settings-view == 27 ? root.diag-index <= 1
         : root.settings-view == 18 && root.display-audio-index == 0 ? root.display-brightness-available
         : root.settings-view == 18 && root.display-audio-index == root.da-audio-start + 1 ? root.audio-volume-supported
-        : root.settings-view == 18 && root.display-audio-index == root.da-cast-start + 1 ? root.cast-available
+        : root.settings-view == 1 && root.connectivity-selected-index == 7 ? root.cast-available
         : root.settings-view == 4 && root.wifi-detail-index == 1 ? root.wifi-wps-active || root.wifi-wps-available
         : root.settings-view == 4 && root.wifi-detail-index == 2 ? root.wifi-selected-security != root.i18n-strings[212]
         : root.settings-view == 4 && root.wifi-detail-index >= 4 && root.wifi-detail-index <= 7 ? root.wifi-ip-mode == "manual"
@@ -3640,7 +3640,9 @@ export component HomeWindow inherits Window {
         : root.settings-view == 1 && root.connectivity-selected-index == 1 ? root.wifi-enabled
         : root.settings-view == 1 && (root.connectivity-selected-index == 4 || root.connectivity-selected-index == 5) ? root.bluetooth-enabled
         : root.settings-view == 10 && root.controllers-menu-index == 3 ? true
-        : root.settings-view == 10 && root.controllers-menu-index == 4 ? root.lighting-supported
+        : root.settings-view == 10 && root.controllers-menu-index == 4 ? true
+        : root.settings-view == 10 && root.controllers-menu-index == 5 ? root.rumble-supported
+        : root.settings-view == 10 && root.controllers-menu-index == 6 ? root.lighting-supported
         : root.settings-view == 17 && root.lighting-index == 1 ? root.lighting-color-capable
         : root.settings-view == 17 && root.lighting-index == 3 ? root.lighting-speed-capable
         : true
@@ -3654,23 +3656,28 @@ export component HomeWindow inherits Window {
     in-out property <int> connectivity-scroll: 0;
     in-out property <[GenRow]> connectivity-services: [];
     property <int> connectivity-scroll-offset: root.settings-view == 1 ? root.connectivity-scroll : 0;
+    /* WI-FI (0-2), BLUETOOTH (3-5), SCREEN CASTING (6-8, while nuubos-castd
+     * runs), SERVICES. */
+    out property <int> conn-services-start: root.cast-available ? 9 : 6;
+    out property <int> conn-split3: root.cast-available ? 9 : 0;
     /* Gaming: GAMING (USER: RetroAchievements and the emulation settings),
      * then LIBRARY (DEVICE, from row gaming-split: Scan for New Games,
      * metadata source and account, Get Metadata for All Games, BIOS Files), then SYNCTHING (USER, from
      * gaming-split2; user request 2026-10-12: moved here from Connectivity). Rows = GenRows built by gameui.rs
      * (render_gaming); gaming-select: the focused row has an action. */
     in-out property <int> gaming-index: 0;
-    in-out property <int> gaming-split: 1;
+    in-out property <int> gaming-scroll: 0;
+    in-out property <int> gaming-split: 0;
     in-out property <int> gaming-split2: 0;
+    in-out property <int> gaming-split3: 0;
+    in-out property <string> gaming-label0: "";
+    in-out property <string> gaming-label1: "";
+    in-out property <string> gaming-label2: "";
+    in-out property <string> gaming-label3: "";
+    in-out property <string> gaming-scope: "";
     in-out property <[GenRow]> gaming-rows: [];
     in-out property <bool> gaming-select: true;
-    /* The second section header takes one more row's height once the
-     * focus is past it. */
-    property <int> gaming-scroll-offset:
-        root.settings-view == 68
-            ? max(0, root.gaming-index - root.settings-sectioned-visible-rows + 1
-                + (root.gaming-split2 > 0 && root.gaming-index >= root.gaming-split2 ? 1 : 0))
-            : 0;
+    property <int> gaming-scroll-offset: root.settings-view == 68 || root.settings-view == 78 ? root.gaming-scroll : 0;
     in-out property <int> wifi-menu-index: 0;
     in-out property <int> wifi-menu-scroll-offset: 0;
     in-out property <int> wifi-network-index: 0;
@@ -3764,10 +3771,10 @@ export component HomeWindow inherits Window {
     property <bool> page-general: root.settings-view == 23 || (root.settings-view == 0 && root.settings-selected-index == 0);
     property <bool> page-connectivity: root.settings-view == 1 || (root.settings-view == 0 && root.settings-selected-index == 1);
     property <bool> page-controllers: root.settings-view == 10 || (root.settings-view == 0 && root.settings-selected-index == 2);
-    property <bool> page-gaming: root.settings-view == 68 || (root.settings-view == 0 && root.settings-selected-index == 3);
-    property <bool> page-display-audio: root.settings-view == 18 || (root.settings-view == 0 && root.settings-selected-index == 4);
-    property <bool> page-power: root.settings-view == 69 || (root.settings-view == 0 && root.settings-selected-index == 5);
-    property <bool> page-system: root.settings-view == 19 || (root.settings-view == 0 && root.settings-selected-index == 6);
+    property <bool> page-gaming: root.settings-view == 68 || root.settings-view == 78 || (root.settings-view == 0 && (root.settings-selected-index == 3 || root.settings-selected-index == 4));
+    property <bool> page-display-audio: root.settings-view == 18 || (root.settings-view == 0 && root.settings-selected-index == 5);
+    property <bool> page-power: root.settings-view == 69 || (root.settings-view == 0 && root.settings-selected-index == 6);
+    property <bool> page-system: root.settings-view == 19 || (root.settings-view == 0 && root.settings-selected-index == 7);
     property <bool> controllers-group: root.page-controllers || (root.settings-view >= 11 && root.settings-view <= 17);
 
     property <string> settings-section-label:
@@ -3790,19 +3797,19 @@ export component HomeWindow inherits Window {
             ? (root.gen-split3 > 0 && root.gen-scroll >= root.gen-split3 ? root.gen-split3-label
                 : root.gen-split2 > 0 && root.gen-scroll >= root.gen-split2 ? root.gen-split2-label
                 : root.gen-split > 0 && root.gen-scroll >= root.gen-split ? root.gen-split-label : root.gen-section)
-        : root.page-gaming ? (root.gaming-split2 > 0 && root.gaming-scroll-offset >= root.gaming-split2 ? root.i18n-strings[1094]
-            : root.gaming-scroll-offset >= root.gaming-split ? root.i18n-strings[704] : root.i18n-strings[703])
-        : root.page-connectivity ? (root.connectivity-scroll-offset >= 6 ? root.i18n-strings[727]
+        : root.page-gaming ? (root.gaming-split3 > 0 && root.gaming-scroll-offset >= root.gaming-split3 ? root.gaming-label3
+            : root.gaming-split2 > 0 && root.gaming-scroll-offset >= root.gaming-split2 ? root.gaming-label2
+            : root.gaming-split > 0 && root.gaming-scroll-offset >= root.gaming-split ? root.gaming-label1 : root.gaming-label0)
+        : root.page-connectivity ? (root.connectivity-scroll-offset >= root.conn-services-start ? root.i18n-strings[727]
+            : root.connectivity-scroll-offset >= 6 ? root.i18n-strings[1224]
             : root.connectivity-scroll-offset >= 3 ? root.i18n-strings[160] : root.i18n-strings[156])
         : root.settings-view >= 2 && root.settings-view <= 4 ? root.i18n-strings[156]
         : root.settings-view >= 7 && root.settings-view <= 9 ? root.i18n-strings[160]
         /* Controller Mapping: 17 button rows, then the sticks. */
         : root.settings-view == 15 ? (root.controller-mapping-scroll-offset >= 17 ? root.i18n-strings[368] : root.i18n-strings[367])
         : root.page-controllers || (root.settings-view >= 11 && root.settings-view <= 14) ? root.i18n-strings[734]
-        : root.settings-view == 16 ? root.i18n-strings[root.lighting-supported ? 735 : 899]
         : root.settings-view == 17 ? (root.lighting-scroll-offset >= 4 ? root.i18n-strings[129] : root.i18n-strings[130])
-        : root.page-display-audio ? (root.cast-available && root.display-audio-scroll-offset >= root.da-cast-start ? root.i18n-strings[1224]
-            : root.display-audio-scroll-offset >= root.da-sounds-start ? root.i18n-strings[730]
+        : root.page-display-audio ? (root.display-audio-scroll-offset >= root.da-sounds-start ? root.i18n-strings[730]
             : root.display-audio-scroll-offset >= root.da-audio-start ? root.i18n-strings[729] : root.i18n-strings[728])
         : root.page-power ? (root.power-scroll-offset >= root.power-devices-start ? root.i18n-strings[815]
             : root.power-scroll-offset >= root.power-battery-start ? root.i18n-strings[814] : root.i18n-strings[826])
@@ -3835,11 +3842,10 @@ export component HomeWindow inherits Window {
             ? root.gen-scopes[root.gen-split3 > 0 && root.gen-scroll >= root.gen-split3 ? min(3, root.gen-scopes.length - 1)
                 : root.gen-split2 > 0 && root.gen-scroll >= root.gen-split2 ? 2
                 : root.gen-split > 0 && root.gen-scroll >= root.gen-split ? 1 : 0]
-        : root.page-gaming ? (root.gaming-split2 > 0 && root.gaming-scroll-offset >= root.gaming-split2 ? root.i18n-strings[312]
-            : root.gaming-scroll-offset >= root.gaming-split ? root.i18n-strings[313] : root.i18n-strings[312])
+        : root.page-gaming ? root.gaming-scope
         : root.settings-section-label == "" ? ""
         /* SCREEN CASTING preferences are the user's. */
-        : root.page-display-audio && root.cast-available && root.display-audio-scroll-offset >= root.da-cast-start ? root.i18n-strings[312]
+        : root.page-connectivity && root.cast-available && root.connectivity-scroll-offset >= 6 && root.connectivity-scroll-offset < 9 ? root.i18n-strings[312]
         : root.controllers-group ? root.i18n-strings[312]
         : root.i18n-strings[313];
 
@@ -3852,7 +3858,7 @@ export component HomeWindow inherits Window {
             : root.settings-view == 2 && root.wifi-scanning && root.wifi-networks.length > 0 ? root.i18n-strings[164]
             : "")
         : root.gen-view ? root.gen-notice
-        : root.settings-view == 68 ? root.gen-notice
+        : root.settings-view == 68 || root.settings-view == 78 ? root.gen-notice
         : root.settings-view == 31 ? (root.wifi-notice != "" ? root.wifi-notice : root.oob-notice)
         : root.settings-view >= 30 ? root.oob-notice
         : root.settings-view == 27 ? root.recovery-notice
@@ -4896,12 +4902,12 @@ export component HomeWindow inherits Window {
                 background: Theme.surface-container-low;
                 border-radius: Shape.large;
                 clip: true;
-                /* Seven categories do not fit at 640x480: the rail scrolls
+                /* Eight categories do not fit at 640x480: the rail scrolls
                  * just enough to keep the selected one visible. */
                 property <int> rail-visible: max(1, floor((self.height - 16px + root.settings-row-step - root.settings-row-height) / root.settings-row-step));
-                property <int> rail-scroll: max(0, min(7 - self.rail-visible, root.settings-selected-index - self.rail-visible + 1));
+                property <int> rail-scroll: max(0, min(8 - self.rail-visible, root.settings-selected-index - self.rail-visible + 1));
 
-                for category[i] in [4, 5, 6, 702, 7, 813, 8]: SettingsCategory {
+                for category[i] in [4, 5, 6, 702, 1480, 7, 813, 8]: SettingsCategory {
                     x: 8px;
                     y: 8px + (i - parent.rail-scroll) * root.settings-row-step;
                     width: parent.width - 16px;
@@ -4956,7 +4962,7 @@ export component HomeWindow inherits Window {
                 }
 
                 /* OOB: the rail shows setup progress; it never takes focus. */
-                for step[i] in [193, 46, 157, 275, 397]: SettingsCategory {
+                for step[i] in [193, 1489, 46, 157, 275, 397]: SettingsCategory {
                     x: 8px;
                     y: 8px + i * root.settings-row-step;
                     width: parent.width - 16px;
@@ -5017,8 +5023,9 @@ export component HomeWindow inherits Window {
                             : root.settings-selected-index == 1 ? root.i18n-strings[5]
                             : root.settings-selected-index == 2 ? root.i18n-strings[6]
                             : root.settings-selected-index == 3 ? root.i18n-strings[702]
-                            : root.settings-selected-index == 4 ? root.i18n-strings[7]
-                            : root.settings-selected-index == 5 ? root.i18n-strings[813]
+                            : root.settings-selected-index == 4 ? root.i18n-strings[1480]
+                            : root.settings-selected-index == 5 ? root.i18n-strings[7]
+                            : root.settings-selected-index == 6 ? root.i18n-strings[813]
                             : root.i18n-strings[8])
                         : root.settings-title-view == 1 ? root.i18n-strings[5]
                         : root.settings-title-view == 2 ? root.i18n-strings[9]
@@ -5034,7 +5041,6 @@ export component HomeWindow inherits Window {
                         : root.settings-title-view == 13 ? root.controller-selected-name
                         : root.settings-title-view == 14 ? root.i18n-strings[15]
                         : root.settings-title-view == 15 ? root.i18n-strings[16]
-                        : root.settings-title-view == 16 ? root.i18n-strings[1407]
                         : root.settings-title-view == 17 ? root.i18n-strings[18]
                         : root.settings-title-view == 18 ? root.i18n-strings[7]
                         : root.settings-title-view == 19 ? root.i18n-strings[8]
@@ -5072,6 +5078,7 @@ export component HomeWindow inherits Window {
                         : root.settings-title-view == 66 ? root.i18n-strings[669]
                         : root.settings-title-view == 67 ? root.i18n-strings[678]
                         : root.settings-title-view == 68 ? root.i18n-strings[702]
+                        : root.settings-title-view == 78 ? root.i18n-strings[1480]
                         : root.settings-title-view == 70 ? root.i18n-strings[827]
                         : root.settings-title-view == 71 ? root.i18n-strings[537]
                         : root.settings-title-view == 73 ? root.i18n-strings[1328]
@@ -5098,17 +5105,20 @@ export component HomeWindow inherits Window {
                 /* Inline headers for Connectivity's later sections while they
                  * are below the top. */
                 for section[i] in [
-                    { start: 3, label: root.i18n-strings[160] },
-                    { start: 6, label: root.i18n-strings[727] },
+                    { start: 3, label: root.i18n-strings[160], shown: true, scope: root.i18n-strings[313] },
+                    { start: 6, label: root.i18n-strings[root.cast-available ? 1224 : 727], shown: true,
+                      /* Casting preferences belong to the user (castd, appdata/cast). */
+                      scope: root.i18n-strings[root.cast-available ? 312 : 313] },
+                    { start: 9, label: root.i18n-strings[727], shown: root.cast-available, scope: root.i18n-strings[313] },
                 ]: SettingsSectionHeader {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(section.start, root.connectivity-scroll-offset, 3, 6, 0) - root.settings-section-gap;
+                    y: root.sec-row-y(section.start, root.connectivity-scroll-offset, 3, 6, root.conn-split3) - root.settings-section-gap;
                     width: root.settings-content-width;
                     label: section.label;
-                    scope-label: root.i18n-strings[313];
-                    visible: root.page-connectivity
+                    scope-label: section.scope;
+                    visible: section.shown && root.page-connectivity
                         && root.connectivity-scroll-offset < section.start
-                        && root.sec-row-visible(section.start, root.connectivity-scroll-offset, 3, 6, 0);
+                        && root.sec-row-visible(section.start, root.connectivity-scroll-offset, 3, 6, root.conn-split3);
                 }
 
                 /* Inline headers for General's later sections. */
@@ -5379,30 +5389,40 @@ export component HomeWindow inherits Window {
                         && root.sec-row-visible(k, root.moonlight-scroll, 4, 6, 0);
                 }
 
-                /* ----------------------------------------------------------- Gaming */
+                /* ----------------------------------------------- Gaming and Library */
                 SettingsSectionHeader {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(root.gaming-split, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, 0) - root.settings-section-gap;
+                    y: root.sec-row-y(root.gaming-split, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, root.gaming-split3) - root.settings-section-gap;
                     width: root.settings-content-width;
-                    label: root.i18n-strings[704];
-                    scope-label: root.i18n-strings[313];
-                    visible: root.page-gaming
+                    label: root.gaming-label1;
+                    scope-label: root.gaming-scope;
+                    visible: root.page-gaming && root.gaming-split > 0
                         && root.gaming-scroll-offset < root.gaming-split
-                        && root.sec-row-visible(root.gaming-split, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, 0);
+                        && root.sec-row-visible(root.gaming-split, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, root.gaming-split3);
                 }
                 SettingsSectionHeader {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(root.gaming-split2, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, 0) - root.settings-section-gap;
+                    y: root.sec-row-y(root.gaming-split2, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, root.gaming-split3) - root.settings-section-gap;
                     width: root.settings-content-width;
-                    label: root.i18n-strings[1094];
-                    scope-label: root.i18n-strings[312];
+                    label: root.gaming-label2;
+                    scope-label: root.gaming-scope;
                     visible: root.page-gaming && root.gaming-split2 > 0
                         && root.gaming-scroll-offset < root.gaming-split2
-                        && root.sec-row-visible(root.gaming-split2, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, 0);
+                        && root.sec-row-visible(root.gaming-split2, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, root.gaming-split3);
+                }
+                SettingsSectionHeader {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(root.gaming-split3, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, root.gaming-split3) - root.settings-section-gap;
+                    width: root.settings-content-width;
+                    label: root.gaming-label3;
+                    scope-label: root.gaming-scope;
+                    visible: root.page-gaming && root.gaming-split3 > 0
+                        && root.gaming-scroll-offset < root.gaming-split3
+                        && root.sec-row-visible(root.gaming-split3, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, root.gaming-split3);
                 }
                 for row[k] in root.gaming-rows: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(k, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, 0);
+                    y: root.sec-row-y(k, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, root.gaming-split3);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -5415,9 +5435,9 @@ export component HomeWindow inherits Window {
                     armed: row.armed;
                     progress-shown: row.progress-shown;
                     progress: row.progress;
-                    selected: root.settings-view == 68 && root.gaming-index == k;
+                    selected: (root.settings-view == 68 || root.settings-view == 78) && root.gaming-index == k;
                     visible: root.page-gaming
-                        && root.sec-row-visible(k, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, 0);
+                        && root.sec-row-visible(k, root.gaming-scroll-offset, root.gaming-split, root.gaming-split2, root.gaming-split3);
                 }
 
                 /* ------------------------------------------------------------ Power */
@@ -5566,10 +5586,10 @@ export component HomeWindow inherits Window {
                 }
                 for row[k] in [
                     { title: root.i18n-strings[19], value: root.system-storage-summary },
+                    { title: root.i18n-strings[982], value: "" },
                     { title: root.i18n-strings[651], value: "" },
                     { title: root.i18n-strings[20], value: "" },
                     { title: root.i18n-strings[498], value: "" },
-                    { title: root.i18n-strings[982], value: "" },
                     { title: root.i18n-strings[499], value: root.safe-mode ? root.i18n-strings[518] : "" },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
@@ -5699,19 +5719,20 @@ export component HomeWindow inherits Window {
                 }
 
                 /* ---------------------------------------------- Controllers & Input */
-                /* CONTROLLERS (Player Assignment, Controllers), then RUMBLE &
-                 * LIGHTING (Internal Rumble, RGB Lighting). Without RGB
+                /* CONTROLLERS (Player Assignment, Controllers, Confirm/Back swap,
+                 * Game Hotkeys), then RUMBLE & LIGHTING (Vibration Intensity,
+                 * Test Rumble, RGB Lighting). Without RGB
                  * hardware the RGB Lighting row is gone and the section is
                  * RUMBLE. */
                 SettingsSectionHeader {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(3, root.controllers-menu-scroll-offset, 3, 0, 0) - root.settings-section-gap;
+                    y: root.sec-row-y(4, root.controllers-menu-scroll-offset, 4, 0, 0) - root.settings-section-gap;
                     width: root.settings-content-width;
                     label: root.i18n-strings[root.lighting-supported ? 735 : 899];
                     scope-label: root.i18n-strings[312];
                     visible: root.page-controllers
-                        && root.controllers-menu-scroll-offset < 3
-                        && root.sec-row-visible(3, root.controllers-menu-scroll-offset, 3, 0, 0);
+                        && root.controllers-menu-scroll-offset < 4
+                        && root.sec-row-visible(4, root.controllers-menu-scroll-offset, 4, 0, 0);
                 }
                 for row[k] in [
                     { title: root.i18n-strings[13], value: root.i18n-strings[111], enabled: true, toggle: false, detail: "" },
@@ -5724,9 +5745,24 @@ export component HomeWindow inherits Window {
                         detail: root.i18n-strings[1372],
                     },
                     {
-                        title: root.i18n-strings[1407],
+                        title: root.i18n-strings[772],
+                        value: "",
+                        enabled: true,
+                        toggle: false,
+                        detail: "",
+                    },
+                    {
+                        title: root.i18n-strings[1402],
                         value: root.rumble-mode-label,
                         enabled: true,
+                        toggle: false,
+                        detail: root.rumble-mode == "light" ? root.i18n-strings[1405]
+                            : root.rumble-mode == "strong" ? root.i18n-strings[1406] : "",
+                    },
+                    {
+                        title: root.i18n-strings[125],
+                        value: "",
+                        enabled: root.rumble-supported && root.rumble-mode != "off",
                         toggle: false,
                         detail: "",
                     },
@@ -5739,7 +5775,7 @@ export component HomeWindow inherits Window {
                     },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(k, root.controllers-menu-scroll-offset, 3, 0, 0);
+                    y: root.sec-row-y(k, root.controllers-menu-scroll-offset, 4, 0, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -5748,11 +5784,11 @@ export component HomeWindow inherits Window {
                     toggle: row.toggle;
                     toggle-on: k == 2 && root.action-button-swapped;
                     enabled: row.enabled;
-                    navigates: row.enabled && !row.toggle;
+                    navigates: row.enabled && !row.toggle && k != 5;
                     selected: root.settings-view == 10 && root.controllers-menu-index == k;
                     visible: root.page-controllers
-                        && root.sec-row-visible(k, root.controllers-menu-scroll-offset, 3, 0, 0)
-                        && (k != 4 || root.lighting-supported);
+                        && root.sec-row-visible(k, root.controllers-menu-scroll-offset, 4, 0, 0)
+                        && (k != 6 || root.lighting-supported);
                 }
 
                 /* Preferred player assignment. */
@@ -5886,25 +5922,6 @@ export component HomeWindow inherits Window {
                         && root.srow-visible(i, root.controller-mapping-scroll-offset, root.settings-list-visible-rows);
                 }
 
-                /* Vibration Intensity (every controller), Test Rumble (the
-                 * built-in motor). */
-                SettingsSelectableRow {
-                    x: root.settings-content-x; y: root.srow-y(0, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
-                    title: root.i18n-strings[1402];
-                    value: root.rumble-mode-label;
-                    detail: root.rumble-mode == "light" ? root.i18n-strings[1405]
-                        : root.rumble-mode == "strong" ? root.i18n-strings[1406] : "";
-                    selected: root.settings-view == 16 && root.rumble-index == 0;
-                    visible: root.settings-view == 16;
-                }
-                SettingsSelectableRow {
-                    x: root.settings-content-x; y: root.srow-y(1, 0, 0); width: root.settings-content-width; height: root.settings-row-height;
-                    title: root.i18n-strings[125];
-                    enabled: root.rumble-mode != "off";
-                    selected: root.settings-view == 16 && root.rumble-index == 1;
-                    visible: root.settings-view == 16 && root.rumble-supported;
-                }
-
                 /* RGB Lighting: LIGHTING (0-3) | SYSTEM SIGNALS (4-8). */
                 SettingsSectionHeader {
                     x: root.settings-content-x;
@@ -5963,17 +5980,15 @@ export component HomeWindow inherits Window {
                 for section[i] in [
                     { start: root.da-audio-start, label: root.i18n-strings[729], shown: true, scope: root.i18n-strings[313] },
                     { start: root.da-sounds-start, label: root.i18n-strings[730], shown: true, scope: root.i18n-strings[313] },
-                    /* Casting preferences belong to the user (castd, appdata/cast). */
-                    { start: root.da-cast-start, label: root.i18n-strings[1224], shown: root.cast-available, scope: root.i18n-strings[312] },
                 ]: SettingsSectionHeader {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(section.start, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, root.da-cast-section) - root.settings-section-gap;
+                    y: root.sec-row-y(section.start, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, 0) - root.settings-section-gap;
                     width: root.settings-content-width;
                     label: section.label;
                     scope-label: section.scope;
                     visible: section.shown && root.page-display-audio
                         && root.display-audio-scroll-offset < section.start
-                        && root.sec-row-visible(section.start, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, root.da-cast-section);
+                        && root.sec-row-visible(section.start, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, 0);
                 }
                 for row[k] in [
                     {
@@ -6011,7 +6026,7 @@ export component HomeWindow inherits Window {
                     { pos: root.da-sounds-start + 3, title: root.i18n-strings[138], value: "", enabled: true, toggle: true, on: root.power-sounds-enabled, shown: true, slider: false, fraction: 0 },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(row.pos, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, root.da-cast-section);
+                    y: root.sec-row-y(row.pos, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, 0);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -6023,37 +6038,7 @@ export component HomeWindow inherits Window {
                     slider-fraction: row.fraction;
                     selected: root.settings-view == 18 && root.display-audio-index == row.pos;
                     visible: row.shown && root.page-display-audio
-                        && root.sec-row-visible(row.pos, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, root.da-cast-section);
-                }
-
-                for row[k] in [
-                    { title: root.i18n-strings[1214], detail: "", value: "", toggle: true, on: root.cast-audio },
-                    {
-                        title: root.i18n-strings[1215], detail: root.i18n-strings[1222],
-                        value: root.cast-latency == "low" ? root.i18n-strings[1216]
-                            : root.cast-latency == "smooth" ? root.i18n-strings[1217] : root.i18n-strings[145],
-                        toggle: false, on: false,
-                    },
-                    {
-                        title: root.i18n-strings[1218],
-                        /* Cisco's licence asks for this exact attribution. */
-                        detail: root.cast-h264 == "installed" ? root.i18n-strings[1219] : root.i18n-strings[1223],
-                        value: root.cast-encoder-value,
-                        toggle: false, on: false,
-                    },
-                ]: SettingsSelectableRow {
-                    x: root.settings-content-x;
-                    y: root.sec-row-y(root.da-cast-start + k, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, root.da-cast-section);
-                    width: root.settings-content-width;
-                    height: root.settings-row-height;
-                    title: row.title;
-                    detail: row.detail;
-                    value: row.value;
-                    toggle: row.toggle;
-                    toggle-on: row.on;
-                    selected: root.settings-view == 18 && root.display-audio-index == root.da-cast-start + k;
-                    visible: root.cast-available && root.page-display-audio
-                        && root.sec-row-visible(root.da-cast-start + k, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, root.da-cast-section);
+                        && root.sec-row-visible(row.pos, root.display-audio-scroll-offset, root.da-audio-start, root.da-sounds-start, 0);
                 }
 
                 /* ------------------------------------------------------ Connectivity */
@@ -6078,7 +6063,7 @@ export component HomeWindow inherits Window {
                     },
                 ]: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(k, root.connectivity-scroll-offset, 3, 6, 0);
+                    y: root.sec-row-y(k, root.connectivity-scroll-offset, 3, 6, root.conn-split3);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -6089,15 +6074,45 @@ export component HomeWindow inherits Window {
                     navigates: row.nav;
                     selected: root.settings-view == 1 && root.connectivity-selected-index == k;
                     visible: root.page-connectivity
-                        && root.sec-row-visible(k, root.connectivity-scroll-offset, 3, 6, 0);
+                        && root.sec-row-visible(k, root.connectivity-scroll-offset, 3, 6, root.conn-split3);
                 }
 
-                /* SERVICES: the optional network services themselves (rows
-                 * from 6, built by gameui.rs from nuubos-remotectl and
-                 * nuubos-syncctl). */
+                /* SCREEN CASTING (rows 6-8, only while nuubos-castd runs). */
+                for row[k] in [
+                    { title: root.i18n-strings[1214], detail: "", value: "", toggle: true, on: root.cast-audio },
+                    {
+                        title: root.i18n-strings[1215], detail: root.i18n-strings[1222],
+                        value: root.cast-latency == "low" ? root.i18n-strings[1216]
+                            : root.cast-latency == "smooth" ? root.i18n-strings[1217] : root.i18n-strings[145],
+                        toggle: false, on: false,
+                    },
+                    {
+                        title: root.i18n-strings[1218],
+                        /* Cisco's licence asks for this exact attribution. */
+                        detail: root.cast-h264 == "installed" ? root.i18n-strings[1219] : root.i18n-strings[1223],
+                        value: root.cast-encoder-value,
+                        toggle: false, on: false,
+                    },
+                ]: SettingsSelectableRow {
+                    x: root.settings-content-x;
+                    y: root.sec-row-y(6 + k, root.connectivity-scroll-offset, 3, 6, root.conn-split3);
+                    width: root.settings-content-width;
+                    height: root.settings-row-height;
+                    title: row.title;
+                    detail: row.detail;
+                    value: row.value;
+                    toggle: row.toggle;
+                    toggle-on: row.on;
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == 6 + k;
+                    visible: root.cast-available && root.page-connectivity
+                        && root.sec-row-visible(6 + k, root.connectivity-scroll-offset, 3, 6, root.conn-split3);
+                }
+
+                /* SERVICES: the optional network services themselves (from
+                 * conn-services-start, built by gameui.rs from nuubos-remotectl). */
                 for row[i] in root.connectivity-services: SettingsSelectableRow {
                     x: root.settings-content-x;
-                    y: root.sec-row-y(6 + i, root.connectivity-scroll-offset, 3, 6, 0);
+                    y: root.sec-row-y(root.conn-services-start + i, root.connectivity-scroll-offset, 3, 6, root.conn-split3);
                     width: root.settings-content-width;
                     height: root.settings-row-height;
                     title: row.title;
@@ -6108,9 +6123,9 @@ export component HomeWindow inherits Window {
                     enabled: row.enabled;
                     navigates: row.navigates;
                     armed: row.armed;
-                    selected: root.settings-view == 1 && root.connectivity-selected-index == 6 + i;
+                    selected: root.settings-view == 1 && root.connectivity-selected-index == root.conn-services-start + i;
                     visible: root.page-connectivity
-                        && root.sec-row-visible(6 + i, root.connectivity-scroll-offset, 3, 6, 0);
+                        && root.sec-row-visible(root.conn-services-start + i, root.connectivity-scroll-offset, 3, 6, root.conn-split3);
                 }
 
                 /* Connect page. Entering this view starts a product-service scan
@@ -6583,12 +6598,15 @@ export component HomeWindow inherits Window {
                     kind: "face"; face-position: root.select-face-position;
                     label: root.home-focused.kind == 0 ? root.i18n-strings[413] : root.i18n-strings[414];
                 }
-                /* Games: North = Details; a collection: North = Manage. */
+                /* Games: North = Details; a collection: Manage; a system: its settings. */
                 if !root.settings-open && !root.home-modal && root.home-focus-valid && root.home-focused.kind == 0: ActionHint {
                     kind: "face"; face-position: root.context-face-position; label: root.i18n-strings[523];
                 }
                 if !root.settings-open && !root.home-modal && root.home-focus-valid && root.home-focused.kind == 2: ActionHint {
                     kind: "face"; face-position: root.context-face-position; label: root.i18n-strings[849];
+                }
+                if !root.settings-open && !root.home-modal && root.home-focus-valid && root.home-focused.kind == 3: ActionHint {
+                    kind: "face"; face-position: root.context-face-position; label: root.i18n-strings[3];
                 }
                 if !root.settings-open && (root.find-open && !root.library-open && root.find-zone != 2): ActionHint {
                     kind: "face"; face-position: root.select-face-position; label: root.i18n-strings[185];
@@ -6725,11 +6743,11 @@ export component HomeWindow inherits Window {
     oob-hero := Rectangle {
         x: 0; y: 0; width: parent.width; height: parent.height;
         background: Theme.background;
-        visible: root.oob-active && (root.oob-step == 0 || root.oob-step == 4);
+        visible: root.oob-active && (root.oob-step == 0 || root.oob-step == 5);
         z: 150;
 
         property <float> type-scale: max(1.0, min(1.35, root.height / 480px));
-        property <bool> ready: root.oob-step == 4;
+        property <bool> ready: root.oob-step == 5;
         /* Endonyms, deliberately not translated; order = UI_LANGUAGES. */
         property <[string]> greetings: ["Welcome", "Benvenuto", "Bienvenue", "Willkommen", "Bienvenido", "Bienvenido", "Bem-vindo", "Boas-vindas", "Welkom", "Witamy", "Vítejte", "Välkommen", "Velkommen", "Velkommen", "Tervetuloa", "Üdvözöljük", "Bun venit", "Hoş geldiniz", "Καλώς ήρθατε", "Добро пожаловать", "Ласкаво просимо", "Selamat datang", "Chào mừng", "ยินดีต้อนรับ", "स्वागत है", "ようこそ", "欢迎", "歡迎", "환영합니다"];
         property <float> greet-tick: 0;
@@ -6816,7 +6834,7 @@ export component HomeWindow inherits Window {
             HorizontalLayout {
                 alignment: center;
                 spacing: 8px;
-                for i in 5: Rectangle {
+                for i in 6: Rectangle {
                     width: i == root.oob-step ? 18px : 8px;
                     height: 8px;
                     border-radius: 4px;
@@ -6838,9 +6856,107 @@ export component HomeWindow inherits Window {
                     kind: "face"; face-position: root.select-face-position;
                     label: root.oob-step == 0 ? root.i18n-strings[390] : root.i18n-strings[185];
                 }
-                if root.oob-step == 4: ActionHint {
+                if root.oob-step == 5: ActionHint {
                     kind: "face"; face-position: root.back-face-position; label: root.i18n-strings[186];
                 }
+            }
+        }
+    }
+
+    /* OOB step 1: the face button pressed here becomes Confirm, the other Back. */
+    oob-buttons := Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: Theme.background;
+        visible: root.oob-active && root.oob-step == 1;
+        z: 150;
+
+        property <float> type-scale: max(1.0, min(1.35, root.height / 480px));
+        property <length> dot: 15px * self.type-scale;
+        property <length> card-w: min(220px * self.type-scale, (root.width - 80px) / 2);
+
+        VerticalLayout {
+            x: 32px;
+            y: 0px;
+            width: parent.width - 64px;
+            height: parent.height - 58px;
+            alignment: center;
+            spacing: 12px;
+
+            Text {
+                text: root.i18n-strings[1490];
+                color: Theme.text;
+                font-size: 26px * oob-buttons.type-scale;
+                font-weight: 700;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                alignment: center;
+                Text {
+                    max-width: 520px;
+                    text: root.i18n-strings[1491];
+                    color: Theme.text-secondary;
+                    font-size: 16px * oob-buttons.type-scale;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+            Rectangle { height: 8px; }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 16px;
+                for card in [{ pos: 2, label: root.i18n-strings[1492] }, { pos: 1, label: root.i18n-strings[1493] }]: Rectangle {
+                    width: oob-buttons.card-w;
+                    height: 128px * oob-buttons.type-scale;
+                    border-radius: 16px;
+                    background: Theme.surface;
+                    border-width: card.pos == root.select-face-position ? 2px : 0px;
+                    border-color: Theme.accent;
+
+                    /* The four face buttons, this one filled. */
+                    for p[i] in [{ x: 1, y: 0 }, { x: 2, y: 1 }, { x: 1, y: 2 }, { x: 0, y: 1 }]: Rectangle {
+                        x: (parent.width - 3 * oob-buttons.dot) / 2 + p.x * oob-buttons.dot;
+                        y: 16px * oob-buttons.type-scale + p.y * oob-buttons.dot;
+                        width: oob-buttons.dot - 2px;
+                        height: oob-buttons.dot - 2px;
+                        border-radius: self.width / 2;
+                        background: i == card.pos ? Theme.accent : Theme.border-soft;
+                    }
+                    Text {
+                        x: 8px;
+                        y: parent.height - self.height - 14px * oob-buttons.type-scale;
+                        width: parent.width - 16px;
+                        text: card.label;
+                        color: Theme.text;
+                        font-size: 16px * oob-buttons.type-scale;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            Rectangle { height: 6px; }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 8px;
+                for i in 6: Rectangle {
+                    width: i == root.oob-step ? 18px : 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: i <= root.oob-step ? Theme.accent : Theme.border-soft;
+                }
+            }
+        }
+
+        Rectangle {
+            x: 0; y: parent.height - 58px; width: parent.width; height: 58px;
+            background: Theme.background;
+            Rectangle { x: 16px; y: 0; width: parent.width - 32px; height: 1px; background: Theme.surface; }
+            HorizontalLayout {
+                x: 18px; y: 0; width: parent.width - 36px; height: parent.height;
+                spacing: 20px;
+                alignment: start;
+                ActionHint { kind: "nav"; label: root.i18n-strings[193]; }
             }
         }
     }

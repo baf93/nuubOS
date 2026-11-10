@@ -26,6 +26,7 @@ classify_sink()
     text="$(inspect_lower "$1")"
     case "$text" in
         *nuubos_cast*) echo cast ;;
+        *alsa_output.usb-*|*'device.bus = "usb"'*) echo usb ;;
         *bluez_output*|*bluetooth*) echo bluetooth ;;
         *hdmi*|*displayport*|*display\ port*|*iec958*) echo hdmi ;;
         *nuubos_analog*|*codec*|*analog*|*sun4i*|*sun50i*|*h700*) echo analog ;;
@@ -36,23 +37,13 @@ classify_sink()
 find_sink()
 {
     want="$1"
-    fallback=""
     for id in $(sink_ids); do
         kind="$(classify_sink "$id")"
         if [ "$kind" = "$want" ]; then
             echo "$id"
             return 0
         fi
-        if [ "$want" = "analog" ] && [ -z "$fallback" ] && \
-           [ "$kind" != "bluetooth" ] && [ "$kind" != "hdmi" ] && [ "$kind" != "cast" ]; then
-            fallback="$id"
-        fi
     done
-
-    if [ "$want" = "analog" ] && [ -n "$fallback" ]; then
-        echo "$fallback"
-        return 0
-    fi
 
     return 1
 }
@@ -64,6 +55,7 @@ select_sink()
         speaker|headphones|analog) kind=analog ;;
         hdmi) kind=hdmi ;;
         bluetooth) kind=bluetooth ;;
+        usb) kind=usb ;;
         cast) kind=cast ;;
         *) echo "unsupported output: $requested" >&2; return 2 ;;
     esac
@@ -102,6 +94,7 @@ case "${1:-}" in
             speaker|headphones|analog) find_sink analog ;;
             hdmi) find_sink hdmi ;;
             bluetooth) find_sink bluetooth ;;
+            usb) find_sink usb ;;
             cast) find_sink cast ;;
             *) exit 2 ;;
         esac

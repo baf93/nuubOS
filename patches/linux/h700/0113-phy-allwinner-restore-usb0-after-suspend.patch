@@ -1,0 +1,75 @@
+Restore H616 USB0 PHY routing and state after system suspend.
+
+--- a/drivers/phy/allwinner/phy-sun4i-usb.c
++++ b/drivers/phy/allwinner/phy-sun4i-usb.c
+@@ -1083,12 +1083,70 @@
+ };
+ MODULE_DEVICE_TABLE(of, sun4i_usb_phy_of_match);
+ 
++static int sun4i_usb_phy_resume(struct device *dev)
++{
++	struct sun4i_usb_phy_data *data = dev_get_drvdata(dev);
++	struct sun4i_usb_phy *phy = &data->phys[0];
++	struct sun4i_usb_phy *phy2 = &data->phys[2];
++	unsigned long flags;
++	int id_det;
++	int ret;
++	u32 val;
++
++	if (!of_device_is_compatible(dev->of_node, "allwinner,sun50i-h616-usb-phy") ||
++	    !data->phy0_init)
++		return 0;
++
++	id_det = sun4i_usb_phy0_get_id_det(data);
++	if (id_det < 0)
++		id_det = data->id_det;
++	if (id_det < 0)
++		return -EIO;
++
++	mutex_lock(&phy->phy->mutex);
++	ret = clk_prepare_enable(phy2->clk2);
++	if (ret) {
++		mutex_unlock(&phy->phy->mutex);
++		return ret;
++	}
++	val = readl(phy2->pmu + REG_HCI_PHY_CTL);
++	val &= ~data->cfg->hci_phy_ctl_clear;
++	writel(val, phy2->pmu + REG_HCI_PHY_CTL);
++	clk_disable_unprepare(phy2->clk2);
++	if (phy->pmu && data->cfg->hci_phy_ctl_clear) {
++		val = readl(phy->pmu + REG_HCI_PHY_CTL);
++		val &= ~data->cfg->hci_phy_ctl_clear;
++		writel(val, phy->pmu + REG_HCI_PHY_CTL);
++	}
++	spin_lock_irqsave(&data->reg_lock, flags);
++	val = readl(data->base + data->cfg->phyctl_offset);
++	val |= PHY_CTL_VBUSVLDEXT;
++	val &= ~PHY_CTL_SIDDQ;
++	writel(val, data->base + data->cfg->phyctl_offset);
++	spin_unlock_irqrestore(&data->reg_lock, flags);
++	sun4i_usb_phy0_update_iscr(phy->phy, 0,
++				   ISCR_DPDM_PULLUP_EN | ISCR_ID_PULLUP_EN);
++	sun4i_usb_phy0_set_id_detect(phy->phy, id_det);
++	sun4i_usb_phy_passby(phy, !id_det);
++	sun4i_usb_phy0_reroute(data, id_det);
++	data->id_det = -1;
++	data->vbus_det = -1;
++	mutex_unlock(&phy->phy->mutex);
++	mod_delayed_work(system_percpu_wq, &data->detect, 0);
++	dev_info(dev, "restored USB0 PHY after sleep (id=%d)\n", id_det);
++	return 0;
++}
++
++static DEFINE_SIMPLE_DEV_PM_OPS(sun4i_usb_phy_pm_ops, NULL,
++				sun4i_usb_phy_resume);
++
+ static struct platform_driver sun4i_usb_phy_driver = {
+ 	.probe = sun4i_usb_phy_probe,
+ 	.remove = sun4i_usb_phy_remove,
+ 	.driver = {
+ 		.of_match_table= sun4i_usb_phy_of_match,
+ 		.name = "sun4i-usb-phy",
++		.pm = pm_sleep_ptr(&sun4i_usb_phy_pm_ops),
+ 	}
+ };
+ module_platform_driver(sun4i_usb_phy_driver);

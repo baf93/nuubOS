@@ -623,31 +623,28 @@ fn main() {
             ui.set_keyboard_index(30);
             ui.set_settings_view(6);
         })),
-        ("display_audio", Box::new(|ui| { ui.set_settings_selected_index(4); ui.set_settings_view(18); ui.set_display_audio_index(2); ui.set_display_audio_scroll_offset(0); })),
+        ("display_audio", Box::new(|ui| { ui.set_settings_selected_index(5); ui.set_settings_view(18); ui.set_display_audio_index(2); ui.set_display_audio_scroll_offset(0); })),
         /* Home Music off (user request 2026-10-28): the toggle focused, the volume dimmed. */
         ("display_audio_music_off", Box::new(|ui| { ui.set_home_music_enabled(false); ui.set_display_audio_index(5); })),
         /* Volume Button Step (GitHub #6) focused. */
-        ("display_audio_volume_step", Box::new(|ui| { ui.set_settings_open(true); ui.set_settings_selected_index(4); ui.set_settings_view(18); ui.set_volume_step(5); ui.set_display_audio_index(3); ui.set_display_audio_scroll_offset(0); })),
+        ("display_audio_volume_step", Box::new(|ui| { ui.set_settings_open(true); ui.set_settings_selected_index(5); ui.set_settings_view(18); ui.set_volume_step(5); ui.set_display_audio_index(3); ui.set_display_audio_scroll_offset(0); })),
         ("display_audio_sounds", Box::new(|ui| { ui.set_home_music_enabled(true); ui.set_display_color_temperature_available(true); ui.set_display_audio_index(11); ui.set_display_audio_scroll_offset(7); })),
-        ("display_audio_cast", Box::new(|ui| {
-            ui.set_settings_open(true); ui.set_settings_selected_index(4); ui.set_settings_view(18);
-            ui.set_display_color_temperature_available(false);
+        ("connectivity_cast", Box::new(|ui| {
+            ui.set_settings_open(true); ui.set_settings_selected_index(1); ui.set_settings_view(1);
             ui.set_cast_available(true); ui.set_cast_audio(true); ui.set_cast_latency("low".into());
             ui.set_cast_h264("installed".into()); ui.set_cast_encoder_value(s(ui, 1220).into());
-            ui.set_display_audio_index(13); ui.set_display_audio_scroll_offset(10);
+            ui.set_connectivity_selected_index(7); ui.set_connectivity_scroll(4);
         })),
-        ("display_audio_cast_download", Box::new(|ui| {
-            ui.set_settings_open(true); ui.set_settings_selected_index(4); ui.set_settings_view(18);
-            ui.set_cast_available(true); ui.set_cast_latency("normal".into());
+        ("connectivity_cast_download", Box::new(|ui| {
+            ui.set_cast_latency("normal".into());
             ui.set_cast_h264("installing".into()); ui.set_cast_encoder_value(s(ui, 1221).replace("{0}", "42").into());
-            ui.set_display_audio_index(13); ui.set_display_audio_scroll_offset(10);
         })),
-        ("system", Box::new(|ui| { ui.set_display_color_temperature_available(false); ui.set_settings_selected_index(6); ui.set_settings_view(19); ui.set_system_index(5); ui.set_system_scroll_offset(0); })),
-        ("power", Box::new(|ui| { ui.set_settings_open(true); ui.set_settings_selected_index(5); ui.set_settings_view(69); ui.set_power_index(3); ui.set_power_scroll_offset(0); })),
-        ("power_quick", Box::new(|ui| { ui.set_settings_open(true); ui.set_settings_selected_index(5); ui.set_settings_view(69); ui.set_system_hypersleep(false); ui.set_power_index(3); ui.set_power_scroll_offset(0); })),
-        ("rumble", Box::new(|ui| { ui.set_settings_open(true); ui.set_settings_selected_index(2); ui.set_rumble_supported(true); ui.set_rumble_mode("light".into()); ui.set_settings_view(16); ui.set_rumble_index(0); })),
-        ("power_key", Box::new(|ui| { ui.set_settings_open(true); ui.set_system_hypersleep(true); ui.set_system_power_key_sleep(true); ui.set_settings_selected_index(5); ui.set_settings_view(69); ui.set_power_index(5); ui.set_power_scroll_offset(2); })),
-        ("power_devices", Box::new(|ui| { ui.set_settings_open(true); ui.set_system_hypersleep(true); ui.set_settings_selected_index(5); ui.set_settings_view(69); ui.set_power_index(8); ui.set_power_scroll_offset(6); })),
+        ("system", Box::new(|ui| { ui.set_display_color_temperature_available(false); ui.set_settings_selected_index(7); ui.set_settings_view(19); ui.set_system_index(5); ui.set_system_scroll_offset(0); })),
+        ("power", Box::new(|ui| { ui.set_settings_open(true); ui.set_settings_selected_index(6); ui.set_settings_view(69); ui.set_power_index(3); ui.set_power_scroll_offset(0); })),
+        ("power_quick", Box::new(|ui| { ui.set_settings_open(true); ui.set_settings_selected_index(6); ui.set_settings_view(69); ui.set_system_hypersleep(false); ui.set_power_index(3); ui.set_power_scroll_offset(0); })),
+        ("rumble", Box::new(|ui| { ui.set_settings_open(true); ui.set_cast_available(false); ui.set_settings_selected_index(2); ui.set_rumble_supported(true); ui.set_rumble_mode("light".into()); ui.set_settings_view(10); ui.set_controllers_menu_index(4); ui.set_controllers_menu_scroll_offset(1); })),
+        ("power_key", Box::new(|ui| { ui.set_settings_open(true); ui.set_system_hypersleep(true); ui.set_system_power_key_sleep(true); ui.set_settings_selected_index(6); ui.set_settings_view(69); ui.set_power_index(5); ui.set_power_scroll_offset(2); })),
+        ("power_devices", Box::new(|ui| { ui.set_settings_open(true); ui.set_system_hypersleep(true); ui.set_settings_selected_index(6); ui.set_settings_view(69); ui.set_power_index(8); ui.set_power_scroll_offset(6); })),
         ("controllers", Box::new(|ui| { ui.set_settings_selected_index(2); ui.set_settings_view(0); })),
         ("lighting", Box::new(|ui| {
             ui.set_lighting_supported(true); ui.set_lighting_effect("orbit".into()); ui.set_lighting_color("theme".into());
@@ -660,37 +657,36 @@ fn main() {
         ("gaming_preview", Box::new(|ui| {
             ui.set_settings_open(true); ui.set_details_active(false);
             ui.set_settings_selected_index(3); ui.set_settings_view(0);
-            ui.set_gaming_rows(gen(&[(&s(ui, 584), "alice", "", true, -1),
-                (&s(ui, 767), "", &s(ui, 768), false, 0), (&s(ui, 769), "10", "", true, -1),
-                (&s(ui, 770), "", &s(ui, 771), false, 1), (&s(ui, 772), "", "", true, -1),
-                (&s(ui, 774), &s(ui, 54), "", true, -1), (&s(ui, 775), "", &s(ui, 776), false, 0),
-                (&s(ui, 777), "", &s(ui, 778), false, 1),
-                (&s(ui, 1391), "", &s(ui, 1392), false, 0),
-                (&s(ui, 804), "", &s(ui, 805), false, -1),
-                (&s(ui, 792), "ScreenScraper", &s(ui, 793), true, -1),
-                (&s(ui, 1419), &s(ui, 1422), &s(ui, 1420), true, -1),
-                (&s(ui, 565), "nuubfan", &s(ui, 567), false, -1),
+            ui.set_gaming_split(1); ui.set_gaming_split2(4); ui.set_gaming_split3(7);
+            ui.set_gaming_label0(s(ui, 703).into()); ui.set_gaming_label1(s(ui, 1481).into());
+            ui.set_gaming_label2(s(ui, 1482).into()); ui.set_gaming_label3(s(ui, 1483).into());
+            ui.set_gaming_scope(s(ui, 312).into()); ui.set_gaming_scroll(0);
+            ui.set_gaming_rows(gen(&[(&s(ui, 1454), "", &s(ui, 1455), true, -1),
+                (&s(ui, 1408), &s(ui, 1411), &s(ui, 1409), true, -1), (&s(ui, 775), "", &s(ui, 776), false, 1),
+                (&s(ui, 777), "", &s(ui, 778), false, 1), (&s(ui, 769), "10", "", true, -1),
+                (&s(ui, 770), "", &s(ui, 771), false, 1), (&s(ui, 669), &s(ui, 54), "", true, -1),
+                (&s(ui, 584), "alice", "", true, -1), (&s(ui, 767), "", &s(ui, 768), false, 0),
+                (&s(ui, 774), &s(ui, 54), "", true, -1), (&s(ui, 1391), "", &s(ui, 1392), false, 0)]));
+        })),
+        ("gaming", Box::new(|ui| { ui.set_settings_selected_index(3); ui.set_settings_view(68); ui.set_gaming_index(0); ui.set_gaming_scroll(0); })),
+        ("gaming_saves", Box::new(|ui| { ui.set_gaming_index(5); ui.set_gaming_scroll(2); })),
+        ("gaming_extras", Box::new(|ui| { ui.set_gaming_index(10); ui.set_gaming_scroll(6); })),
+        ("library_preview", Box::new(|ui| {
+            ui.set_settings_selected_index(4); ui.set_settings_view(0); ui.set_gaming_index(0); ui.set_gaming_scroll(0);
+            ui.set_gaming_split(3); ui.set_gaming_split2(9); ui.set_gaming_split3(0);
+            ui.set_gaming_label0(s(ui, 704).into()); ui.set_gaming_label1(s(ui, 1484).into());
+            ui.set_gaming_label2(s(ui, 1485).into()); ui.set_gaming_label3("".into());
+            ui.set_gaming_scope(s(ui, 313).into());
+            ui.set_gaming_rows(gen(&[(&s(ui, 804), "", &s(ui, 805), false, -1), (&s(ui, 1319), "", &s(ui, 1320), false, 0),
+                (&s(ui, 1467), "", &s(ui, 1468), false, 1), (&s(ui, 792), "ScreenScraper", "", true, -1),
+                (&s(ui, 1419), &s(ui, 1421), "", true, -1), (&s(ui, 565), &s(ui, 566), &s(ui, 803), false, -1),
                 (&s(ui, 568), "", &s(ui, 569), false, -1), (&s(ui, 798), "", &s(ui, 799), false, -1),
-                (&s(ui, 576), "", &s(ui, 581), true, -1),
-                (&s(ui, 669), &s(ui, 222), &s(ui, 489), true, -1),
-                (&s(ui, 1028), "", &s(ui, 1029), true, -1)]));
-            ui.set_gaming_split(9);
-            ui.set_gaming_split2(15);
+                (&s(ui, 868), "", &s(ui, 869), false, -1), (&s(ui, 576), "", &s(ui, 581), true, -1),
+                (&s(ui, 1257), &s(ui, 1258), &s(ui, 1260), false, -1)]));
         })),
-        ("gaming", Box::new(|ui| { ui.set_settings_selected_index(3); ui.set_settings_view(68); ui.set_gaming_index(3); })),
-        ("gaming_retroarch", Box::new(|ui| { ui.set_gaming_index(8); })),
-        ("gaming_library", Box::new(|ui| { ui.set_gaming_index(14); })),
-        /* Cover Region (GitHub #10). */
-        ("gaming_region", Box::new(|ui| { ui.set_gaming_index(11); })),
-        ("gaming_syncthing", Box::new(|ui| { ui.set_gaming_index(17); })),
-        ("gaming_signout", Box::new(|ui| {
-            ui.set_gaming_index(12);
-            /* Sign Out waits for its confirming press. */
-            let rows = ui.get_gaming_rows();
-            if let Some(mut r) = rows.row_data(12) { r.armed = true; r.detail = s(ui, 191).into(); rows.set_row_data(12, r); }
-        })),
+        ("library", Box::new(|ui| { ui.set_settings_view(78); ui.set_gaming_index(0); })),
+        ("library_files", Box::new(|ui| { ui.set_gaming_index(9); ui.set_gaming_scroll(7); })),
         ("game_hotkeys", Box::new(|ui| {
-            ui.set_gaming_index(0);
             ui.set_settings_view(55); ui.set_gen_index(1); ui.set_gen_scroll(0); ui.set_gen_split(0);
             ui.set_gen_section(s(ui, 772).into()); ui.set_gen_select(true);
             ui.set_gen_rows(gen(&[(&s(ui, 773), "", "", false, -1), (&s(ui, 417), &s(ui, 346), "", true, -1),
@@ -774,13 +770,23 @@ fn main() {
         })),
         ("game_settings", Box::new(|ui| {
             ui.set_gen_notice("".into()); ui.set_details_has_cover(false);
-            ui.set_details_active(true); ui.set_settings_view(51); ui.set_gen_index(1); ui.set_gen_scroll(0);
-            ui.set_details_title("Tobu Tobu Girl Deluxe".into()); ui.set_gen_section(s(ui, 524).into());
+            ui.set_details_active(true); ui.set_settings_view(51); ui.set_gen_index(0); ui.set_gen_scroll(0);
+            ui.set_details_title("Tobu Tobu Girl Deluxe".into()); ui.set_gen_section(s(ui, 1481).into());
             ui.set_details_subtitle("Nintendo Entertainment System".into());
-            ui.set_gen_rows(gen(&[(&s(ui, 525), &s(ui, 528).replace("{0}", "snes9x"), "", true, -1),
-                (&s(ui, 1253), "", "", true, -1),
-                (&s(ui, 526), "4:3", "", true, -1), (&s(ui, 527), &s(ui, 534), "", true, -1),
+            ui.set_gen_split(3); ui.set_gen_split_label(s(ui, 1486).into());
+            ui.set_gen_split2(5); ui.set_gen_split2_label(s(ui, 1487).into());
+            ui.set_gen_split3(6); ui.set_gen_split3_label(s(ui, 1488).into());
+            ui.set_gen_rows(gen(&[(&s(ui, 526), "4:3", "", true, -1), (&s(ui, 531), &s(ui, 1479), "", true, -1),
+                (&s(ui, 527), &s(ui, 534), "", true, -1), (&s(ui, 454), &s(ui, 1381), "", true, -1),
+                (&s(ui, 1464), &s(ui, 528).replace("{0}", "Auto"), "", true, -1),
+                (&s(ui, 525), &s(ui, 528).replace("{0}", "snes9x"), "", true, -1),
+                (&s(ui, 1456), "", &s(ui, 1457), true, -1),
+                (&s(ui, 1452).replace("{0}", "Nintendo"), "", &s(ui, 1453), true, -1),
                 (&s(ui, 535), "", &s(ui, 536), false, -1)]));
+        })),
+        ("game_settings_controls", Box::new(|ui| { ui.set_gen_index(6); ui.set_gen_scroll(4); })),
+        ("game_settings_end", Box::new(|ui| {
+            ui.set_gen_split(0); ui.set_gen_split2(0); ui.set_gen_split3(0); ui.set_gen_index(0); ui.set_gen_scroll(0);
         })),
         ("game_settings_search", Box::new(|ui| {
             ui.set_gen_index(1); ui.set_gen_section(s(ui, 1473).into()); ui.set_settings_search_page(true);
@@ -946,7 +952,7 @@ fn main() {
                 ("Libretro Docs", "", "docs.libretro.com", false, -1), ("nuubOS on GitHub", "", "github.com/baf93/nuubOS", false, -1)]));
         })),
         ("diagnostics", Box::new(|ui| {
-            ui.set_details_active(false); ui.set_settings_north_hint("".into()); ui.set_settings_selected_index(5); ui.set_settings_view(27); ui.set_diag_index(0); ui.set_recovery_notice("nuubos-support-20261007-101500.tar.gz".into()); })),
+            ui.set_details_active(false); ui.set_settings_north_hint("".into()); ui.set_settings_selected_index(6); ui.set_settings_view(27); ui.set_diag_index(0); ui.set_recovery_notice("nuubos-support-20261007-101500.tar.gz".into()); })),
         ("safe_screen", Box::new(|ui| { ui.set_recovery_notice("".into()); ui.set_recovery_armed(-1); ui.set_recovery_stage(0); ui.set_active_user_id("u".into()); ui.set_safe_index(0); ui.set_safe_screen_open(true); })),
         ("safe_screen_armed", Box::new(|ui| { ui.set_safe_index(5); ui.set_recovery_armed(5); ui.set_recovery_stage(0); })),
         ("safe_screen_notice", Box::new(|ui| { ui.set_safe_index(2); ui.set_recovery_armed(-1); ui.set_recovery_stage(0); ui.set_recovery_notice("Support bundle saved: nuubos-support-20261008-070500.tar.gz".into()); })),
@@ -971,7 +977,7 @@ fn main() {
         ("update_installing", Box::new(|ui| {
             ui.set_notes_open(false);
             ui.set_settings_open(true); ui.set_details_active(false);
-            ui.set_settings_selected_index(6); ui.set_settings_view(63); ui.set_gen_index(1); ui.set_gen_scroll(0);
+            ui.set_settings_selected_index(7); ui.set_settings_view(63); ui.set_gen_index(1); ui.set_gen_scroll(0);
             ui.set_gen_section(s(ui, 732).into()); ui.set_gen_select(true); ui.set_gen_split(0); ui.set_gen_split2(0);
             let mut rows: Vec<GenRow> = gen(&[("Version", "0.5 • 3ddd1b61d1b1", "", false, -1), (&s(ui, 985), &s(ui, 988), &s(ui, 989), true, -1),
                 (&s(ui, 992), "", &s(ui, 993), false, 1), (&s(ui, 487), "nuubOS 0.6", "", false, -1),
@@ -986,7 +992,7 @@ fn main() {
             ui.set_safe_screen_open(false); ui.set_recovery_notice("".into());
             ui.set_notes_open(false); ui.set_op_screen_open(false);
             ui.set_settings_open(true); ui.set_details_active(false);
-            ui.set_settings_selected_index(6); ui.set_settings_view(64); ui.set_gen_index(2); ui.set_gen_scroll(0);
+            ui.set_settings_selected_index(7); ui.set_settings_view(64); ui.set_gen_index(2); ui.set_gen_scroll(0);
             ui.set_gen_section(s(ui, 19).to_uppercase().into()); ui.set_gen_select(true);
             ui.set_gen_split(0); ui.set_gen_split2(0);
             ui.set_gen_rows(gen(&[
@@ -1012,7 +1018,7 @@ fn main() {
         })),
         /* Data on SD2 (storageui.rs page 75, GitHub #24). */
         ("storage_data", Box::new(|ui| {
-            ui.set_settings_open(true); ui.set_details_active(false); ui.set_settings_selected_index(6);
+            ui.set_settings_open(true); ui.set_details_active(false); ui.set_settings_selected_index(7);
             ui.set_gen_select(true); ui.set_gen_split(0); ui.set_gen_split2(0);
             ui.set_settings_view(75); ui.set_gen_index(2); ui.set_gen_scroll(0);
             ui.set_gen_section(s(ui, 1435).to_uppercase().into());
@@ -1208,8 +1214,9 @@ fn main() {
         ui.set_user_picker_open(false);
         ui.set_settings_open(true); ui.set_oob_active(true); ui.set_oob_step(0); ui.set_settings_view(30);
     })));
+    scenes.push(("oob_buttons", Box::new(|ui| { ui.set_oob_step(1); })));
     scenes.push(("oob_datetime", Box::new(|ui| {
-        ui.set_oob_step(1); ui.set_settings_view(30); ui.set_oob_index(1); ui.set_automatic_time(false);
+        ui.set_oob_step(2); ui.set_settings_view(30); ui.set_oob_index(1); ui.set_automatic_time(false);
     })));
     /* Manual Date & Time picker (datetime.rs), focus on Month. */
     scenes.push(("datetime_picker", Box::new(|ui| {
@@ -1229,10 +1236,10 @@ fn main() {
     })));
     scenes.push(("oob_wifi", Box::new(|ui| {
         ui.set_datetime_picker_open(false);
-        ui.set_oob_step(2); ui.set_settings_view(31); ui.set_oob_index(2); ui.set_connectivity_wifi_active(false);
+        ui.set_oob_step(3); ui.set_settings_view(31); ui.set_oob_index(2); ui.set_connectivity_wifi_active(false);
     })));
     scenes.push(("oob_users", Box::new(|ui| {
-        ui.set_oob_step(3); ui.set_settings_view(32); ui.set_user_count(3); ui.set_user_login_mode("default".into());
+        ui.set_oob_step(4); ui.set_settings_view(32); ui.set_user_count(3); ui.set_user_login_mode("default".into());
         ui.set_default_user_name("Player 1".into()); ui.set_oob_index(5); ui.set_oob_scroll(0);
     })));
     scenes.push(("oob_users_one", Box::new(|ui| {
@@ -1254,7 +1261,7 @@ fn main() {
         ui.set_current_user_avatar_available(true);
         ui.set_avatar_picker_index(5); ui.set_avatar_picker_scroll(0); ui.set_avatar_picker_open(true);
     })));
-    scenes.push(("oob_ready", Box::new(|ui| { ui.set_avatar_picker_open(false); ui.set_oob_step(4); })));
+    scenes.push(("oob_ready", Box::new(|ui| { ui.set_avatar_picker_open(false); ui.set_oob_step(5); })));
     /* Moonlight (EPIC-025): the Settings shell with the PCs rail. */
     fn ml_host(id: &str, name: &str, address: &str, paired: bool, online: &str, probing: bool) -> MoonlightHostEntry {
         MoonlightHostEntry { id: id.into(), name: name.into(), address: address.into(), paired, online: online.into(), probing, wol: false, waking: false }

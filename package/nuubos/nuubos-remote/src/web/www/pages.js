@@ -530,7 +530,8 @@ async function settingsPage(id, system, controls) {
   const sysName = (rows(lib.system).find((x) => x[0] === system) || [])[1] || system;
   const def = (v) => C(528, 'Default ({0})', v);
   const inh = (sv, label, fallback) => (sv ? C(1448, 'System ({0})', label) : def(fallback));
-  const aspects = { core: C(529, 'As the game'), '4:3': '4:3', '16:9': '16:9', full: C(530, 'Full Screen'), integer: C(531, 'Integer Scaling'), square: C(1413, 'Square Pixels') };
+  const aspects = { core: C(529, 'As the game'), '4:3': '4:3', '16:9': '16:9', full: C(530, 'Full Screen'), square: C(1413, 'Square Pixels') };
+  const scalings = { integer: C(1477, 'Integer'), overscale: C(1478, 'Integer (Overscale)'), off: C(54, 'Off') };
   const filters = { sharp: C(532, 'Sharp'), smooth: C(533, 'Smooth'), pixel: C(534, 'Pixel Perfect'), crt: C(777, 'CRT Effect') };
   const accuracies = { fast: C(1315, 'Fast'), accurate: C(1316, 'Accurate') };
   const paks = { rumble: C(1340, 'Rumble Pak'), memory: C(1341, 'Controller Pak') };
@@ -542,7 +543,8 @@ async function settingsPage(id, system, controls) {
     : act('game.set', { id, system, key, value }, { topics: [topic] }));
   const pick = async (key, title, options, cur) => { const v = await choose(title, options, cur); if (v !== null) await set(key, v); };
   const coreInh = inh(s.system_core, s.system_core, s.core_default);
-  const aspectInh = inh(s.system_aspect, aspects[s.system_aspect], C(531, 'Integer Scaling'));
+  const aspectInh = inh(s.system_aspect, aspects[s.system_aspect], C(529, 'As the game'));
+  const scalingInh = inh(s.system_scaling, scalings[s.system_scaling], C(1479, 'Smart'));
   const filterInh = inh(s.system_filter, filters[s.system_filter], filters[s.filter_default] || '');
   const accInh = inh(s.system_accuracy, accuracies[s.system_accuracy], accuracies[s.accuracy_default] || accuracies.fast);
   const resInh = inh(s.system_resolution, resolutions[s.system_resolution], resolutions[s.resolution_default] || resolutions['1x']);
@@ -590,6 +592,8 @@ async function settingsPage(id, system, controls) {
         on: () => pick('core', C(525, 'Emulator'), [{ value: '', label: coreInh }, ...cores.map((c) => ({ value: c, label: c }))], s.core_override) }),
       row({ key: 'aspect', title: C(526, 'Aspect Ratio'), value: s.aspect ? aspects[s.aspect] || s.aspect : aspectInh, chevron: true,
         on: () => pick('aspect', C(526, 'Aspect Ratio'), [{ value: '', label: aspectInh }, ...Object.entries(aspects).map(([value, label]) => ({ value, label }))], s.aspect) }),
+      row({ key: 'scaling', title: C(531, 'Scaling'), value: s.scaling ? scalings[s.scaling] || s.scaling : scalingInh, chevron: true,
+        on: () => pick('scaling', C(531, 'Scaling'), [{ value: '', label: scalingInh }, ...Object.entries(scalings).map(([value, label]) => ({ value, label }))], s.scaling) }),
       row({ key: 'filter', title: C(527, 'Video Filter'), value: s.filter ? filters[s.filter] : filterInh, chevron: true,
         on: () => pick('filter', C(527, 'Video Filter'), [{ value: '', label: filterInh }, ...['sharp', 'smooth', 'pixel'].map((v) => ({ value: v, label: filters[v] }))], s.filter) }),
       s.accuracy_supported === '1' ? row({ key: 'accuracy', title: C(1314, 'Emulation Accuracy'),
@@ -1260,6 +1264,7 @@ page('controllers', 'settings', () => C(6, 'Controllers & Input'), async (path) 
   if (path[0] === 'list') return controllerListPage();
   if (path[0] === 'controller') return controllerPage(path[1]);
   if (path[0] === 'rumble') return rumblePage();
+  if (path[0] === 'hotkeys') return hotkeysPage();
   if (path[0] === 'lighting') return lightingPage();
   const [c, rm, li] = await Promise.all([get('controllers').catch(() => ({ devices: [], players: [] })), get('rumble').catch(() => null), get('lighting').catch(() => null)]);
   const rumble = rm && rm.supported;
@@ -1270,6 +1275,7 @@ page('controllers', 'settings', () => C(6, 'Controllers & Input'), async (path) 
     group(
       row({ key: 'players', title: C(13, 'Player Assignment'), value: C(111, 'P1–P8'), chevron: true, on: () => go('controllers/players') }),
       row({ key: 'list', title: C(14, 'Controllers'), value: c.devices.length + C(219, ' available'), chevron: true, on: () => go('controllers/list') })),
+      row({ key: 'hk', title: C(772, 'Game Hotkeys'), chevron: true, on: () => go('controllers/hotkeys') }),
     section(lights ? C(735, 'RUMBLE & LIGHTING') : C(899, 'RUMBLE'), 'user'),
     group(
       row({ key: 'rumble', title: C(1402, 'Vibration Intensity'), value: intensity ? C(...intensity) : C(205, 'Unavailable'),
@@ -1378,48 +1384,55 @@ const controlName = (c) => { const x = CONTROLS.find((k) => k[0] === c); return 
 
 page('gaming', 'settings', () => C(702, 'Gaming'), async (path) => {
   if (path[0] === 'ra') return raPage();
-  if (path[0] === 'hotkeys') return hotkeysPage();
   if (path[0] === 'overlay') return overlayPage();
   if (path[0] === 'sync') return syncPage();
   if (path[0] === 'systems') return path[1] ? settingsPage(null, path[1], path[2] === 'controls') : systemsPage();
-  const [emu, ra, ss, lib, jobs, sync] = await Promise.all([get('emu_settings'), get('ra'), get('scraper'), get('library'), get('jobs'),
-    get('sync').catch(() => ({}))]);
+  const [emu, ra, sync] = await Promise.all([get('emu_settings'), get('ra'), get('sync').catch(() => ({}))]);
   const set = (key, value) => act('emu.set', { key, value }, { topics: ['emu_settings'] });
-  const busy = rows(jobs.job).some((j) => j[1] === 'scrape-bulk' && (j[2] === 'running' || j[2] === 'queued'));
-  const avail = on01(ss.available);
-  const src = SOURCES[ss.provider] || SOURCES.screenscraper;
-  const scanning = lib.scanning === '1';
   const positions = { top: C(1410, 'Top'), center: C(1411, 'Center'), bottom: C(1412, 'Bottom') };
-  const regions = { auto: C(122, 'Automatic'), us: C(1421, 'USA'), eu: C(1422, 'Europe'), jp: C(1423, 'Japan'), wor: C(1424, 'World') };
   const nodes = [section(C(703, 'GAMING'), 'user'), group(
-    row({ key: 'ra', title: C(584, 'RetroAchievements'), value: ra.user || C(566, 'Not signed in'), chevron: true, on: () => go('gaming/ra') }),
-    row({ key: 'boot', title: C(767, 'Console Boot Screens'), detail: C(768, "Shows the console's start-up logo when its BIOS is available"), toggle: on01(emu.boot_screens), set: (v) => set('boot_screens', v ? '1' : '0') }),
-    row({ key: 'slots', title: C(769, 'Save State Slots'), value: emu.slots, chevron: true, on: async () => {
-      const v = await choose(C(769, 'Save State Slots'), ['3', '5', '10', '20', '50', '99'].map((n) => ({ value: n, label: n })), emu.slots);
-      if (v) await set('slots', v);
-    } }),
-    row({ key: 'rot', title: C(770, 'Rotate Save Slots'), detail: C(771, 'Each save goes to the next slot, then starts again from slot 0'), toggle: on01(emu.slot_rotation), set: (v) => set('slot_rotation', v ? '1' : '0') }),
-    row({ key: 'hk', title: C(772, 'Game Hotkeys'), chevron: true, on: () => go('gaming/hotkeys') }),
-    row({ key: 'ov', title: C(774, 'Performance Overlay'), value: on01(emu.overlay) ? C(222, 'On') : C(54, 'Off'), chevron: true, on: () => go('gaming/overlay') }),
+    row({ key: 'systems', title: C(1454, 'System Settings'), detail: C(1455, 'Emulator and picture for all the games of a system'), chevron: true, on: () => go('gaming/systems') })),
+  section(C(1481, 'PICTURE'), 'user'), group(
     row({ key: 'pos', title: C(1408, 'Picture Position'), detail: C(1409, 'Where the game sits when it does not fill the screen'),
       value: positions[emu.position] || positions.center, chevron: true, on: async () => {
         const v = await choose(C(1408, 'Picture Position'), Object.entries(positions).map(([value, label]) => ({ value, label })), emu.position || 'center');
         if (v) await set('position', v);
       } }),
     row({ key: 'bez', title: C(775, 'Bezels'), detail: C(776, 'Frames the game when it does not fill the screen'), toggle: on01(emu.bezels), set: (v) => set('bezels', v ? '1' : '0') }),
-    row({ key: 'crt', title: C(777, 'CRT Effect'), detail: C(778, 'Scanlines for consoles played on TVs'), toggle: on01(emu.crt), set: (v) => set('crt', v ? '1' : '0') }),
-    row({ key: 'ramenu', title: C(1391, 'RetroArch in the Quick Menu'), detail: C(1392, "Opens RetroArch's own menu during a game"), toggle: on01(emu.retroarch_menu), set: (v) => set('retroarch_menu', v ? '1' : '0') }),
-    row({ key: 'systems', title: C(1454, 'System Settings'), detail: C(1455, 'Emulator and picture for all the games of a system'), chevron: true, on: () => go('gaming/systems') })),
-  section(C(704, 'LIBRARY'), 'device'), group(
+    row({ key: 'crt', title: C(777, 'CRT Effect'), detail: C(778, 'Scanlines for consoles played on TVs'), toggle: on01(emu.crt), set: (v) => set('crt', v ? '1' : '0') })),
+  section(C(1482, 'SAVES'), 'user'), group(
+    row({ key: 'slots', title: C(769, 'Save State Slots'), value: emu.slots, chevron: true, on: async () => {
+      const v = await choose(C(769, 'Save State Slots'), ['3', '5', '10', '20', '50', '99'].map((n) => ({ value: n, label: n })), emu.slots);
+      if (v) await set('slots', v);
+    } }),
+    row({ key: 'rot', title: C(770, 'Rotate Save Slots'), detail: C(771, 'Each save goes to the next slot, then starts again from slot 0'), toggle: on01(emu.slot_rotation), set: (v) => set('slot_rotation', v ? '1' : '0') }),
+    row({ key: 'sync', title: C(669, 'Syncthing'), value: on01(sync.enabled) ? C(222, 'On') : C(54, 'Off'),
+        detail: C(670, 'Keeps your saves in sync with your other devices. It is not a backup.'), chevron: true, on: () => go('gaming/sync') })),
+  section(C(1483, 'EXTRAS'), 'user'), group(
+    row({ key: 'ra', title: C(584, 'RetroAchievements'), value: ra.user || C(566, 'Not signed in'), chevron: true, on: () => go('gaming/ra') }),
+    row({ key: 'boot', title: C(767, 'Console Boot Screens'), detail: C(768, "Shows the console's start-up logo when its BIOS is available"), toggle: on01(emu.boot_screens), set: (v) => set('boot_screens', v ? '1' : '0') }),
+    row({ key: 'ov', title: C(774, 'Performance Overlay'), value: on01(emu.overlay) ? C(222, 'On') : C(54, 'Off'), chevron: true, on: () => go('gaming/overlay') }),
+    row({ key: 'ramenu', title: C(1391, 'RetroArch in the Quick Menu'), detail: C(1392, "Opens RetroArch's own menu during a game"), toggle: on01(emu.retroarch_menu), set: (v) => set('retroarch_menu', v ? '1' : '0') }))];
+  return { title: C(702, 'Gaming'), nodes, topics: ['emu_settings', 'ra', 'sync'] };
+});
+
+page('library-settings', 'settings', () => C(1480, 'Library'), async () => {
+  const [ss, lib, jobs] = await Promise.all([get('scraper'), get('library'), get('jobs')]);
+  const busy = rows(jobs.job).some((j) => j[1] === 'scrape-bulk' && (j[2] === 'running' || j[2] === 'queued'));
+  const avail = on01(ss.available);
+  const src = SOURCES[ss.provider] || SOURCES.screenscraper;
+  const scanning = lib.scanning === '1';
+  const regions = { auto: C(122, 'Automatic'), us: C(1421, 'USA'), eu: C(1422, 'Europe'), jp: C(1423, 'Japan'), wor: C(1424, 'World') };
+  const nodes = [section(C(704, 'LIBRARY'), 'device'), group(
     row({ key: 'scan', title: C(804, 'Scan for New Games'), detail: C(805, 'Finds games copied to the SD card since the last scan'), busy: scanning,
       value: scanning ? C(410, 'Searching for games…') : '', disabled: scanning, on: () => act('lib.scan') }),
     row({ key: 'unav', title: C(1319, 'Show Unavailable Games'), detail: C(1320, 'Games whose file is missing or on an SD2 card that is not inserted'),
       toggle: on01(lib.show_unavailable), set: (v) => act('lib.unavailable', { v }, { topics: ['library'] }) }),
     row({ key: 'wrap', title: C(1467, 'Wrap Around Rows'), detail: C(1468, 'On Home, going past the last item returns to the first'),
-      toggle: on01(lib.wrap_rows), set: (v) => act('lib.wrap', { v }, { topics: ['library'] }) }),
+      toggle: on01(lib.wrap_rows), set: (v) => act('lib.wrap', { v }, { topics: ['library'] }) })),
+  section(C(1484, 'COVERS & INFO'), 'device'), group(
     row({ key: 'src', title: C(792, 'Metadata Source'), value: src[0], detail: C(src[1], SOURCE_DETAILS[src[1]]), chevron: true,
       on: () => pickAndAct(C(792, 'Metadata Source'), Object.entries(SOURCES).map(([value, s]) => ({ value, label: s[0], detail: C(s[1], SOURCE_DETAILS[s[1]]) })), ss.provider, 'scraper.provider') }),
-    /* Cover Region (GitHub #10); TheGamesDB has one cover a game. */
     ss.provider !== 'thegamesdb' ? row({ key: 'region', title: C(1419, 'Cover Region'), value: regions[ss.region] || regions.auto, chevron: true,
       detail: C(1420, 'Box art from this region when there is one. Fill Missing Data changes the covers already downloaded.'),
       on: () => pickAndAct(C(1419, 'Cover Region'), Object.entries(regions).map(([value, label]) => ({ value, label })), ss.region || 'auto', 'scraper.region') }) : null,
@@ -1441,13 +1454,10 @@ page('gaming', 'settings', () => C(702, 'Gaming'), async (path) => {
         if (v) await act('scraper.bulk', { scope: v }, { topics: ['jobs'] });
       } }),
     ss.provider !== 'libretro' ? row({ key: 'lang', title: C(868, 'Metadata in Your Language'), detail: C(869, 'Gets descriptions and genres in your language; the languages already downloaded stay saved'),
-      disabled: !avail || busy, on: () => act('scraper.bulk', { scope: 'lang' }, { topics: ['jobs'] }) }) : null,
-    row({ key: 'bios', title: C(576, 'BIOS Files'), detail: C(581, 'Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.'), chevron: true, on: () => go('bios') })),
-    /* SYNCTHING (user request 2026-10-12: here, not in Connectivity). */
-    section(C(1094, 'SYNCTHING'), 'user'), group(
-      row({ key: 'sync', title: C(669, 'Syncthing'), value: on01(sync.enabled) ? C(222, 'On') : C(54, 'Off'),
-        detail: C(670, 'Keeps your saves in sync with your other devices. It is not a backup.'), chevron: true, on: () => go('gaming/sync') }))];
-  return { title: C(702, 'Gaming'), nodes, topics: ['emu_settings', 'ra', 'scraper', 'library', 'jobs', 'sync'] };
+      disabled: !avail || busy, on: () => act('scraper.bulk', { scope: 'lang' }, { topics: ['jobs'] }) }) : null),
+  section(C(1485, 'FILES'), 'device'), group(
+    row({ key: 'bios', title: C(576, 'BIOS Files'), detail: C(581, 'Copy BIOS files to the bios folder on the SD card. nuubOS never includes them.'), chevron: true, on: () => go('bios') }))];
+  return { title: C(1480, 'Library'), nodes, topics: ['scraper', 'library', 'jobs'] };
 });
 
 async function raPage() {
@@ -1479,7 +1489,7 @@ async function raPage() {
 async function hotkeysPage() {
   const emu = await get('emu_settings', {}, true);
   return {
-    title: C(772, 'Game Hotkeys'), back: 'gaming', topics: ['emu_settings'],
+    title: C(772, 'Game Hotkeys'), back: 'controllers', topics: ['emu_settings'],
     nodes: [h('div', { class: 'notice', text: C(773, 'Hold Hotkey and press a button') }), group(HOTKEYS.map(([k, i, f]) => row({ key: k, title: C(i, f), value: controlName(emu['hotkey_' + k]), chevron: true,
       on: async () => {
         const v = await choose(C(i, f), CONTROLS.map((c) => ({ value: c[0], label: C(c[1], c[2]) })), emu['hotkey_' + k]);
@@ -1507,8 +1517,8 @@ async function overlayPage() {
 
 page('display', 'settings', () => C(7, 'Display & Audio'), async () => {
   const [d, a] = await Promise.all([get('display'), get('audio')]);
-  const outputs = { auto: C(122, 'Automatic'), analog: C(332, 'Analog Audio'), bluetooth: C(331, 'Bluetooth Audio'), hdmi: 'HDMI' };
-  const sel = { speaker: C(240, 'Speaker'), headphones: C(330, 'Headphones'), bluetooth: C(331, 'Bluetooth Audio'), hdmi: 'HDMI' };
+  const outputs = { auto: C(122, 'Automatic'), analog: C(332, 'Analog Audio'), bluetooth: C(331, 'Bluetooth Audio'), usb: C(1476, 'USB Audio'), hdmi: 'HDMI' };
+  const sel = { speaker: C(240, 'Speaker'), headphones: C(330, 'Headphones'), bluetooth: C(331, 'Bluetooth Audio'), usb: C(1476, 'USB Audio'), hdmi: 'HDMI' };
   const vol = a['volume.' + a.selected];
   const nodes = [section(C(728, 'DISPLAY'), 'device'), group(
     d.hdmi ? row({ key: 'bri', title: C(127, 'Brightness'), value: C(132, 'Internal display inactive'), disabled: true })
@@ -1519,6 +1529,7 @@ page('display', 'settings', () => C(7, 'Display & Audio'), async () => {
     row({ key: 'out', title: C(133, 'Audio Output'), value: (a.mode === 'auto' ? C(122, 'Automatic') + ' • ' : '') + (sel[a.selected] || a.selected), chevron: true, on: () => {
       const opts = [{ value: 'auto', label: outputs.auto }];
       if (a['available.bluetooth'] === '1') opts.push({ value: 'bluetooth', label: outputs.bluetooth });
+      if (a['available.usb'] === '1') opts.push({ value: 'usb', label: outputs.usb });
       opts.push({ value: 'analog', label: outputs.analog });
       if (a['available.hdmi'] === '1') opts.push({ value: 'hdmi', label: outputs.hdmi });
       return pickAndAct(C(133, 'Audio Output'), opts, a.mode, 'audio.output');
@@ -1595,11 +1606,11 @@ page('system', 'settings', () => C(8, 'System'), async (path) => {
   const [s, rec] = await Promise.all([get('system'), get('recovery').catch(() => ({}))]);
   const nodes = [section(C(732, 'STORAGE & SOFTWARE'), 'device'), group(
     row({ key: 'storage', title: C(19, 'Storage'), value: ['ready', 'readonly'].includes(s['storage.sd2.state']) ? C(912, 'SD1') + ' • ' + C(64, 'SD2') : C(912, 'SD1'), chevron: true, on: () => go('system/storage') }),
+    row({ key: 'backup', title: C(982, 'Backup'), chevron: true, on: () => go('system/backup') }),
     row({ key: 'update', title: C(651, 'Software Update'), value: 'nuubOS ' + (s['nuubos.version'] || ''), chevron: true, on: () => go('system/update') }),
     row({ key: 'info', title: C(20, 'System Information'), chevron: true, on: () => go('system/info') })),
   section(C(733, 'TROUBLESHOOTING'), 'device'), group(
     row({ key: 'diag', title: C(498, 'Diagnostics'), chevron: true, on: () => go('system/diagnostics') }),
-    row({ key: 'backup', title: C(982, 'Backup'), chevron: true, on: () => go('system/backup') }),
     row({ key: 'rec', title: C(499, 'Recovery'), value: rec['safe-mode'] === '1' ? C(518, 'Safe Mode') : '', chevron: true, on: () => go('system/recovery') }))];
   return { title: C(8, 'System'), nodes, topics: ['system'] };
 });

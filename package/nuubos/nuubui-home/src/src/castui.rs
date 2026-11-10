@@ -50,8 +50,7 @@ fn apply(ui: &HomeWindow, s: Option<Snapshot>) {
     let Some(s) = s else {
         if ui.get_cast_available() {
             /* The focus leaves the rows that disappear. */
-            let last = ui.get_da_cast_start() - 1;
-            ui.set_display_audio_index(ui.get_display_audio_index().min(last));
+            ui.set_connectivity_selected_index(ui.get_connectivity_selected_index().min(5));
         }
         ui.set_cast_available(false);
         return;

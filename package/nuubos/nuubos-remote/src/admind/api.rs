@@ -59,7 +59,7 @@ fn settings_key(s: &str) -> Result<String, String> {
     if s.strip_prefix("remap_").is_some_and(|c| CONTROLS.contains(&c)) {
         return Ok(s.to_owned());
     }
-    one_of(s, &["core", "aspect", "filter", "accuracy", "pak", "resolution", "frameskip", "remap"])
+    one_of(s, &["core", "aspect", "scaling", "filter", "accuracy", "pak", "resolution", "frameskip", "remap"])
 }
 
 fn flag(s: &str) -> Result<&'static str, String> {
@@ -355,7 +355,7 @@ pub fn action(b: &Value) -> R {
         "display.temperature" => { tool_ok("nuubos-displayctl", &["temperature", &int(&a("v"), 3500, 7500)?.to_string()])?; done("display") }
 
         /* Audio (nuubos-audiod). */
-        "audio.output" => { call0("Audio", "SetOutput", &(one_of(&a("v"), &["auto", "analog", "bluetooth", "hdmi"])?.as_str(),))?; ok() }
+        "audio.output" => { call0("Audio", "SetOutput", &(one_of(&a("v"), &["auto", "analog", "bluetooth", "usb", "hdmi"])?.as_str(),))?; ok() }
         "audio.volume" => { call0("Audio", "SetVolume", &(int(&a("v"), 0, 100)? as i32,))?; ok() }
         "audio.system" => { sock_ok("audiod", &format!("SYSTEM VOLUME SET {}", int(&a("v"), 0, 100)?))?; done("audio") }
         "audio.apps" => { sock_ok("audiod", &format!("APPLICATIONS VOLUME SET {}", int(&a("v"), 0, 100)?))?; done("audio") }

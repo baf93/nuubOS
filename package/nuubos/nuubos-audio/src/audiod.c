@@ -27,11 +27,17 @@
 #include <nuubos/notify.h>
 #include <pipewire/pipewire.h>
 
+#include "audio-policy.h"
+
 #define SOCKET_PATH "/run/nuubos/audiod.sock"
 /* Socket clients that sent SUBSCRIBE (Quick Menu volume OSD). */
 #define MAX_SUBSCRIBERS 4
+#ifndef CONFIG_PATH
 #define CONFIG_PATH "/state/config/nuubos.conf"
+#endif
+#ifndef CONFIG_TMP
 #define CONFIG_TMP  "/state/config/.nuubos.conf.audio.tmp"
+#endif
 #define INPUT_DIR   "/dev/input"
 #define DRM_CLASS_DIR "/sys/class/drm"
 #define TEST_SOUND_PATH "/usr/share/nuubos/audio/nuubos-test-jingle.wav"
@@ -40,9 +46,13 @@
 #define DEFAULT_HOME_MUSIC_DIR "/usr/share/nuubos/home-music"
 #define WAV_PLAYER "/usr/bin/nuubos-audio-wav-player"
 #define MP3_PLAYER "/usr/bin/nuubos-audio-mp3-player"
+#ifndef PW_ROUTE_HELPER
 #define PW_ROUTE_HELPER "/usr/bin/nuubos-pw-route"
+#endif
 #define PW_APP_VOLUME_HELPER "/usr/bin/nuubos-pw-app-volume"
+#ifndef WPCTL_PATH
 #define WPCTL_PATH "/usr/bin/wpctl"
+#endif
 #define PIPEWIRE_RUNTIME "/run/nuubos/pipewire"
 #define VOLUME_PERSIST_DEBOUNCE_MS 400ULL
 
@@ -54,6 +64,7 @@
 #define DEFAULT_VOLUME_SPEAKER 70
 #define DEFAULT_VOLUME_HEADPHONES 50
 #define DEFAULT_VOLUME_BLUETOOTH 50
+#define DEFAULT_VOLUME_USB 50
 #define DEFAULT_VOLUME_SYSTEM 60
 #define DEFAULT_VOLUME_HOME_MUSIC 60
 #define DEFAULT_VOLUME_APPLICATIONS 100
@@ -90,6 +101,7 @@ struct audio_state {
 	int volume_speaker;
 	int volume_headphones;
 	int volume_bluetooth;
+	int volume_usb;
 	int volume_system;
 	int volume_home_music;
 	int volume_applications;
@@ -99,6 +111,7 @@ struct audio_state {
 	int unmute_speaker;
 	int unmute_headphones;
 	int unmute_bluetooth;
+	int unmute_usb;
 	int unmute_applications;
 	int unmute_music;
 	bool navigation_sounds_enabled;
@@ -148,6 +161,8 @@ struct audio_state {
 	bool hdmi_available;
 
 	bool bluetooth_available;
+	bool usb_available;
+	bool usb_microphone_available;
 
 	/* A screen cast with sound runs (nuubos-castd's session owns the
 	 * PipeWire sink "nuubos_cast"): it takes the sound over every other
@@ -209,6 +224,21 @@ static const char audio_introspection_xml[] =
 	"<arg name='home_music_volume' type='i' direction='out'/>"
 	"<arg name='home_music_playing' type='b' direction='out'/>"
 	"</method>"
+	"<method name='GetSnapshot2'>"
+	"<arg name='mode' type='s' direction='out'/>"
+	"<arg name='selected' type='s' direction='out'/>"
+	"<arg name='volume' type='i' direction='out'/>"
+	"<arg name='volume_supported' type='b' direction='out'/>"
+	"<arg name='bluetooth_available' type='b' direction='out'/>"
+	"<arg name='headphones_available' type='b' direction='out'/>"
+	"<arg name='hdmi_available' type='b' direction='out'/>"
+	"<arg name='speaker_available' type='b' direction='out'/>"
+	"<arg name='system_volume' type='i' direction='out'/>"
+	"<arg name='home_music_volume' type='i' direction='out'/>"
+	"<arg name='home_music_playing' type='b' direction='out'/>"
+	"<arg name='usb_available' type='b' direction='out'/>"
+	"<arg name='usb_microphone_available' type='b' direction='out'/>"
+	"</method>"
 	"<method name='SetOutput'>"
 	"<arg name='output' type='s' direction='in'/>"
 	"</method>"
@@ -233,6 +263,21 @@ static const char audio_introspection_xml[] =
 	"<arg name='system_volume' type='i'/>"
 	"<arg name='home_music_volume' type='i'/>"
 	"<arg name='home_music_playing' type='b'/>"
+	"</signal>"
+	"<signal name='StateChanged2'>"
+	"<arg name='mode' type='s'/>"
+	"<arg name='selected' type='s'/>"
+	"<arg name='volume' type='i'/>"
+	"<arg name='volume_supported' type='b'/>"
+	"<arg name='bluetooth_available' type='b'/>"
+	"<arg name='headphones_available' type='b'/>"
+	"<arg name='hdmi_available' type='b'/>"
+	"<arg name='speaker_available' type='b'/>"
+	"<arg name='system_volume' type='i'/>"
+	"<arg name='home_music_volume' type='i'/>"
+	"<arg name='home_music_playing' type='b'/>"
+	"<arg name='usb_available' type='b'/>"
+	"<arg name='usb_microphone_available' type='b'/>"
 	"</signal>"
 	"</interface>"
 	"<interface name='org.freedesktop.DBus.Introspectable'>"
@@ -296,6 +341,7 @@ static bool valid_output(const char *output)
 {
 	return strcmp(output, "auto") == 0 ||
 	       strcmp(output, "bluetooth") == 0 ||
+	       strcmp(output, "usb") == 0 ||
 	       strcmp(output, "analog") == 0 ||
 	       strcmp(output, "headphones") == 0 ||
 	       strcmp(output, "hdmi") == 0 ||
@@ -306,7 +352,8 @@ static bool volume_supported(const char *output)
 {
 	return strcmp(output, "speaker") == 0 ||
 	       strcmp(output, "headphones") == 0 ||
-	       strcmp(output, "bluetooth") == 0;
+	       strcmp(output, "bluetooth") == 0 ||
+	       strcmp(output, "usb") == 0;
 }
 
 static void lowercase(char *s)
@@ -429,7 +476,8 @@ static int apply_pipewire_volume(const struct audio_state *state, int volume)
 
 	if (strcmp(selected, "speaker") != 0 &&
 	    strcmp(selected, "headphones") != 0 &&
-	    strcmp(selected, "bluetooth") != 0)
+	    strcmp(selected, "bluetooth") != 0 &&
+	    strcmp(selected, "usb") != 0)
 		return 0;
 
 	if (access(WPCTL_PATH, X_OK) != 0)
@@ -587,6 +635,8 @@ static int apply_selected_master_volume(const struct audio_state *state)
 		volume = state->volume_headphones;
 	else if (strcmp(state->selected, "bluetooth") == 0)
 		volume = state->volume_bluetooth;
+	else if (strcmp(state->selected, "usb") == 0)
+		volume = state->volume_usb;
 	else
 		return 0;
 
@@ -669,51 +719,16 @@ static int apply_pipewire_default(const char *selected,
 	return -1;
 }
 
-static const char *fallback_route(const struct audio_state *state)
-{
-	if (state->headphones_known && state->headphones_available)
-		return "headphones";
-
-	if (state->hdmi_known && state->hdmi_available)
-		return "hdmi";
-
-	return "speaker";
-}
-
 static void reconcile_selection(struct audio_state *state)
 {
-	const char *selected;
-
-	if (state->cast_available) {
-		selected = "cast";
-	} else if (strcmp(state->mode, "analog") == 0) {
-		/* Speaker vs headphones is a physical jack route. "analog"
-		 * deliberately follows that hardware state. */
-		selected = (state->headphones_known &&
-			    state->headphones_available)
-			? "headphones" : "speaker";
-	} else if (strcmp(state->mode, "auto") == 0) {
-		if (state->bluetooth_available)
-			selected = "bluetooth";
-		else
-			selected = fallback_route(state);
-	} else if (strcmp(state->mode, "bluetooth") == 0) {
-		/* Keep the requested mode persisted, but never expose a dead
-		 * selected route. Bluetooth resumes automatically on reconnect. */
-		selected = state->bluetooth_available
-			? "bluetooth" : fallback_route(state);
-	} else if (strcmp(state->mode, "hdmi") == 0) {
-		selected = (state->hdmi_known && state->hdmi_available)
-			? "hdmi" : fallback_route(state);
-	} else if (strcmp(state->mode, "headphones") == 0) {
-		selected = (state->headphones_known &&
-			    state->headphones_available)
-			? "headphones" : "speaker";
-	} else if (strcmp(state->mode, "speaker") == 0) {
-		selected = "speaker";
-	} else {
-		selected = fallback_route(state);
-	}
+	const struct audio_outputs outputs = {
+		.cast = state->cast_available,
+		.bluetooth = state->bluetooth_available,
+		.usb = state->usb_available,
+		.headphones = state->headphones_known && state->headphones_available,
+		.hdmi = state->hdmi_known && state->hdmi_available,
+	};
+	const char *selected = audio_select_output(state->mode, &outputs);
 
 	(void)copy_string(state->selected,
 			  sizeof(state->selected),
@@ -791,12 +806,14 @@ static void load_config(struct audio_state *state)
 	state->volume_speaker = DEFAULT_VOLUME_SPEAKER;
 	state->volume_headphones = DEFAULT_VOLUME_HEADPHONES;
 	state->volume_bluetooth = DEFAULT_VOLUME_BLUETOOTH;
+	state->volume_usb = DEFAULT_VOLUME_USB;
 	state->volume_system = DEFAULT_VOLUME_SYSTEM;
 	state->volume_home_music = DEFAULT_VOLUME_HOME_MUSIC;
 	state->volume_applications = DEFAULT_VOLUME_APPLICATIONS;
 	state->unmute_speaker = 0;
 	state->unmute_headphones = 0;
 	state->unmute_bluetooth = 0;
+	state->unmute_usb = 0;
 	state->unmute_applications = 0;
 	state->unmute_music = 0;
 	state->navigation_sounds_enabled = DEFAULT_NAVIGATION_SOUNDS;
@@ -826,6 +843,8 @@ static void load_config(struct audio_state *state)
 	state->hdmi_available = false;
 
 	state->bluetooth_available = false;
+	state->usb_available = false;
+	state->usb_microphone_available = false;
 	state->volume_config_dirty = false;
 	state->volume_config_due.tv_sec = 0;
 	state->volume_config_due.tv_nsec = 0;
@@ -866,6 +885,10 @@ static void load_config(struct audio_state *state)
 			int v = parse_volume(line + 23);
 			if (v >= 0)
 				state->volume_bluetooth = v;
+		} else if (strncmp(line, "AUDIO_VOLUME_USB=", 17) == 0) {
+			int v = parse_volume(line + 17);
+			if (v >= 0)
+				state->volume_usb = v;
 		} else if (strncmp(line, "AUDIO_VOLUME_SYSTEM=", 20) == 0) {
 			int v = parse_volume(line + 20);
 			if (v >= 0)
@@ -1080,6 +1103,10 @@ static int flush_volume_config(struct audio_state *state)
 	if (update_config("AUDIO_VOLUME_BLUETOOTH", value) != 0)
 		return -1;
 
+	snprintf(value, sizeof(value), "%d", state->volume_usb);
+	if (update_config("AUDIO_VOLUME_USB", value) != 0)
+		return -1;
+
 	state->volume_config_dirty = false;
 	return 0;
 }
@@ -1113,6 +1140,8 @@ static int get_volume(const struct audio_state *state, const char *output)
 		return state->volume_headphones;
 	if (strcmp(output, "bluetooth") == 0)
 		return state->volume_bluetooth;
+	if (strcmp(output, "usb") == 0)
+		return state->volume_usb;
 
 	return -1;
 }
@@ -1126,6 +1155,8 @@ static void set_volume_memory(struct audio_state *state,
 		state->volume_headphones = volume;
 	else if (strcmp(output, "bluetooth") == 0)
 		state->volume_bluetooth = volume;
+	else if (strcmp(output, "usb") == 0)
+		state->volume_usb = volume;
 }
 
 static const char *volume_key(const char *output)
@@ -1136,6 +1167,8 @@ static const char *volume_key(const char *output)
 		return "AUDIO_VOLUME_HEADPHONES";
 	if (strcmp(output, "bluetooth") == 0)
 		return "AUDIO_VOLUME_BLUETOOTH";
+	if (strcmp(output, "usb") == 0)
+		return "AUDIO_VOLUME_USB";
 
 	return NULL;
 }
@@ -1228,6 +1261,8 @@ static int toggle_selected_mute(struct audio_state *state,
 		restore = &state->unmute_speaker;
 	else if (strcmp(state->selected, "headphones") == 0)
 		restore = &state->unmute_headphones;
+	else if (strcmp(state->selected, "usb") == 0)
+		restore = &state->unmute_usb;
 	else
 		restore = &state->unmute_bluetooth;
 
@@ -1238,6 +1273,7 @@ static int toggle_selected_mute(struct audio_state *state,
 	target = *restore > 0 ? *restore
 	       : strcmp(state->selected, "speaker") == 0 ? DEFAULT_VOLUME_SPEAKER
 	       : strcmp(state->selected, "headphones") == 0 ? DEFAULT_VOLUME_HEADPHONES
+	       : strcmp(state->selected, "usb") == 0 ? DEFAULT_VOLUME_USB
 	       : DEFAULT_VOLUME_BLUETOOTH;
 	*restore = 0;
 	return persist_selected_volume(state, conn, target);
@@ -1271,7 +1307,7 @@ static int persist_output_mode(struct audio_state *state,
 }
 
 static void append_state_args(DBusMessage *message,
-			      const struct audio_state *state)
+			      const struct audio_state *state, bool include_usb)
 {
 	const char *mode = state->mode;
 	const char *selected = state->selected;
@@ -1299,6 +1335,13 @@ static void append_state_args(DBusMessage *message,
 				 DBUS_TYPE_INT32, &home_music_volume,
 				 DBUS_TYPE_BOOLEAN, &home_music_playing,
 				 DBUS_TYPE_INVALID);
+	if (include_usb) {
+		dbus_bool_t usb = state->usb_available;
+		dbus_bool_t microphone = state->usb_microphone_available;
+		dbus_message_append_args(message,
+			DBUS_TYPE_BOOLEAN, &usb,
+			DBUS_TYPE_BOOLEAN, &microphone, DBUS_TYPE_INVALID);
+	}
 }
 
 static void emit_state_changed(DBusConnection *conn,
@@ -1309,16 +1352,16 @@ static void emit_state_changed(DBusConnection *conn,
 	if (!conn)
 		return;
 
-	signal = dbus_message_new_signal(AUDIO_OBJECT_PATH,
-					 AUDIO_INTERFACE,
-					 "StateChanged");
-	if (!signal)
-		return;
-
-	append_state_args(signal, state);
-	dbus_connection_send(conn, signal, NULL);
+	for (int version = 1; version <= 2; version++) {
+		signal = dbus_message_new_signal(AUDIO_OBJECT_PATH, AUDIO_INTERFACE,
+			version == 1 ? "StateChanged" : "StateChanged2");
+		if (!signal)
+			continue;
+		append_state_args(signal, state, version == 2);
+		dbus_connection_send(conn, signal, NULL);
+		dbus_message_unref(signal);
+	}
 	dbus_connection_flush(conn);
-	dbus_message_unref(signal);
 }
 
 static void send_dbus_reply(DBusConnection *conn, DBusMessage *reply)
@@ -1357,10 +1400,12 @@ static bool handle_audio_method(DBusConnection *conn,
 
 	if (dbus_message_is_method_call(message,
 					AUDIO_INTERFACE,
-					"GetSnapshot")) {
+					"GetSnapshot") ||
+	    dbus_message_is_method_call(message, AUDIO_INTERFACE, "GetSnapshot2")) {
 		DBusMessage *reply = dbus_message_new_method_return(message);
 		if (reply)
-			append_state_args(reply, state);
+			append_state_args(reply, state,
+				dbus_message_is_method_call(message, AUDIO_INTERFACE, "GetSnapshot2"));
 		send_dbus_reply(conn, reply);
 		return true;
 	}
@@ -1518,6 +1563,8 @@ static void status_reply(const struct audio_state *state,
 		 "mode=%s\n"
 		 "selected=%s\n"
 		 "available.bluetooth=%d\n"
+		 "available.usb=%d\n"
+		 "capture.available.usb=%d\n"
 		 "available.headphones=%s\n"
 		 "available.hdmi=%s\n"
 		 "available.cast=%d\n"
@@ -1525,6 +1572,7 @@ static void status_reply(const struct audio_state *state,
 		 "volume.speaker=%d\n"
 		 "volume.headphones=%d\n"
 		 "volume.bluetooth=%d\n"
+		 "volume.usb=%d\n"
 		 "volume.hdmi=unsupported\n"
 		 "volume.system=%d\n"
 		 "volume.applications=%d\n"
@@ -1538,12 +1586,15 @@ static void status_reply(const struct audio_state *state,
 		 state->mode,
 		 state->selected,
 		 state->bluetooth_available ? 1 : 0,
+		 state->usb_available ? 1 : 0,
+		 state->usb_microphone_available ? 1 : 0,
 		 headphones,
 		 hdmi,
 		 state->cast_available ? 1 : 0,
 		 state->volume_speaker,
 		 state->volume_headphones,
 		 state->volume_bluetooth,
+		 state->volume_usb,
 		 state->volume_system,
 		 state->volume_applications,
 		 state->navigation_sounds_enabled ? 1 : 0,
@@ -1591,6 +1642,11 @@ static void route_reply(const struct audio_state *state,
 
 		snprintf(reply, reply_size,
 			 "default\n");
+		return;
+	}
+
+	if (strcmp(state->selected, "usb") == 0) {
+		snprintf(reply, reply_size, state->usb_available ? "default\n" : "unavailable\n");
 		return;
 	}
 
@@ -2312,6 +2368,8 @@ static int reset_audio_defaults(struct audio_state *state,
 				     DEFAULT_VOLUME_SPEAKER :
 			     strcmp(state->selected, "headphones") == 0 ?
 				     DEFAULT_VOLUME_HEADPHONES :
+			     strcmp(state->selected, "usb") == 0 ?
+				     DEFAULT_VOLUME_USB :
 				     DEFAULT_VOLUME_BLUETOOTH;
 
 		if (persist_selected_volume(state, conn, volume) != 0)
@@ -2320,6 +2378,7 @@ static int reset_audio_defaults(struct audio_state *state,
 	state->volume_speaker = DEFAULT_VOLUME_SPEAKER;
 	state->volume_headphones = DEFAULT_VOLUME_HEADPHONES;
 	state->volume_bluetooth = DEFAULT_VOLUME_BLUETOOTH;
+	state->volume_usb = DEFAULT_VOLUME_USB;
 	state->volume_config_dirty = true;
 	if (flush_volume_config(state) != 0)
 		rc = -1;
@@ -2811,10 +2870,12 @@ static void handle_command(struct audio_state *state,
 			 "speaker=%d\n"
 			 "headphones=%d\n"
 			 "bluetooth=%d\n"
+			 "usb=%d\n"
 			 "hdmi=unsupported\n",
 			 state->volume_speaker,
 			 state->volume_headphones,
-			 state->volume_bluetooth);
+			 state->volume_bluetooth,
+			 state->volume_usb);
 		return;
 	}
 
@@ -3250,7 +3311,15 @@ static bool dbus_message_is_bluetooth_event(DBusMessage *message)
 
 /* PipeWire registry watch: BlueZ reports a device connected before
  * WirePlumber creates its sink, so the route apply at connect time can find
- * no sink. A new Audio/Sink global is the event that makes it applicable. */
+ * no sink. A new Audio/Sink global is the event that makes it applicable.
+ * USB playback/capture availability and sink removal use the same watch. */
+struct watched_audio_node {
+	struct watched_audio_node *next;
+	uint32_t id;
+	bool usb_sink;
+	bool usb_source;
+};
+
 struct sink_watch {
 	struct pw_loop *loop;
 	struct pw_context *context;
@@ -3258,7 +3327,10 @@ struct sink_watch {
 	struct pw_registry *registry;
 	struct spa_hook core_listener;
 	struct spa_hook registry_listener;
-	bool sink_added;
+	bool sinks_changed;
+	bool usb_changed;
+	struct watched_audio_node *nodes;
+	struct audio_state *state;
 	bool broken;
 	/* Registry id of the "nuubos_cast" sink, 0 = none. */
 	uint32_t cast_id;
@@ -3276,10 +3348,27 @@ static void sink_watch_global(void *data, uint32_t id, uint32_t permissions,
 	if (props == NULL || strcmp(type, PW_TYPE_INTERFACE_Node) != 0)
 		return;
 	media_class = spa_dict_lookup(props, PW_KEY_MEDIA_CLASS);
-	if (media_class != NULL && strcmp(media_class, "Audio/Sink") == 0) {
-		const char *name = spa_dict_lookup(props, PW_KEY_NODE_NAME);
+	const char *name = spa_dict_lookup(props, PW_KEY_NODE_NAME);
+	bool sink = media_class != NULL && strcmp(media_class, "Audio/Sink") == 0;
+	bool source = media_class != NULL && strcmp(media_class, "Audio/Source") == 0;
+	bool usb_sink = sink && name != NULL && strncmp(name, "alsa_output.usb-", 16) == 0;
+	bool usb_source = source && name != NULL && strncmp(name, "alsa_input.usb-", 15) == 0;
 
-		watch->sink_added = true;
+	if (!sink && !usb_source)
+		return;
+	struct watched_audio_node *node = calloc(1, sizeof(*node));
+	if (node == NULL) {
+		watch->broken = true;
+		return;
+	}
+	node->id = id;
+	node->usb_sink = usb_sink;
+	node->usb_source = usb_source;
+	node->next = watch->nodes;
+	watch->nodes = node;
+	watch->usb_changed |= usb_sink || usb_source;
+	if (sink) {
+		watch->sinks_changed = true;
 		if (name != NULL && strcmp(name, "nuubos_cast") == 0) {
 			watch->cast_id = id;
 			watch->cast_changed = true;
@@ -3290,10 +3379,46 @@ static void sink_watch_global(void *data, uint32_t id, uint32_t permissions,
 static void sink_watch_global_remove(void *data, uint32_t id)
 {
 	struct sink_watch *watch = data;
+	struct watched_audio_node **link = &watch->nodes;
 
+	while (*link != NULL) {
+		struct watched_audio_node *node = *link;
+		if (node->id != id) {
+			link = &node->next;
+			continue;
+		}
+		watch->usb_changed |= node->usb_sink || node->usb_source;
+		/* A replacement USB device may keep the same logical route. Its
+		 * sink id and master volume still need applying, even when another
+		 * USB sink was already present. */
+		if (watch->state->sink_id[0] != '\0' &&
+		    strtoul(watch->state->sink_id, NULL, 10) == id) {
+			watch->state->applied_route[0] = '\0';
+			watch->state->sink_id[0] = '\0';
+			watch->sinks_changed = true;
+		}
+		*link = node->next;
+		free(node);
+		break;
+	}
 	if (watch->cast_id != 0 && id == watch->cast_id) {
 		watch->cast_id = 0;
 		watch->cast_changed = true;
+	}
+}
+
+/* Derive availability from all current nodes, so unplugging one of two USB
+ * devices does not hide the remaining one. Capture-only microphones never
+ * become playback outputs. */
+static void sink_watch_usb_availability(const struct sink_watch *watch,
+					struct audio_state *state)
+{
+	state->usb_available = false;
+	state->usb_microphone_available = false;
+	for (const struct watched_audio_node *node = watch->nodes;
+	     node != NULL; node = node->next) {
+		state->usb_available |= node->usb_sink;
+		state->usb_microphone_available |= node->usb_source;
 	}
 }
 
@@ -3323,6 +3448,11 @@ static const struct pw_core_events sink_watch_core_events = {
 
 static void sink_watch_close(struct sink_watch *watch)
 {
+	while (watch->nodes != NULL) {
+		struct watched_audio_node *node = watch->nodes;
+		watch->nodes = node->next;
+		free(node);
+	}
 	if (watch->registry != NULL) {
 		spa_hook_remove(&watch->registry_listener);
 		pw_proxy_destroy((struct pw_proxy *)watch->registry);
@@ -3346,9 +3476,10 @@ static void sink_watch_close(struct sink_watch *watch)
 
 /* Returns the fd to poll, or -1 when PipeWire is unavailable (route
  * applies then only happen on audiod's own events, as before). */
-static int sink_watch_open(struct sink_watch *watch)
+static int sink_watch_open(struct sink_watch *watch, struct audio_state *state)
 {
 	memset(watch, 0, sizeof(*watch));
+	watch->state = state;
 	pw_init(NULL, NULL);
 	(void)setenv("PIPEWIRE_RUNTIME_DIR", PIPEWIRE_RUNTIME, 1);
 
@@ -3375,6 +3506,38 @@ static int sink_watch_open(struct sink_watch *watch)
 	pw_registry_add_listener(watch->registry, &watch->registry_listener,
 				 &sink_watch_registry_events, watch);
 	return pw_loop_get_fd(watch->loop);
+}
+
+/* Called once after each registry batch. Capture changes publish state without
+ * rewriting an unchanged playback sink's volume. */
+static void sink_watch_reconcile(struct sink_watch *watch, DBusConnection *dbus_conn)
+{
+	struct audio_state *state = watch->state;
+	bool availability_changed = watch->cast_changed || watch->usb_changed;
+	if (availability_changed || watch->sinks_changed || watch->broken) {
+		bool needs_apply = strcmp(state->applied_route, state->selected) != 0;
+		state->cast_available = watch->cast_id != 0;
+		sink_watch_usb_availability(watch, state);
+		if (watch->broken) {
+			sink_watch_close(watch);
+			state->cast_available = false;
+			state->usb_available = false;
+			state->usb_microphone_available = false;
+			state->applied_route[0] = '\0';
+		}
+		if (availability_changed || needs_apply || watch->broken) {
+			char previous[sizeof(state->applied_route)];
+			(void)copy_string(previous, sizeof(previous), state->applied_route);
+			reconcile_selection(state);
+			if (strcmp(state->applied_route, state->selected) == 0 &&
+			    strcmp(previous, state->applied_route) != 0)
+				reroute_owned_streams(state);
+			emit_state_changed(dbus_conn, state);
+		}
+		watch->cast_changed = false;
+		watch->usb_changed = false;
+		watch->sinks_changed = false;
+	}
 }
 
 static void drop_subscriber(struct audio_state *state, size_t index)
@@ -3567,7 +3730,7 @@ static int create_socket(void)
 
 int main(int argc, char **argv)
 {
-	struct audio_state state;
+	struct audio_state state = {0};
 	DBusConnection *dbus_conn;
 	int dbus_fd = -1;
 	struct sink_watch sink_watch;
@@ -3617,7 +3780,7 @@ int main(int argc, char **argv)
 	drm_uevent_fd = open_drm_uevent_socket(&state);
 
 	dbus_conn = open_system_bus(&state);
-	pw_fd = sink_watch_open(&sink_watch);
+	pw_fd = sink_watch_open(&sink_watch, &state);
 	if (dbus_conn != NULL &&
 	    !dbus_connection_get_unix_fd(dbus_conn, &dbus_fd))
 		dbus_fd = -1;
@@ -3819,33 +3982,9 @@ int main(int argc, char **argv)
 
 		if (pw_index >= 0 && fds[pw_index].revents != 0) {
 			(void)pw_loop_iterate(sink_watch.loop, 0);
-			if (sink_watch.cast_changed) {
-				/* Casting with sound started or ended: the
-				 * route follows at once (the cast sink is new,
-				 * or gone and the previous output returns). */
-				sink_watch.cast_changed = false;
-				sink_watch.sink_added = false;
-				state.cast_available = sink_watch.cast_id != 0;
-				reconcile_selection(&state);
-				if (strcmp(state.applied_route, state.selected) == 0)
-					reroute_owned_streams(&state);
-				emit_state_changed(dbus_conn, &state);
-			}
-			if (sink_watch.sink_added) {
-				sink_watch.sink_added = false;
-				if (strcmp(state.applied_route, state.selected) != 0) {
-					reconcile_selection(&state);
-					if (strcmp(state.applied_route,
-						   state.selected) == 0) {
-						reroute_owned_streams(&state);
-						emit_state_changed(dbus_conn, &state);
-					}
-				}
-			}
-			if (sink_watch.broken) {
-				sink_watch_close(&sink_watch);
+			sink_watch_reconcile(&sink_watch, dbus_conn);
+			if (sink_watch.broken)
 				pw_fd = -1;
-			}
 		}
 
 		if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL))

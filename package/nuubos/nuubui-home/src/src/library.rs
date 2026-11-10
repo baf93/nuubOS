@@ -1941,6 +1941,10 @@ pub fn handle_home_action(ui: &HomeWindow, action: &str) {
                     play_ui_sound("menu_confirm");
                     open_manage_sheet(ui, &card);
                 }
+                Some(card) if card.kind == KIND_SYSTEM => {
+                    play_ui_sound("menu_confirm");
+                    crate::gameui::open_system_from_home(ui, card.key.as_str(), card.title.as_str());
+                }
                 _ => {}
             }
             return;

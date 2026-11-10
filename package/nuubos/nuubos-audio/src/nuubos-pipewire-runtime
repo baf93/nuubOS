@@ -43,7 +43,7 @@ start_runtime()
     # on when it starts, with the codec settled (no power-up pop). A later
     # runtime restart leaves the pin to audiod.
     if ! pidof nuubos-audiod >/dev/null 2>&1; then
-        amixer -q -c 0 cset name='Speaker Switch' off >/dev/null 2>&1 || true
+        amixer -q -c Codec cset name='Speaker Switch' off >/dev/null 2>&1 || true
     fi
 
     start_daemon "$PW_PID" "$PW_LOG" \
