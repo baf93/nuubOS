@@ -1,0 +1,56 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] output: round the effective resolution instead of truncating
+
+wlr_output_effective_resolution() divided width/height by output->scale
+with a plain int /= double, which truncates toward zero. On panels whose
+scale does not evenly divide their physical size (nuubOS gives every
+720-wide built-in panel a 1.125 density scale, sized for the square
+720x720 CubeXX: 480 / 1.125 = 426.666..., not 427 on the 720x480
+RG34XX/RG SP family), every consumer of this truncated value
+(labwc's output->usable_area, used for fullscreen/maximized view and
+layer-shell geometry) disagreed with the panel's native resolution.
+wlr_scene's scale_box() then rounds that logical height back up when
+compositing a surface through it (round(426 * 1.125) = 479), one row
+short of the panel's real 480: whichever surface goes through this path
+(a game's fullscreen view, cropped/viewported for direct scan-out)
+committed a scanout plane one line short of the ones that don't
+(labwc's own composited output buffer, sized straight to the native
+mode, no detour through this function), leaving the last line showing
+a stale previous frame -- a thin, flickering line at the bottom
+whenever the two disagreed (nuubOS report 2026-11-11, RG34XX/RG SP,
+both 720x480; the square 720x720 CubeXX is unaffected since
+720 / 1.125 = 640 exactly).
+
+Round to the nearest integer instead: 480 / 1.125 rounds to 427, and
+427 * 1.125 rounds back up to 480 in scale_box() too, so every consumer
+agrees on the panel's real resolution again.
+
+Signed-off-by: nuubOS
+---
+--- a/types/output/output.c
++++ b/types/output/output.c
+@@ -1,5 +1,6 @@
+ #include <assert.h>
+ #include <drm_fourcc.h>
++#include <math.h>
+ #include <stdlib.h>
+ #include <wlr/backend.h>
+ #include <wlr/interfaces/wlr_output.h>
+@@ -467,8 +468,15 @@ void wlr_output_transformed_resolution(struct wlr_output *output,
+ void wlr_output_effective_resolution(struct wlr_output *output,
+ 		int *width, int *height) {
+ 	wlr_output_transformed_resolution(output, width, height);
+-	*width /= output->scale;
+-	*height /= output->scale;
++	/* nuubOS: round to the nearest integer instead of truncating. A
++	 * scale that does not evenly divide the panel's physical size (e.g.
++	 * 480 / 1.125 = 426.67) otherwise leaves every consumer of this
++	 * logical size (output->usable_area, layer-shell/view geometry) one
++	 * pixel short of what wlr_scene's own scale_box() rounds back up to
++	 * when compositing, producing an intermittent one-row-short scanout
++	 * commit (nuubOS report 2026-11-11, docs/dev/open-items.md). */
++	*width = (int)round(*width / output->scale);
++	*height = (int)round(*height / output->scale);
+ }
+
+ struct wlr_output_mode *wlr_output_preferred_mode(struct wlr_output *output) {
