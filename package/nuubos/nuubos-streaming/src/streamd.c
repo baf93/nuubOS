@@ -1671,6 +1671,131 @@ static bool start_steamlink_job(enum job_kind kind)
 	return spawn_steamlink_job(kind, argv, timeout) >= 0;
 }
 
+/*
+ * Steam Link bitrate default (2026-11-11, RG35XX Pro, user: "every few
+ * frames the quality drops drastically"): with Valve's Automatic bitrate
+ * the host swung between 5 and 53 Mbit/s, reacting to every short wave
+ * of lost Wi-Fi packets with a visible quality drop; a fixed limit keeps
+ * the picture steady through the same losses. Valve's settings are the
+ * protobuf CStreamingClientConfig in streaming_settings.bin, field 6
+ * desired_bitrate_kbps (int32, 0 or -1 = Automatic). Applied once per
+ * user (marker in the Steam Link home) and only over Automatic: what the
+ * user picks in Steam Link afterwards stays.
+ */
+#define STEAMLINK_DEFAULT_BITRATE_KBPS 15000
+#define STEAMLINK_SETTINGS_MAX 65536
+
+static bool pb_varint(const unsigned char *b, size_t len, size_t *pos, uint64_t *value)
+{
+	uint64_t v = 0;
+
+	for (int shift = 0; shift < 64 && *pos < len; shift += 7) {
+		unsigned char c = b[(*pos)++];
+
+		v |= (uint64_t)(c & 0x7f) << shift;
+		if (!(c & 0x80)) {
+			*value = v;
+			return true;
+		}
+	}
+	return false;
+}
+
+static size_t pb_put_varint(unsigned char *b, uint64_t v)
+{
+	size_t n = 0;
+
+	do {
+		b[n++] = (unsigned char)((v & 0x7f) | (v > 0x7f ? 0x80 : 0));
+		v >>= 7;
+	} while (v);
+	return n;
+}
+
+static void steamlink_default_settings(void)
+{
+	char home[PATH_MAX], dir[PATH_MAX], path[PATH_MAX], tmp[PATH_MAX], marker[PATH_MAX];
+	static unsigned char in[STEAMLINK_SETTINGS_MAX], out[STEAMLINK_SETTINGS_MAX + 16];
+	size_t len = 0, pos = 0, olen = 0;
+	bool automatic = true;
+	FILE *fp;
+
+	snprintf(home, sizeof(home), USERS_DIR "/%s/appdata/steamlink", user);
+	snprintf(marker, sizeof(marker), "%s/.nuubos-bitrate-default", home);
+	if (access(marker, F_OK) == 0)
+		return;
+	snprintf(dir, sizeof(dir), "%s/.local/share/Valve Corporation/SteamLink", home);
+	snprintf(path, sizeof(path), "%s/streaming_settings.bin", dir);
+	snprintf(tmp, sizeof(tmp), "%s/streaming_settings.bin.nuubos", dir);
+	if (mkdir_p(dir) != 0)
+		return;
+	fp = fopen(path, "rb");
+	if (fp) {
+		len = fread(in, 1, sizeof(in), fp);
+		bool whole = feof(fp) && !ferror(fp);
+
+		fclose(fp);
+		if (!whole)
+			return; /* larger than any known file: leave it alone */
+	}
+	/* Copy every field but desired_bitrate_kbps, then append ours. */
+	while (pos < len) {
+		size_t start = pos;
+		uint64_t key, value;
+
+		if (!pb_varint(in, len, &pos, &key))
+			return;
+		switch (key & 7) {
+		case 0:
+			if (!pb_varint(in, len, &pos, &value))
+				return;
+			if (key >> 3 == 6 && (int32_t)value > 0)
+				automatic = false;
+			break;
+		case 1:
+			pos += 8;
+			break;
+		case 2:
+			if (!pb_varint(in, len, &pos, &value) || value > len - pos)
+				return;
+			pos += value;
+			break;
+		case 5:
+			pos += 4;
+			break;
+		default:
+			return; /* not a file we understand */
+		}
+		if (pos > len)
+			return;
+		if (key >> 3 != 6) {
+			memcpy(out + olen, in + start, pos - start);
+			olen += pos - start;
+		}
+	}
+	if (automatic) {
+		olen += pb_put_varint(out + olen, 6 << 3);
+		olen += pb_put_varint(out + olen, STEAMLINK_DEFAULT_BITRATE_KBPS);
+		fp = fopen(tmp, "wb");
+		if (!fp)
+			return;
+		if (fwrite(out, 1, olen, fp) != olen || fflush(fp) != 0 || fsync(fileno(fp)) != 0) {
+			fclose(fp);
+			unlink(tmp);
+			return;
+		}
+		fclose(fp);
+		if (rename(tmp, path) != 0) {
+			unlink(tmp);
+			return;
+		}
+		log_msg("streamd: steamlink bitrate default %d kbps", STEAMLINK_DEFAULT_BITRATE_KBPS);
+	}
+	fp = fopen(marker, "w");
+	if (fp)
+		fclose(fp);
+}
+
 static const char *launch_steamlink(void)
 {
 	static char shell[] = STEAMLINK_APP "/bin/shell";
@@ -1692,6 +1817,7 @@ static const char *launch_steamlink(void)
 	    (steamlink_job() >= 0 && jobs[steamlink_job()].kind != JOB_SL_CHECK))
 		return "unavailable";
 	copy_text(locale, sizeof(locale), steamlink_locale());
+	steamlink_default_settings();
 
 	stream.input_fd = input_gamepads_on(true);
 	if (stream.input_fd < 0)
