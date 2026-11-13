@@ -589,7 +589,7 @@ static int wpa_network_id_for_ssid(const char *ssid)
 }
 
 static bool rewrite_wpa_config(const char *remove_ssid, const char *add_ssid,
-                               const char *password, bool hidden);
+                               const char *password, bool hidden, bool sae);
 
 static bool wpa_ping(void)
 {
@@ -673,7 +673,7 @@ static bool ensure_wpa_running(void)
         return true;
     }
     /* Clean STATE has no config yet: write the base one (no networks). */
-    if (access(WPA_CONF, R_OK) != 0 && !rewrite_wpa_config(NULL, NULL, NULL, false))
+    if (access(WPA_CONF, R_OK) != 0 && !rewrite_wpa_config(NULL, NULL, NULL, false, false))
         return false;
 
     pid = fork();
@@ -804,10 +804,25 @@ static const char *security_from_flags(const char *flags)
     return "Secured";
 }
 
-static bool is_saved_ssid(const char *ssid)
+/* Is ssid in a `wpa_cli list_networks` output ("id\tssid\tbssid\tflags")? */
+static bool ssid_in_network_list(const char *list, const char *ssid)
 {
-    return wpa_network_id_for_ssid(ssid) >= 0;
+    size_t len = strlen(ssid);
+    const char *line = list;
+
+    while (line != NULL && *line != '\0') {
+        const char *tab = strchr(line, '\t');
+        const char *eol = strchr(line, '\n');
+
+        if (tab != NULL && (eol == NULL || tab < eol) &&
+            strncmp(tab + 1, ssid, len) == 0 && tab[1 + len] == '\t' &&
+            strncmp(line, "network id", 10) != 0)
+            return true;
+        line = eol != NULL ? eol + 1 : NULL;
+    }
+    return false;
 }
+
 
 static size_t load_scan_networks(struct wifi_network *networks, size_t max_count,
                                  const char *current_ssid)
@@ -817,9 +832,15 @@ static size_t load_scan_networks(struct wifi_network *networks, size_t max_count
     char *line;
     size_t count = 0;
     char *const argv[] = {"wpa_cli", "-i", WIFI_IFACE, "scan_results", NULL};
+    /* One list_networks per refresh, not one wpa_cli per scanned SSID
+     * (2026-11-11: a dozen forks per scan, now that bgscan scans). */
+    static char saved_list[MAX_CAPTURE];
+    char *const list_argv[] = {"wpa_cli", "-i", WIFI_IFACE, "list_networks", NULL};
 
     if (run_capture(argv, output, sizeof(output)) != 0)
         return 0;
+    if (run_capture(list_argv, saved_list, sizeof(saved_list)) != 0)
+        saved_list[0] = '\0';
 
     line = strtok_r(output, "\n", &saveptr);
     while (line != NULL) {
@@ -862,7 +883,7 @@ static size_t load_scan_networks(struct wifi_network *networks, size_t max_count
             copy_string(networks[count].security, sizeof(networks[count].security),
                         security_from_flags(fields[3]));
             networks[count].signal_dbm = signal;
-            networks[count].saved = is_saved_ssid(fields[4]);
+            networks[count].saved = ssid_in_network_list(saved_list, fields[4]);
             networks[count].current = current_ssid != NULL &&
                                       strcmp(current_ssid, fields[4]) == 0;
             count++;
@@ -986,6 +1007,86 @@ static bool wpa_select_network(int id)
     return run_capture(argv, output, sizeof(output)) == 0 && strstr(output, "OK") != NULL;
 }
 
+/*
+ * WPA3 (Wi-Fi audit 2026-11-11): wpa_supplicant was built without SAE, so a
+ * WPA3-only network could not be joined at all. A network whose scan shows
+ * SAE and no PSK now gets "WPA-PSK WPA-PSK-SHA256 SAE" with PMF optional
+ * (ieee80211w=1): wpa_supplicant picks SAE there. WPA2/WPA3 transition
+ * networks stay WPA2-PSK as before: on the test router (RG35XX Pro) a fresh
+ * SAE + PMF association sometimes got no EAPOL 1/4 after the association
+ * (wpa_supplicant's 10 s auth timeout, reason 3), then fell back or was
+ * temporarily disabled; never seen with WPA2-PSK. To be understood before
+ * transition networks use SAE. Both SAE methods (sae_pwe=2: hunting-and-
+ * pecking and hash-to-element). SAE needs the passphrase, which wifid has.
+ */
+#define WPA_KEY_MGMT_PERSONAL "WPA-PSK WPA-PSK-SHA256 SAE"
+
+static int wpa_sae_supported = -1;
+
+static bool wpa_supports_sae(void)
+{
+    char output[1024];
+    char *saveptr = NULL;
+    char *token;
+    char *const argv[] = {"wpa_cli", "-i", WIFI_IFACE, "get_capability", "key_mgmt", NULL};
+
+    if (wpa_sae_supported >= 0)
+        return wpa_sae_supported == 1;
+    if (run_capture(argv, output, sizeof(output)) != 0 || strstr(output, "FAIL") != NULL)
+        return false; /* not running yet: ask again next time */
+    wpa_sae_supported = 0;
+    for (token = strtok_r(output, " \t\n", &saveptr); token != NULL;
+         token = strtok_r(NULL, " \t\n", &saveptr))
+        if (strcmp(token, "SAE") == 0)
+            wpa_sae_supported = 1;
+    return wpa_sae_supported == 1;
+}
+
+/* Does the last scan show ssid only as WPA3-Personal (SAE, no PSK)? */
+static bool network_is_wpa3_only(const char *ssid)
+{
+    char output[MAX_CAPTURE];
+    char *saveptr = NULL;
+    char *line;
+    bool sae = false;
+    bool psk = false;
+    char *const argv[] = {"wpa_cli", "-i", WIFI_IFACE, "scan_results", NULL};
+
+    if (!wpa_supports_sae() || run_capture(argv, output, sizeof(output)) != 0)
+        return false;
+    for (line = strtok_r(output, "\n", &saveptr); line != NULL;
+         line = strtok_r(NULL, "\n", &saveptr)) {
+        /* bssid \t frequency \t signal \t flags \t ssid */
+        char *flags = line;
+        char *name;
+        int tabs = 0;
+
+        while (tabs < 3 && (flags = strchr(flags, '\t')) != NULL) {
+            flags++;
+            tabs++;
+        }
+        if (flags == NULL || (name = strchr(flags, '\t')) == NULL)
+            continue;
+        *name++ = '\0';
+        if (strcmp(name, ssid) != 0)
+            continue;
+        if (strstr(flags, "SAE") != NULL)
+            sae = true;
+        if (strstr(flags, "PSK") != NULL)
+            psk = true;
+    }
+    return sae && !psk;
+}
+
+static void apply_sae_pwe(void)
+{
+    char output[64];
+    char *const argv[] = {"wpa_cli", "-i", WIFI_IFACE, "set", "sae_pwe", "2", NULL};
+
+    if (wpa_supports_sae())
+        (void)run_capture(argv, output, sizeof(output));
+}
+
 static bool line_ssid_matches(const char *line, const char *ssid)
 {
     const char *p = line;
@@ -1006,7 +1107,7 @@ static bool line_ssid_matches(const char *line, const char *ssid)
 }
 
 static bool rewrite_wpa_config(const char *remove_ssid, const char *add_ssid,
-                               const char *password, bool hidden)
+                               const char *password, bool hidden, bool sae)
 {
     FILE *in;
     FILE *out;
@@ -1017,6 +1118,7 @@ static bool rewrite_wpa_config(const char *remove_ssid, const char *add_ssid,
     bool in_block = false;
     bool block_matches = false;
     bool update_config_seen = false;
+    bool sae_pwe_seen = false;
     bool add_open = password == NULL || password[0] == '\0';
     char quoted_ssid[256];
     char quoted_password[256];
@@ -1066,6 +1168,9 @@ static bool rewrite_wpa_config(const char *remove_ssid, const char *add_ssid,
             if (strncmp(p, "update_config=", 14) == 0) {
                 fputs("update_config=1\n", out);
                 update_config_seen = true;
+            } else if (strncmp(p, "sae_pwe=", 8) == 0) {
+                fputs(line, out);
+                sae_pwe_seen = true;
             } else if (strncmp(p, "country=", 8) == 0) {
                 /*
                  * The regulatory domain follows the user's region
@@ -1083,6 +1188,8 @@ static bool rewrite_wpa_config(const char *remove_ssid, const char *add_ssid,
 
     if (!update_config_seen)
         fputs("update_config=1\n", out);
+    if (!sae_pwe_seen && wpa_supports_sae())
+        fputs("sae_pwe=2\n", out);
 
     if (add_ssid != NULL) {
         quote_wpa_value(add_ssid, quoted_ssid, sizeof(quoted_ssid));
@@ -1090,10 +1197,13 @@ static bool rewrite_wpa_config(const char *remove_ssid, const char *add_ssid,
                         quoted_password, sizeof(quoted_password));
         fputs("\nnetwork={\n", out);
         fprintf(out, "    ssid=%s\n", quoted_ssid);
-        if (add_open)
+        if (add_open) {
             fputs("    key_mgmt=NONE\n", out);
-        else
+        } else {
             fprintf(out, "    psk=%s\n", quoted_password);
+            if (sae)
+                fputs("    key_mgmt=" WPA_KEY_MGMT_PERSONAL "\n    ieee80211w=1\n", out);
+        }
         if (hidden)
             fputs("    scan_ssid=1\n", out);
         fputs("}\n", out);
@@ -1114,6 +1224,7 @@ static bool connect_network(const char *ssid, const char *password, bool hidden,
                             char *error, size_t error_size)
 {
     int id;
+    bool sae;
     char quoted_ssid[256];
     char quoted_password[256];
 
@@ -1133,6 +1244,7 @@ static bool connect_network(const char *ssid, const char *password, bool hidden,
         copy_string(error, error_size, "wpa_supplicant is unavailable");
         return false;
     }
+    sae = password[0] != '\0' && network_is_wpa3_only(ssid);
 
     id = wpa_network_id_for_ssid(ssid);
     if (id >= 0 && password[0] == '\0') {
@@ -1163,12 +1275,16 @@ static bool connect_network(const char *ssid, const char *password, bool hidden,
         quote_wpa_value(password, quoted_password, sizeof(quoted_password));
         if (!wpa_set_network(id, "psk", quoted_password))
             goto setup_failed;
+        if (sae &&
+            (!wpa_set_network(id, "key_mgmt", WPA_KEY_MGMT_PERSONAL) ||
+             !wpa_set_network(id, "ieee80211w", "1")))
+            goto setup_failed;
     }
 
     if (hidden && !wpa_set_network(id, "scan_ssid", "1"))
         goto setup_failed;
 
-    if (!rewrite_wpa_config(ssid, ssid, password, hidden)) {
+    if (!rewrite_wpa_config(ssid, ssid, password, hidden, sae)) {
         (void)wpa_remove_network(id);
         copy_string(error, error_size, "Unable to persist Wi-Fi credentials");
         return false;
@@ -1209,7 +1325,7 @@ static bool forget_network(const char *ssid, char *error, size_t error_size)
             break;
         removed = true;
     }
-    if (!rewrite_wpa_config(ssid, NULL, NULL, false)) {
+    if (!rewrite_wpa_config(ssid, NULL, NULL, false, false)) {
         copy_string(error, error_size, "Unable to update saved networks");
         return false;
     }
@@ -1649,6 +1765,7 @@ static bool set_enabled(bool enabled, char *error, size_t error_size)
         copy_string(error, error_size, "Unable to start wpa_supplicant");
         return false;
     }
+    apply_sae_pwe();
     {
         char *const reconnect[] = {"wpa_cli", "-i", WIFI_IFACE, "reconnect", NULL};
         (void)run_capture(reconnect, output, sizeof(output));
@@ -2440,6 +2557,29 @@ static bool low_latency_requested(void)
     return requested;
 }
 
+/*
+ * Roaming (Wi-Fi audit 2026-11-11): without bgscan wpa_supplicant never
+ * looked for a better access point while connected, so in a home with
+ * several APs (mesh, repeaters) the console kept a weak one until the link
+ * dropped. bgscan "simple": a scan every 30 s while the signal is below
+ * -70 dBm, else once an hour; wpa_supplicant roams when it finds a clearly
+ * better BSS of the same network. A scan takes the radio off-channel for
+ * a moment, so it is off during low-latency sessions (game streaming,
+ * netplay), like power save. Global setting: it applies to every network
+ * and to the current association at once.
+ */
+#define WIFI_BGSCAN "simple:30:-70:3600"
+
+static void apply_bgscan(bool enabled)
+{
+    char output[64];
+    char *const argv[] = {"wpa_cli", "-i", WIFI_IFACE, "set", "bgscan",
+                          enabled ? "\"" WIFI_BGSCAN "\"" : "\"\"", NULL};
+
+    if (run_capture(argv, output, sizeof(output)) != 0 || strstr(output, "OK") == NULL)
+        fprintf(stderr, "nuubos-wifid: bgscan %s failed\n", enabled ? "on" : "off");
+}
+
 static void apply_power_save(void)
 {
     static int applied = -1;
@@ -2451,6 +2591,7 @@ static void apply_power_save(void)
     if (applied != (int)on)
         fprintf(stderr, "nuubos-wifid: power save %s\n", on ? "on" : "off (low latency)");
     applied = on;
+    apply_bgscan(on);
 }
 
 /* 5 GHz over 2.4 GHz for the same network (2026-10-18): after a reconnect
@@ -2571,7 +2712,8 @@ int main(void)
     if (read_enabled_preference()) {
         char *link_up[] = {"ip", "link", "set", WIFI_IFACE, "up", NULL};
         (void)run_quiet(link_up);
-        (void)ensure_wpa_running();
+        if (ensure_wpa_running())
+            apply_sae_pwe();
     } else {
         char *link_down[] = {"ip", "link", "set", WIFI_IFACE, "down", NULL};
         (void)run_quiet(link_down);

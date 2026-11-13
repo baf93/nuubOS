@@ -31,6 +31,8 @@ define NUUBOS_BLUETOOTH_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/etc/init.d/S45nuubos-bluetoothd
 	$(INSTALL) -D -m 0644 $(@D)/org.nuubOS.Bluetooth.conf \
 		$(TARGET_DIR)/usr/share/dbus-1/system.d/org.nuubOS.Bluetooth.conf
+	$(INSTALL) -D -m 0644 $(@D)/main.conf \
+		$(TARGET_DIR)/etc/bluetooth/main.conf
 endef
 
 $(eval $(generic-package))

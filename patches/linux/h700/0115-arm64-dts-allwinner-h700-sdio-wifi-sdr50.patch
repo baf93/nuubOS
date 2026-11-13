@@ -1,0 +1,29 @@
+From: nuubOS
+Subject: [PATCH] arm64: dts: allwinner: h700: SDIO Wi-Fi at SDR50
+
+The RTL8821CS on mmc1 ran at 50 MHz "sd high speed" although its I/O
+supply is already 1.8 V and the H616 MMC host supports UHS timings
+(needs_new_timings). Declare SDR50: the bus runs at 100 MHz.
+
+RG35XX Pro, 7.3: download 65-76 -> 84-93 Mbit/s, upload 52-68 ->
+66-75 Mbit/s, a 3 GB + 1 GB soak with no CRC or timeout errors. The
+controller then reports command and data completion as two interrupts
+(idle 170 -> 320 IRQ/s) for the same number of card interrupts and
+transfers.
+
+---
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-plus.dts
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-plus.dts
+@@ -27,6 +27,12 @@
+ 	mmc-pwrseq = <&wifi_pwrseq>;
+ 	bus-width = <4>;
+ 	non-removable;
++	/*
++	 * nuubOS: the RTL8821CS I/O is already 1.8 V (aldo4) and the H616 MMC
++	 * host allows UHS: SDR50 (100 MHz) instead of 50 MHz high speed. No
++	 * tuning needed (the driver has none, so not SDR104).
++	 */
++	sd-uhs-sdr50;
+ 	status = "okay";
+ 
+ 	sdio_wifi: wifi@1 {
