@@ -17,6 +17,18 @@ WATCHDOG=/etc/init.d/S12nuubos-watchdog
 SLEEP_MODE="${1:-hypersleep}"
 RESUME_MODE_REG=0x07000114
 RESUME_MODE_QUICK=0x5170c0de
+# Clamshells: the lid switch (gpio-keys-lid, PE7) is a static DT
+# wakeup-source, so the kernel arms its IRQ for every suspend regardless
+# of SLEEP_MODE. HyperSleep's firmware (BL31) separately cuts power to
+# its PIO bank (platform.md "Hypersleep"), but that is a race against the
+# kernel's own wake-IRQ arming: a glitch on the pin as the bank loses
+# power can be read as a wake edge and abort the sleep almost at once
+# (user report, RG SP/RG34XX SP, 2026-11-16: closing the lid with Open
+# Lid to Wake off still woke it after ~2 s, intermittently). Disabling
+# the kernel wakeup capability before a real HyperSleep removes the race
+# instead of depending on timing; "quick" mode (lid-wake sleep) needs it
+# enabled, since that is how the lid wakes it there.
+LID_WAKEUP=/sys/devices/platform/gpio-keys-lid/power/wakeup
 
 suspend_log()
 {
@@ -153,6 +165,14 @@ if [ "$SLEEP_STATE" = mem ] && command -v devmem >/dev/null 2>&1; then
 		devmem "$RESUME_MODE_REG" 32 0
 	fi
 	suspend_log "sleep mode $SLEEP_MODE"
+fi
+
+if [ -w "$LID_WAKEUP" ]; then
+	if [ "$SLEEP_MODE" = quick ]; then
+		echo enabled > "$LID_WAKEUP"
+	else
+		echo disabled > "$LID_WAKEUP"
+	fi
 fi
 
 if ! echo "$SLEEP_STATE" > "$POWER_STATE"; then
