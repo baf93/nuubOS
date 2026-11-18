@@ -25,9 +25,17 @@ RESUME_MODE_QUICK=0x5170c0de
 # power can be read as a wake edge and abort the sleep almost at once
 # (user report, RG SP/RG34XX SP, 2026-11-16: closing the lid with Open
 # Lid to Wake off still woke it after ~2 s, intermittently). Disabling
-# the kernel wakeup capability before a real HyperSleep removes the race
-# instead of depending on timing; "quick" mode (lid-wake sleep) needs it
-# enabled, since that is how the lid wakes it there.
+# the kernel wakeup capability before a requested HyperSleep removes
+# that race instead of depending on timing; "quick" mode (lid-wake
+# sleep) needs it enabled, since that is how the lid wakes it there.
+# Matches the requested mode, not necessarily what BL31 ends up doing:
+# per platform.md "Hypersleep", BL31 falls back to the lid-wake-capable
+# deep sleep stage 2 on its own (GP5 aside) when U-Boot published no
+# DRAM state that boot. In that rare case the lid loses its wake
+# capability for a HyperSleep that is not actually one; accepted for
+# now (every successful boot publishes DRAM state per the cached
+# training work, platform.md "Cached DRAM training"), revisit if it is
+# ever seen in practice.
 LID_WAKEUP=/sys/devices/platform/gpio-keys-lid/power/wakeup
 
 suspend_log()
@@ -173,6 +181,13 @@ if [ -w "$LID_WAKEUP" ]; then
 	else
 		echo disabled > "$LID_WAKEUP"
 	fi
+elif [ -d "$(dirname "$(dirname "$LID_WAKEUP")")" ]; then
+	# The gpio-keys-lid device exists (this is a clamshell) but its
+	# wakeup control is not writable: unexpected, log it. Not fatal
+	# (a missing lid switch entirely is the normal non-clamshell case
+	# and stays silent): the sleep still proceeds, just with the race
+	# this fixes unguarded.
+	suspend_log "lid wakeup control unavailable, sleep mode race unguarded" >&2
 fi
 
 if ! echo "$SLEEP_STATE" > "$POWER_STATE"; then

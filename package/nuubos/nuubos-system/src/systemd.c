@@ -769,13 +769,15 @@ static bool hdmi_active(void)
  * with the lid still closed, the console goes back to sleep.
  *
  * Attributing the wake to "lid" only when this sleep was actually
- * lid-wake-capable (nuubos-suspend §"lid_wake_capable"): a real HyperSleep
- * cannot be woken by the lid at all (its kernel wakeup capability is
- * disabled for the duration), so any resume there is necessarily the
- * power key, whatever the lid's state happens to be by the time the
- * owner is handling the console again (found 2026-11-17: every power-key
- * wake from a lid-close HyperSleep was mislabeled "lid" just because the
- * lid was open afterward, with no check of what actually caused it). */
+ * lid-wake-capable (st->last_sleep_was_hyper, set by run_suspend() from
+ * the same requested-mode decision nuubos-suspend acts on): a real
+ * HyperSleep cannot be woken by the lid at all (its kernel wakeup
+ * capability is disabled for the duration), so any resume there is
+ * necessarily the power key, whatever the lid's state happens to be by
+ * the time the owner is handling the console again (found 2026-11-17:
+ * every power-key wake from a lid-close HyperSleep was mislabeled "lid"
+ * just because the lid was open afterward, with no check of what
+ * actually caused it). */
 static void lid_policy(struct runtime_state *st)
 {
     bool was_closed = st->lid_closed;
