@@ -186,13 +186,21 @@ if [ "$SLEEP_MODE" = quick ]; then
 else
 	LID_WAKEUP_VALUE=disabled
 fi
-if ! echo "$LID_WAKEUP_VALUE" > "$LID_WAKEUP" 2>/dev/null && [ -d "$LID_SWITCH_DEVICE" ]; then
-	# The gpio-keys-lid device exists (this is a clamshell) but the
-	# write was refused: unexpected, log it. Not fatal (a missing lid
-	# switch entirely is the normal non-clamshell case, silent by the
-	# same "> $LID_WAKEUP" failing on a nonexistent path): the sleep
-	# still proceeds, just with the race this fixes unguarded.
-	suspend_log "lid wakeup control write failed, sleep mode race unguarded" >&2
+if [ -d "$LID_SWITCH_DEVICE" ]; then
+	# The gpio-keys-lid device exists (this is a clamshell): checked
+	# first so a missing lid switch (the normal non-clamshell case)
+	# never attempts the write at all, rather than relying on it
+	# failing silently (it doesn't: the shell's own "no such file"
+	# diagnostic for the failed redirect is written before the
+	# "2>/dev/null" on the same line takes effect, so it would reach
+	# the real stderr whenever this script runs outside the
+	# all-fds-to-/dev/null wrapper nuubos-systemd starts it under,
+	# e.g. a developer running it by hand to test suspend).
+	if ! echo "$LID_WAKEUP_VALUE" > "$LID_WAKEUP" 2>/dev/null; then
+		# Unexpected: log it. Not fatal, the sleep still proceeds,
+		# just with the race this fixes unguarded.
+		suspend_log "lid wakeup control write failed, sleep mode race unguarded" >&2
+	fi
 fi
 
 if ! echo "$SLEEP_STATE" > "$POWER_STATE"; then

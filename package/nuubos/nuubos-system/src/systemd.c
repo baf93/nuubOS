@@ -548,10 +548,21 @@ static int connect_unix(const char *path)
  * tells the firmware which one (platform.md). A sleep started by closing a
  * clamshell's lid with Lid Wake on is a quick one, so opening the lid
  * wakes it (HyperSleep powers the lid's GPIO bank off).
+ *
+ * Single source of truth for this classification: lid_policy() needs the
+ * same answer run_suspend() is about to act on (with by_lid=true, the only
+ * way it ever calls in) to know whether the sleep that just ended could
+ * have been lid-woken at all. Kept as one formula so the two can't drift
+ * out of sync.
  */
+static bool sleep_is_hyper(const struct runtime_state *st, bool by_lid)
+{
+    return st->cfg.hypersleep && !(by_lid && st->cfg.lid_wake);
+}
+
 static int run_suspend(const struct runtime_state *st, bool by_lid)
 {
-    bool hyper = st->cfg.hypersleep && !(by_lid && st->cfg.lid_wake);
+    bool hyper = sleep_is_hyper(st, by_lid);
     char *argv[]={"/usr/sbin/nuubos-suspend", hyper ? "hypersleep" : "quick",NULL};
     return run_argv(argv);
 }
@@ -784,7 +795,7 @@ static void lid_policy(struct runtime_state *st)
     if (!st->lid_closed || was_closed || st->idle_stage != IDLE_ACTIVE)
         return;
     for (int i = 0; i <= LID_MAX_RESLEEPS && st->lid_closed && !hdmi_active(); i++) {
-        bool was_hyper = st->cfg.hypersleep && !st->cfg.lid_wake;
+        bool was_hyper = sleep_is_hyper(st, true);
 
         enter_sleep_mode(st, true);
         refresh_lid(st);
