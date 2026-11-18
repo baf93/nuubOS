@@ -36,7 +36,8 @@ RESUME_MODE_QUICK=0x5170c0de
 # now (every successful boot publishes DRAM state per the cached
 # training work, platform.md "Cached DRAM training"), revisit if it is
 # ever seen in practice.
-LID_WAKEUP=/sys/devices/platform/gpio-keys-lid/power/wakeup
+LID_SWITCH_DEVICE=/sys/devices/platform/gpio-keys-lid
+LID_WAKEUP="$LID_SWITCH_DEVICE/power/wakeup"
 
 suspend_log()
 {
@@ -175,19 +176,23 @@ if [ "$SLEEP_STATE" = mem ] && command -v devmem >/dev/null 2>&1; then
 	suspend_log "sleep mode $SLEEP_MODE"
 fi
 
-if [ -w "$LID_WAKEUP" ]; then
-	if [ "$SLEEP_MODE" = quick ]; then
-		echo enabled > "$LID_WAKEUP"
-	else
-		echo disabled > "$LID_WAKEUP"
-	fi
-elif [ -d "$(dirname "$(dirname "$LID_WAKEUP")")" ]; then
-	# The gpio-keys-lid device exists (this is a clamshell) but its
-	# wakeup control is not writable: unexpected, log it. Not fatal
-	# (a missing lid switch entirely is the normal non-clamshell case
-	# and stays silent): the sleep still proceeds, just with the race
-	# this fixes unguarded.
-	suspend_log "lid wakeup control unavailable, sleep mode race unguarded" >&2
+# Not restored on a failed suspend entry below, or once resumed and
+# running: harmless either way, this has no effect outside an actual
+# suspend transition, and the next call here (the next sleep attempt)
+# always sets it fresh from that call's own SLEEP_MODE regardless of
+# whatever was left over.
+if [ "$SLEEP_MODE" = quick ]; then
+	LID_WAKEUP_VALUE=enabled
+else
+	LID_WAKEUP_VALUE=disabled
+fi
+if ! echo "$LID_WAKEUP_VALUE" > "$LID_WAKEUP" 2>/dev/null && [ -d "$LID_SWITCH_DEVICE" ]; then
+	# The gpio-keys-lid device exists (this is a clamshell) but the
+	# write was refused: unexpected, log it. Not fatal (a missing lid
+	# switch entirely is the normal non-clamshell case, silent by the
+	# same "> $LID_WAKEUP" failing on a nonexistent path): the sleep
+	# still proceeds, just with the race this fixes unguarded.
+	suspend_log "lid wakeup control write failed, sleep mode race unguarded" >&2
 fi
 
 if ! echo "$SLEEP_STATE" > "$POWER_STATE"; then

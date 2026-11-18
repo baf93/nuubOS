@@ -92,7 +92,6 @@ struct runtime_state {
     long long last_sleep_elapsed_ms;
     int lid_fd;                 /* clamshells (SP): gpio-keys SW_LID, else -1 */
     bool lid_closed;
-    bool last_sleep_was_hyper;  /* true HyperSleep cannot be lid-woken at all */
 
     bool notifications_ready;
 };
@@ -550,11 +549,10 @@ static int connect_unix(const char *path)
  * clamshell's lid with Lid Wake on is a quick one, so opening the lid
  * wakes it (HyperSleep powers the lid's GPIO bank off).
  */
-static int run_suspend(struct runtime_state *st, bool by_lid)
+static int run_suspend(const struct runtime_state *st, bool by_lid)
 {
     bool hyper = st->cfg.hypersleep && !(by_lid && st->cfg.lid_wake);
     char *argv[]={"/usr/sbin/nuubos-suspend", hyper ? "hypersleep" : "quick",NULL};
-    st->last_sleep_was_hyper = hyper;
     return run_argv(argv);
 }
 
@@ -769,9 +767,9 @@ static bool hdmi_active(void)
  * with the lid still closed, the console goes back to sleep.
  *
  * Attributing the wake to "lid" only when this sleep was actually
- * lid-wake-capable (st->last_sleep_was_hyper, set by run_suspend() from
- * the same requested-mode decision nuubos-suspend acts on): a real
- * HyperSleep cannot be woken by the lid at all (its kernel wakeup
+ * lid-wake-capable (the same hyper formula run_suspend() uses, with
+ * by_lid=true since that is the only way this function ever sleeps): a
+ * real HyperSleep cannot be woken by the lid at all (its kernel wakeup
  * capability is disabled for the duration), so any resume there is
  * necessarily the power key, whatever the lid's state happens to be by
  * the time the owner is handling the console again (found 2026-11-17:
@@ -786,11 +784,13 @@ static void lid_policy(struct runtime_state *st)
     if (!st->lid_closed || was_closed || st->idle_stage != IDLE_ACTIVE)
         return;
     for (int i = 0; i <= LID_MAX_RESLEEPS && st->lid_closed && !hdmi_active(); i++) {
+        bool was_hyper = st->cfg.hypersleep && !st->cfg.lid_wake;
+
         enter_sleep_mode(st, true);
         refresh_lid(st);
         if (!strcmp(st->last_wake_reason, "suspend-failed"))
             break;
-        if (!st->lid_closed && !st->last_sleep_was_hyper) {
+        if (!st->lid_closed && !was_hyper) {
             snprintf(st->last_wake_reason, sizeof(st->last_wake_reason), "lid");
             notify_subscribers();
         }
