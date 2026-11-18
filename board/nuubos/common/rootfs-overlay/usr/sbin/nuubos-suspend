@@ -28,14 +28,18 @@ RESUME_MODE_QUICK=0x5170c0de
 # the kernel wakeup capability before a requested HyperSleep removes
 # that race instead of depending on timing; "quick" mode (lid-wake
 # sleep) needs it enabled, since that is how the lid wakes it there.
-# Matches the requested mode, not necessarily what BL31 ends up doing:
-# per platform.md "Hypersleep", BL31 falls back to the lid-wake-capable
+#
+# This decision can disagree with what BL31 actually does, though: per
+# platform.md "Hypersleep", BL31 falls back to the lid-wake-capable
 # deep sleep stage 2 on its own (GP5 aside) when U-Boot published no
-# DRAM state that boot. In that rare case the lid loses its wake
-# capability for a HyperSleep that is not actually one; accepted for
-# now (every successful boot publishes DRAM state per the cached
-# training work, platform.md "Cached DRAM training"), revisit if it is
-# ever seen in practice.
+# DRAM state that boot, regardless of what mode was requested here. In
+# that rare case this script has already disabled the lid's kernel
+# wakeup for what it believed was a real HyperSleep, but BL31 actually
+# ran the lighter sleep that keeps the lid's rail powered, so the lid
+# loses its wake capability for no reason. Accepted for now (every
+# successful boot publishes DRAM state per the cached training work,
+# platform.md "Cached DRAM training"), revisit if it is ever seen in
+# practice.
 LID_SWITCH_DEVICE=/sys/devices/platform/gpio-keys-lid
 LID_WAKEUP="$LID_SWITCH_DEVICE/power/wakeup"
 
