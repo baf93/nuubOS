@@ -1576,16 +1576,9 @@ page('power', 'settings', () => C(813, 'Power'), async () => {
     row({ key: 'hypersleep', title: C(1347, 'HyperSleep'), toggle: s.hypersleep !== '0',
       detail: s.hypersleep !== '0' ? C(1348, 'Almost no battery use. Wake with the power button.') : C(1349, 'START and the lid also wake it. Uses more battery.'),
       set: (v) => act('system.hypersleep', { v: v ? '1' : '0' }, { topics: ['system'] }) }),
-    row({ key: 'faststartup', title: C(1354, 'Fast Startup'), toggle: s.fast_startup !== '0',
-      detail: s.fast_startup !== '0' ? C(1355, 'Experimental: starts about 5 seconds faster, but can make the console freeze or restart by itself.') : C(1356, 'Checks the memory at every start. Can help if the console freezes or restarts by itself.'),
-      set: (v) => act('system.faststartup', { v: v ? '1' : '0' }, { topics: ['system'] }) }),
     row({ key: 'powerkey', title: C(1388, 'Press Power to Sleep'), toggle: s.power_key_sleep === '1',
       detail: s.power_key_sleep === '1' ? C(1389, 'Hold the power button for the power menu.') : C(1390, 'The power button opens the power menu.'),
-      set: (v) => act('system.powerkeysleep', { v: v ? '1' : '0' }, { topics: ['system'] }) }),
-    /* Clamshells only. */
-    s['lifecycle.lid'] && s['lifecycle.lid'] !== 'none' ? row({ key: 'lidwake', title: C(1494, 'Open Lid to Wake'), toggle: s.lid_wake !== '0',
-      detail: s.lid_wake !== '0' ? C(1495, 'Opening the lid wakes the console. Sleep with the lid closed uses more battery.') : C(1496, 'Closing the lid uses HyperSleep: only the power button wakes it.'),
-      set: (v) => act('system.lidwake', { v: v ? '1' : '0' }, { topics: ['system'] }) }) : null),
+      set: (v) => act('system.powerkeysleep', { v: v ? '1' : '0' }, { topics: ['system'] }) })),
   section(C(814, 'BATTERY'), 'device'), group(
     ...(bstate === 'absent' ? [row({ key: 'charge', title: C(816, 'Charge'), value: C(1301, 'No battery') })] : [
     row({ key: 'charge', title: C(816, 'Charge'), value: s['battery.percent'] + '%', detail: bstate === 'charging' ? C(382, 'Charging') : bstate === 'full' ? C(383, 'Fully charged') : bstate === 'not-charging' ? C(819, 'Not charging') : C(818, 'Discharging') }),
@@ -1615,7 +1608,16 @@ page('system', 'settings', () => C(8, 'System'), async (path) => {
     row({ key: 'info', title: C(20, 'System Information'), chevron: true, on: () => go('system/info') })),
   section(C(733, 'TROUBLESHOOTING'), 'device'), group(
     row({ key: 'diag', title: C(498, 'Diagnostics'), chevron: true, on: () => go('system/diagnostics') }),
-    row({ key: 'rec', title: C(499, 'Recovery'), value: rec['safe-mode'] === '1' ? C(518, 'Safe Mode') : '', chevron: true, on: () => go('system/recovery') }))];
+    row({ key: 'rec', title: C(499, 'Recovery'), value: rec['safe-mode'] === '1' ? C(518, 'Safe Mode') : '', chevron: true, on: () => go('system/recovery') })),
+  /* Experimental features in one place (user decision 2026-11-19). */
+  section(C(1497, 'EXPERIMENTAL'), 'device'), group(
+    row({ key: 'faststartup', title: C(1354, 'Fast Startup'), toggle: s.fast_startup !== '0',
+      detail: s.fast_startup !== '0' ? C(1355, 'Experimental: starts about 5 seconds faster, but can make the console freeze or restart by itself.') : C(1356, 'Checks the memory at every start. Can help if the console freezes or restarts by itself.'),
+      set: (v) => act('system.faststartup', { v: v ? '1' : '0' }, { topics: ['system'] }) }),
+    /* Clamshells only. */
+    s['lifecycle.lid'] && s['lifecycle.lid'] !== 'none' ? row({ key: 'lidwake', title: C(1494, 'Open Lid to Wake'), toggle: s.lid_wake !== '0',
+      detail: s.lid_wake !== '0' ? C(1495, 'Opening the lid wakes the console. Sleep with the lid closed uses more battery.') : C(1496, 'Closing the lid uses HyperSleep: only the power button wakes it.'),
+      set: (v) => act('system.lidwake', { v: v ? '1' : '0' }, { topics: ['system'] }) }) : null))];
   return { title: C(8, 'System'), nodes, topics: ['system'] };
 });
 

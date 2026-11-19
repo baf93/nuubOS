@@ -1495,3 +1495,4 @@
 1494=Open Lid to Wake
 1495=Opening the lid wakes the console. Sleep with the lid closed uses more battery.
 1496=Closing the lid uses HyperSleep: only the power button wakes it.
+1497=EXPERIMENTAL

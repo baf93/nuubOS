@@ -4715,20 +4715,20 @@ fn safe_confirm(ui: &HomeWindow, row: i32, settings_active: &Arc<AtomicBool>) {
     }
 }
 
-/* System: STORAGE & SOFTWARE (0 Storage, 1 Software Update, 2 System
- * Information) | TROUBLESHOOTING (3 Diagnostics, 4 Backup, 5 Recovery). */
-const SYSTEM_ROWS: i32 = 6;
-/* Settings → Power (settings-view 69, category 5): POWER (0 Performance
- * Profile, 1 Automatic Battery Saver, 2 Sleep After, 3 Hypersleep, 4 Fast
- * Startup, 5 Press Power to Sleep) | BATTERY (6 Charge, 7 Health,
- * read-only; 8 Charge Limit when the battery driver has one) | CONNECTED
- * DEVICES (after them, read-only, at least one row: "none"). */
+/* System: STORAGE & SOFTWARE (0 Storage, 1 Backup, 2 Software Update,
+ * 3 System Information) | TROUBLESHOOTING (4 Diagnostics, 5 Recovery) |
+ * EXPERIMENTAL (6 Fast Startup, 7 Open Lid to Wake on clamshells; user
+ * decision 2026-11-19). The row count is `system-rows`. */
+const SYSTEM_FAST_STARTUP_ROW: i32 = 6;
+const SYSTEM_LID_WAKE_ROW: i32 = 7;
+/* Settings → Power (settings-view 69, category 5): ENERGY SAVING (0
+ * Battery Saver, 1 Automatic Battery Saver, 2 Sleep After, 3 Hypersleep,
+ * 4 Press Power to Sleep) | BATTERY (5 Charge, 6 Health, read-only; 7
+ * Charge Limit when the battery driver has one) | CONNECTED DEVICES (after
+ * them, read-only, at least one row: "none"). */
 const POWER_VIEW: i32 = 69;
 const POWER_HYPERSLEEP_ROW: i32 = 3;
-const POWER_FAST_STARTUP_ROW: i32 = 4;
-const POWER_KEY_SLEEP_ROW: i32 = 5;
-/* Clamshells only: row 6, the BATTERY rows one lower. */
-const POWER_LID_WAKE_ROW: i32 = 6;
+const POWER_KEY_SLEEP_ROW: i32 = 4;
 
 fn power_devices_start(ui: &HomeWindow) -> i32 {
     ui.get_power_devices_start()
@@ -4782,9 +4782,9 @@ fn update_system_scroll(ui: &HomeWindow) {
     ui.set_system_scroll_offset(sectioned_scroll(
         ui,
         ui.get_system_index(),
-        SYSTEM_ROWS,
+        ui.get_system_rows(),
         ui.get_system_scroll_offset(),
-        (ui.get_system_storage_start(), ui.get_system_support_start(), 0),
+        (ui.get_system_support_start(), ui.get_system_experimental_start(), 0),
     ));
 }
 
@@ -4969,6 +4969,7 @@ fn handle_settings_action(
                 } else if ui.get_settings_selected_index() == 7 {
                     ui.set_system_index(0);
                     ui.set_system_scroll_offset(0);
+                    ui.set_fast_startup_armed(false);
                     navigate_settings_view(ui, 19);
                     refresh_system(ui);
                 }
@@ -5374,12 +5375,10 @@ fn handle_settings_action(
         gameui::GAMING_VIEW | gameui::LIBRARY_VIEW => gameui::handle_gaming(ui, action),
         19 => {
             match action {
-                "menu_up" => {
-                    ui.set_system_index(move_model_selection(ui.get_system_index(), SYSTEM_ROWS, -1));
-                    update_system_scroll(ui);
-                }
-                "menu_down" => {
-                    ui.set_system_index(move_model_selection(ui.get_system_index(), SYSTEM_ROWS, 1));
+                "menu_up" | "menu_down" => {
+                    let step = if action == "menu_up" { -1 } else { 1 };
+                    ui.set_system_index(move_model_selection(ui.get_system_index(), ui.get_system_rows(), step));
+                    ui.set_fast_startup_armed(false);
                     update_system_scroll(ui);
                 }
                 "menu_confirm" => match ui.get_system_index() {
@@ -5396,6 +5395,24 @@ fn handle_settings_action(
                     },
                     4 => navigate_settings_view(ui, 27),
                     5 => filesui::open_recovery(ui),
+                    /* Fast Startup on/off: the cached DRAM training
+                     * (platform.md). Experimental (user decision
+                     * 2026-10-25): off at once, on only at a second press
+                     * after the warning. */
+                    SYSTEM_FAST_STARTUP_ROW => {
+                        if ui.get_system_fast_startup() {
+                            system_set(ui, "SET FAST_STARTUP 0".into());
+                        } else if ui.get_fast_startup_armed() {
+                            ui.set_fast_startup_armed(false);
+                            system_set(ui, "SET FAST_STARTUP 1".into());
+                        } else {
+                            ui.set_fast_startup_armed(true);
+                        }
+                    }
+                    SYSTEM_LID_WAKE_ROW if ui.get_system_lid_present() => {
+                        let next = if ui.get_system_lid_wake() { 0 } else { 1 };
+                        system_set(ui, format!("SET LID_WAKE {next}"));
+                    }
                     _ => {}
                 },
                 _ => {}
@@ -5405,7 +5422,6 @@ fn handle_settings_action(
             "menu_up" | "menu_down" => {
                 let count = power_row_count(ui);
                 ui.set_power_index(move_model_selection(ui.get_power_index(), count, if action == "menu_up" { -1 } else { 1 }));
-                ui.set_fast_startup_armed(false);
                 update_power_scroll(ui);
             }
             "menu_confirm" => match ui.get_power_index() {
@@ -5421,28 +5437,11 @@ fn handle_settings_action(
                     let next = if ui.get_system_hypersleep() { 0 } else { 1 };
                     system_set(ui, format!("SET HYPERSLEEP {next}"));
                 }
-                /* Fast Startup on/off: the cached DRAM training (platform.md). */
-                /* Experimental (user decision 2026-10-25): off at once, on only
-                 * at a second press after the warning. */
-                POWER_FAST_STARTUP_ROW => {
-                    if ui.get_system_fast_startup() {
-                        system_set(ui, "SET FAST_STARTUP 0".into());
-                    } else if ui.get_fast_startup_armed() {
-                        ui.set_fast_startup_armed(false);
-                        system_set(ui, "SET FAST_STARTUP 1".into());
-                    } else {
-                        ui.set_fast_startup_armed(true);
-                    }
-                }
                 /* Press Power to Sleep (EPIC-045): the Quick Menu reads it
                  * at each power key press. */
                 POWER_KEY_SLEEP_ROW => {
                     let next = if ui.get_system_power_key_sleep() { 0 } else { 1 };
                     system_set(ui, format!("SET POWER_KEY_SLEEP {next}"));
-                }
-                POWER_LID_WAKE_ROW if ui.get_system_lid_present() => {
-                    let next = if ui.get_system_lid_wake() { 0 } else { 1 };
-                    system_set(ui, format!("SET LID_WAKE {next}"));
                 }
                 n if n == ui.get_power_battery_start() + 2 && ui.get_system_charge_limit_supported() => open_charge_limit_dropdown(ui),
                 /* Battery and device rows are read-only. */
