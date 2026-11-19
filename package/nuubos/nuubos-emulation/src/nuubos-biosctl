@@ -108,6 +108,7 @@ plan="$(grep -v '^[[:space:]]*#' "$CORES_CONF" 2>/dev/null | awk -F'|' \
             p = path[i]; b = p; sub(/.*\//, "", b)
             if (mode != "" && !(p in listed)) continue
             m = (p in md5) ? md5[p] : ((b in md5) ? md5[b] : "")
+            if (p in extra) m = m == "" ? extra[p] : m "," extra[p]
             req = mode == "required" || mode == "any" ? 1 : mode == "optional" ? 0 : (opt[i] == "true" ? 0 : 1)
             seen[p] = 1
             add(p, req, m, desc[i])
@@ -126,7 +127,8 @@ plan="$(grep -v '^[[:space:]]*#' "$CORES_CONF" 2>/dev/null | awk -F'|' \
         }
         while ((getline l < biosconf) > 0) {
             split(l, f, "|")
-            if (f[1] != "" && !(f[1] in cmode)) { cmode[f[1]] = f[2]; cfiles[f[1]] = f[3] }
+            if (f[1] == "md5") extra[f[2]] = tolower(f[3])
+            else if (f[1] != "" && !(f[1] in cmode)) { cmode[f[1]] = f[2]; cfiles[f[1]] = f[3] }
         }
     }
 
@@ -161,7 +163,7 @@ while IFS="$US" read -r kind sys path req md5 desc; do
         */*)
             root="$BIOS_DIR/${path##*/}"
             if [ ! -f "$BIOS_DIR/$path" ] && [ -f "$root" ] &&
-               { [ -z "$md5" ] || [ "$(md5sum < "$root" | cut -d' ' -f1)" = "$md5" ]; }; then
+               { [ -z "$md5" ] || case ",$md5," in *",$(md5sum < "$root" | cut -d' ' -f1),"*) true ;; *) false ;; esac; }; then
                 mkdir -p "$BIOS_DIR/${path%/*}" &&
                     cp "$root" "$BIOS_DIR/$path.part" && sync &&
                     mv "$BIOS_DIR/$path.part" "$BIOS_DIR/$path"
@@ -204,7 +206,7 @@ EOT
         next
     }
     $1 == "F" && $3 != "" {
-        st = !($3 in present) ? "missing" : $5 == "" ? "unverified" : sum[$3] == $5 ? "ok" : "invalid"
+        st = !($3 in present) ? "missing" : $5 == "" ? "unverified" : index("," $5 ",", "," sum[$3] ",") ? "ok" : "invalid"
         total++
         if ($4 == 1) req_total++
         if (st == "ok" || st == "unverified") {
