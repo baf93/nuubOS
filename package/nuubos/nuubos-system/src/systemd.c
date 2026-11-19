@@ -548,10 +548,21 @@ static int connect_unix(const char *path)
  * tells the firmware which one (platform.md). A sleep started by closing a
  * clamshell's lid with Lid Wake on is a quick one, so opening the lid
  * wakes it (HyperSleep powers the lid's GPIO bank off).
+ *
+ * Single source of truth for this classification: lid_policy() needs the
+ * same answer run_suspend() is about to act on (with by_lid=true, the only
+ * way it ever calls in) to know whether the sleep that just ended could
+ * have been lid-woken at all. Kept as one formula so the two can't drift
+ * out of sync.
  */
+static bool sleep_is_hyper(const struct runtime_state *st, bool by_lid)
+{
+    return st->cfg.hypersleep && !(by_lid && st->cfg.lid_wake);
+}
+
 static int run_suspend(const struct runtime_state *st, bool by_lid)
 {
-    bool hyper = st->cfg.hypersleep && !(by_lid && st->cfg.lid_wake);
+    bool hyper = sleep_is_hyper(st, by_lid);
     char *argv[]={"/usr/sbin/nuubos-suspend", hyper ? "hypersleep" : "quick",NULL};
     return run_argv(argv);
 }
@@ -764,7 +775,18 @@ static bool hdmi_active(void)
 
 /* Closing the lid sleeps through the same path as Sleep in the Power OSD;
  * opening it is the hardware wake (the switch wakes on release). Woken
- * with the lid still closed, the console goes back to sleep. */
+ * with the lid still closed, the console goes back to sleep.
+ *
+ * Attributing the wake to "lid" only when this sleep was actually
+ * lid-wake-capable (the same hyper formula run_suspend() uses, with
+ * by_lid=true since that is the only way this function ever sleeps): a
+ * real HyperSleep cannot be woken by the lid at all (its kernel wakeup
+ * capability is disabled for the duration), so any resume there is
+ * necessarily the power key, whatever the lid's state happens to be by
+ * the time the owner is handling the console again (found 2026-11-17:
+ * every power-key wake from a lid-close HyperSleep was mislabeled "lid"
+ * just because the lid was open afterward, with no check of what
+ * actually caused it). */
 static void lid_policy(struct runtime_state *st)
 {
     bool was_closed = st->lid_closed;
@@ -773,11 +795,13 @@ static void lid_policy(struct runtime_state *st)
     if (!st->lid_closed || was_closed || st->idle_stage != IDLE_ACTIVE)
         return;
     for (int i = 0; i <= LID_MAX_RESLEEPS && st->lid_closed && !hdmi_active(); i++) {
+        bool was_hyper = sleep_is_hyper(st, true);
+
         enter_sleep_mode(st, true);
         refresh_lid(st);
         if (!strcmp(st->last_wake_reason, "suspend-failed"))
             break;
-        if (!st->lid_closed) {
+        if (!st->lid_closed && !was_hyper) {
             snprintf(st->last_wake_reason, sizeof(st->last_wake_reason), "lid");
             notify_subscribers();
         }
