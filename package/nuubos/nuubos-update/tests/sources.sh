@@ -49,8 +49,16 @@ check "backend answers: update found" '"$U" check | grep -q "OK available 9" && 
 check "backend answers: GitHub never asked" '[ ! -s "$T/b.log" ]'
 check "payload from the backend" '"$U" download | grep -q downloaded && ! grep -q "GET" "$T/b.log"'
 
-rm -rf "$T/a/channel-rc" "$T/dev/data/payload"
-check "nothing on the backend (404): GitHub still not asked" '"$U" check >/dev/null; [ ! -s "$T/b.log" ]'
+rm -rf "$T/dev/data/payload"
+publish "$T/a" 90 ""; : > "$T/b.log"
+check "backend has an older release: GitHub not asked" '"$U" check | grep -q "OK current" && [ ! -s "$T/b.log" ]'
+rm -rf "$T/a/channel-rc"
+check "nothing on any channel of the backend (404): GitHub's manifest" '"$U" check | grep -q "OK available" && grep -q "serial=150" "$T/dev/data/manifest" && [ -s "$T/b.log" ]'
+mkdir -p "$T/a/channel-rc"; echo garbage > "$T/a/channel-rc/nuubos-update.manifest"; echo bad > "$T/a/channel-rc/nuubos-update.manifest.sig"
+check "backend taken over (bad signatures): GitHub's manifest" '"$U" check >/dev/null; grep -q "serial=150" "$T/dev/data/manifest"'
+rm -rf "$T/a/channel-rc" "$T/b/channel-rc"
+check "nothing anywhere: OK none" '[ "$("$U" check)" = "OK none" ]'
+publish "$T/b" 150 ""
 
 kill $PA; wait $PA 2>/dev/null
 check "backend down: GitHub's manifest" '"$U" check | grep -q "OK available" && grep -q "serial=150" "$T/dev/data/manifest"'

@@ -30,8 +30,10 @@
  * URLs, space separated), kept in SOURCES_FILE, which then replaces
  * UPDATE_SOURCES. Every check asks all those sources and keeps the newest
  * verified manifest (a host that syncs late cannot hide an update); GitHub
- * is asked only when none of them answers at all, so consoles do not poll
- * it. The payload is fetched from them in order, GitHub last. Only a
+ * is asked only when none of them answers at all, or when none of them has
+ * a verified manifest on any channel (a backend that is gone, emptied or
+ * taken over answers 404 or bad signatures: 2026-11-17), so consoles do not
+ * poll it while the backend serves a release. The payload is fetched from them in order, GitHub last. Only a
  * signed manifest changes the list, and a host can never redirect the
  * consoles by itself.
  *
@@ -560,9 +562,12 @@ static const char *fetch_from(const char *base, const char *channel, long long *
 /*
  * The newest verified manifest of one channel into manifest.cand: NULL =
  * found, "" = nothing published there, else the failure. GitHub (the
- * fallback) only when no other source answered at all.
+ * fallback) only when no other source answered at all; github_only = the
+ * fallback alone (cmd_check's second pass).
  */
-static const char *fetch_channel(const char *channel, long long *serial)
+static bool github_asked;
+
+static const char *fetch_channel(const char *channel, long long *serial, bool github_only)
 {
 	char list[MAX_SOURCES + 1][512];
 	const char *failure = NULL;
@@ -570,12 +575,14 @@ static const char *fetch_channel(const char *channel, long long *serial)
 	int n = sources(list);
 
 	*serial = -1;
-	for (int i = 0; i <= n; i++) {
+	for (int i = github_only ? n : 0; i <= n; i++) {
 		long long s = -1;
 		const char *rc;
 
-		if (i == n && (answered || *serial >= 0))
+		if (i == n && !github_only && (answered || *serial >= 0))
 			break;
+		if (i == n)
+			github_asked = true;
 		rc = fetch_from(list[i], channel, &s);
 		/* A 404 or a bad signature is an answer: only silence or HTTP
 		 * errors from every source bring in the fallback. */
@@ -594,8 +601,10 @@ static const char *fetch_channel(const char *channel, long long *serial)
 	}
 	unlink(UPDATE_DIR "/manifest.cand");
 	unlink(UPDATE_DIR "/manifest.cand.sig");
+	/* A host that is down does not count once another one answered
+	 * (GitHub's 404 while the backend is down = nothing published). */
 	if (*serial < 0)
-		return failure ? failure : "";
+		return failure && (!answered || !strcmp(failure, "signature")) ? failure : "";
 	rename(UPDATE_DIR "/manifest.best", UPDATE_DIR "/manifest.cand");
 	rename(UPDATE_DIR "/manifest.best.sig", UPDATE_DIR "/manifest.cand.sig");
 	return NULL;
@@ -622,12 +631,17 @@ static int cmd_check(void)
 	if (mkdir(UPDATE_DIR, 0700) != 0 && errno != EEXIST)
 		return fail("storage");
 	current_channel(channel, sizeof(channel));
+	/* Pass 0: the sources (GitHub only if none answers). Pass 1, only when
+	 * no source had a verified manifest on any channel: GitHub alone. */
+	for (int pass = 0; pass < 2 && best < 0 && !(pass && github_asked); pass++)
 	for (rank = channel_rank(channel); rank >= 0; rank--) {
 		long long serial = -1;
-		const char *rc = fetch_channel(channels[rank], &serial);
+		const char *rc = fetch_channel(channels[rank], &serial, pass == 1);
 
+		/* A GitHub failure in pass 1 does not turn the sources' "nothing
+		 * published" into an error. */
 		if (rc) {
-			if (*rc && !failure)
+			if (*rc && !failure && !pass)
 				failure = rc;
 			continue;
 		}

@@ -40,6 +40,7 @@ cc_updatectl() # OUTPUT [EXTRA...]
 {
     out="$1"; shift
     gcc -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -Wno-format-truncation \
+        -DUPDATE_SOURCES='"http://127.0.0.1:9"' -DSOURCE_SCHEME='"http://"' -DSOURCES_FILE="\"$R/state/update/sources\"" \
         -DUPDATE_URL="\"http://127.0.0.1:$PORT\"" -DUPDATE_DIR="\"$U\"" -DUPDATE_LOCK="\"$T/update.lock\"" -DOS_RELEASE="\"$R/etc/os-release\"" \
         -DBUILD_ID_FILE="\"$R/usr/share/nuubos/build-id\"" -DBUILD_SERIAL_FILE="\"$R/usr/share/nuubos/build-serial\"" \
         -DCHANNEL_FILE="\"$R/state/update/channel\"" -DAUTO_FILE="\"$R/state/update/auto-off\"" -DUPDATE_DEFAULT_CHANNEL='"nightly"' "$@" \
