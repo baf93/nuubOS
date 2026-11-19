@@ -143,6 +143,8 @@
 /* Performance overlay font (RetroArch patch 0004 draws with the OSD font). */
 #define OSD_FONT "/usr/share/fonts/cantarell/Cantarell-Bold.otf"
 #define DISPLAY_CONF SHARE_DIR "/display.conf"
+/* NES releases that exist only as PAL carts (CRC32 without the iNES header). */
+#define NES_PAL_CONF SHARE_DIR "/nes-pal.conf"
 /* Game render height on HDMI: RetroArch (patch 0005) draws a buffer of
  * this many lines, never more than its logical window (1280x720 on a
  * 1080p TV at the HDMI output scale 1.5), and the display engine scales it
@@ -2487,6 +2489,54 @@ static bool hdmi_active(void)
 	return strcmp(value, "enabled") == 0;
 }
 
+/* True when the content is a dump of a PAL-only NES release (nes-pal.conf):
+ * CRC32 of the file without its 16-byte iNES header, as No-Intro lists it.
+ * Archives are not looked into (FCEUmm sees them through RetroArch). */
+static bool nes_pal_dump(const char *content)
+{
+	static const size_t max_size = 8u << 20;
+	uint32_t table[256], crc = 0xffffffffu;
+	unsigned char buf[16384];
+	char line[256], hex[9];
+	const char *dot = strrchr(content, '.');
+	size_t n, total = 0;
+	bool first = true, found = false;
+	FILE *fp;
+
+	if (!dot || (strcasecmp(dot, ".nes") && strcasecmp(dot, ".unh")))
+		return false;
+	for (uint32_t i = 0; i < 256; i++) {
+		uint32_t c = i;
+
+		for (int k = 0; k < 8; k++)
+			c = c & 1 ? 0xedb88320u ^ (c >> 1) : c >> 1;
+		table[i] = c;
+	}
+	if (!(fp = fopen(content, "rb")))
+		return false;
+	while ((n = fread(buf, 1, sizeof(buf), fp)) > 0 && total <= max_size) {
+		size_t skip = 0;
+
+		if (first && n >= 16 && !memcmp(buf, "NES\x1a", 4))
+			skip = 16;
+		first = false;
+		for (size_t i = skip; i < n; i++)
+			crc = table[(crc ^ buf[i]) & 0xff] ^ (crc >> 8);
+		total += n;
+	}
+	fclose(fp);
+	if (total == 0 || total > max_size)
+		return false;
+	snprintf(hex, sizeof(hex), "%08x", crc ^ 0xffffffffu);
+	if (!(fp = fopen(NES_PAL_CONF, "r")))
+		return false;
+	while (!found && fgets(line, sizeof(line), fp))
+		found = !strncasecmp(line, hex, 8) && (line[8] == ' ' || line[8] == '\n' ||
+						       line[8] == '\0');
+	fclose(fp);
+	return found;
+}
+
 static int game_render_height(const char *system)
 {
 	char value[16] = "";
@@ -4698,6 +4748,21 @@ static const char *launch(const char *game, const char *mode, const char *net)
 			if (!read_core_option(path, fs->key[k], value, sizeof(value)))
 				write_core_option(path, fs->key[k], fs->initial[k]);
 			session_core_option(fs->key[k], fs->value[k][mode]);
+		}
+	}
+	if (!strncmp(session.core, "fceumm", 6) && nes_pal_dump(session.content)) {
+		/* A PAL-only NES game whose file name has no region tag: FCEUmm's
+		 * Auto would run it at the NTSC 60 Hz, 20 % fast. PAL for this
+		 * session; a region the user chose stays. */
+		char value[64];
+
+		if (!read_core_option(path, "fceumm_region", value, sizeof(value))) {
+			write_core_option(path, "fceumm_region", "Auto");
+			copy_text(value, sizeof(value), "Auto");
+		}
+		if (!strcmp(value, "Auto")) {
+			session_core_option("fceumm_region", "PAL");
+			log_msg("emud: PAL-only NES dump, fceumm_region PAL for this session");
 		}
 	}
 

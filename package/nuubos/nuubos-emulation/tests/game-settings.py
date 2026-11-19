@@ -17,20 +17,26 @@ t = tempfile.mkdtemp()
 run, ud, share, state = t + '/run', t + '/userdata', t + '/share', t + '/state/users'
 emu_share, cores = t + '/emushare', t + '/cores'
 user = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-for d in (run + '/user', ud + '/roms/snes', ud + '/roms/psx', share, emu_share + '/shaders', cores,
+for d in (run + '/user', ud + '/roms/snes', ud + '/roms/psx', ud + '/roms/nes', share, emu_share + '/shaders', cores,
           state + '/' + user + '/secrets', t + '/inc/nuubos'):
     os.makedirs(d, exist_ok=True)
 open(share + '/systems.conf', 'w').write(open(lib + '/systems.conf').read())
 open(run + '/user/active', 'w').write(user + '\n')
 open(ud + '/roms/snes/Mario.sfc', 'w').write('x' * 64)
 open(ud + '/roms/psx/Crash.chd', 'w').write('x' * 64)
-open(emu_share + '/cores.conf', 'w').write('snes|snes9x,bsnes,missing\npsx|pcsx_rearmed\nn64|parallel_n64_nuubos\ndreamcast|flycast_nuubos\n')
-for c in ('snes9x', 'bsnes', 'pcsx_rearmed', 'parallel_n64_nuubos', 'flycast_nuubos'):
+# NES: a PAL-only dump (its headerless CRC32 in nes-pal.conf) and another.
+import zlib
+nes_header = b'NES\x1a\x02\x01\x01' + b'\0' * 9
+open(ud + '/roms/nes/Pal.nes', 'wb').write(nes_header + b'P' * 4096)
+open(ud + '/roms/nes/Ntsc.nes', 'wb').write(nes_header + b'N' * 4096)
+open(emu_share + '/cores.conf', 'w').write('snes|snes9x,bsnes,missing\npsx|pcsx_rearmed\nnes|fceumm\nn64|parallel_n64_nuubos\ndreamcast|flycast_nuubos\n')
+for c in ('snes9x', 'bsnes', 'pcsx_rearmed', 'fceumm', 'parallel_n64_nuubos', 'flycast_nuubos'):
     open(cores + '/%s_libretro.so' % c, 'w').write('')
 open(emu_share + '/retroarch.cfg', 'w').write(
     'aspect_ratio_index = "22"\nvideo_smooth = "false"\nvideo_shader_enable = "true"\n'
     'cheevos_enable = "false"\nmenu_driver = "ozone"\n')
 open(emu_share + '/retroarch-core-options.cfg', 'w').write('')
+open(emu_share + '/nes-pal.conf', 'w').write('# comment\n%08x Pal (Europe)\n' % zlib.crc32(b'P' * 4096))
 open(emu_share + '/shaders/global.glslp', 'w').write('')
 open(emu_share + '/display.conf', 'w').write('snes|crt\n')
 open(emu_share + '/libretro.conf', 'w').write('snes|Nintendo - Super Nintendo Entertainment System\n')
@@ -164,7 +170,7 @@ def wait(cond, secs=5):
     return False
 
 try:
-    wait(lambda: 'games=2' in cmd('libraryd.sock', 'STATUS'))
+    wait(lambda: 'games=4' in cmd('libraryd.sock', 'STATUS'))
     game = [l for l in cmd('libraryd.sock', 'GAMES\tsystem:snes').splitlines() if l.startswith('game=')][0].split('=')[1].split('\t')[0]
     gs = cmd('emud.sock', 'GAME_SETTINGS\t%s\tsnes' % game)
     check('defaults', 'core=snes9x\n' in gs and 'core_override=\n' in gs and 'cores=snes9x,bsnes,mesen-s\n' in gs)
@@ -310,6 +316,25 @@ try:
     check('frameskip follows the system', 'system_frameskip=max\n' in cmd('emud.sock', 'GAME_SETTINGS\t%s\tpsx' % psx)
           and psx_frameskip() == ('"auto"', '"3"'))
     cmd('emud.sock', 'SYSTEM_RESET\tpsx')
+
+    # NES region: a PAL-only dump runs as PAL for the session when the
+    # user's FCEUmm region is Auto; another game and a chosen region stay.
+    nes = dict((l.split('\t')[2], l.split('=')[1].split('\t')[0])
+               for l in cmd('libraryd.sock', 'GAMES\tsystem:nes').splitlines() if l.startswith('game='))
+    def nes_region(name):
+        ok = cmd('emud.sock', 'LAUNCH\t' + nes[name]).startswith('OK')
+        ok = ok and wait(lambda: 'state=running' in cmd('emud.sock', 'STATUS'))
+        opts = dict(l.split(' = ', 1) for l in open(copts).read().splitlines() if ' = ' in l)
+        cmd('emud.sock', 'QUIT')
+        ok = ok and wait(lambda: 'state=idle' in cmd('emud.sock', 'STATUS'))
+        return ok and opts.get('fceumm_region')
+    check('nes pal dump runs as PAL', nes_region('Pal') == '"PAL"')
+    check('nes region Auto restored', 'fceumm_region = "Auto"\n' in open(copts).read())
+    check('nes other dump stays Auto', nes_region('Ntsc') == '"Auto"')
+    opts = open(copts).read().replace('fceumm_region = "Auto"', 'fceumm_region = "NTSC"')
+    open(copts, 'w').write(opts)
+    check('nes chosen region kept', nes_region('Pal') == '"NTSC"')
+    open(copts, 'w').write(opts.replace('fceumm_region = "NTSC"', 'fceumm_region = "Auto"'))
 
     # System Settings (GitHub #12): a game's unset key follows its system.
     sysdir = '%s/users/%s/appdata/nuubos-emulation/systems' % (ud, user)

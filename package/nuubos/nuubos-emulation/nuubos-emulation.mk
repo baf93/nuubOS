@@ -7,8 +7,9 @@
 NUUBOS_EMULATION_VERSION = 0.1.0
 NUUBOS_EMULATION_SITE = $(BR2_EXTERNAL_NUUBOS_PATH)/package/nuubos/nuubos-emulation/src
 NUUBOS_EMULATION_SITE_METHOD = local
-NUUBOS_EMULATION_LICENSE = GPL-3.0+, CC-BY-4.0 (Netplay icon)
-NUUBOS_EMULATION_LICENSE_FILES = LICENSE app/ATTRIBUTION.txt app/LICENSE-CC-BY-4.0.txt
+NUUBOS_EMULATION_LICENSE = GPL-3.0+, CC-BY-4.0 (Netplay icon), CC-BY-SA-4.0 (nes-pal.conf, from libretro-database)
+NUUBOS_EMULATION_LICENSE_FILES = LICENSE app/ATTRIBUTION.txt app/LICENSE-CC-BY-4.0.txt \
+	LICENSE-CC-BY-SA-4.0.txt
 NUUBOS_EMULATION_DEPENDENCIES = nuubos-notify libcurl
 
 define NUUBOS_EMULATION_BUILD_CMDS
@@ -77,6 +78,8 @@ define NUUBOS_EMULATION_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/share/nuubos/emulation/shaders/bezel-logo.png
 	$(INSTALL) -D -m 0644 $(@D)/display.conf \
 		$(TARGET_DIR)/usr/share/nuubos/emulation/display.conf
+	$(INSTALL) -D -m 0644 $(@D)/nes-pal.conf \
+		$(TARGET_DIR)/usr/share/nuubos/emulation/nes-pal.conf
 	$(INSTALL) -D -m 0644 "$(@D)/autoconfig/udev/nuubOS Gamepad.cfg" \
 		"$(TARGET_DIR)/usr/share/retroarch/autoconfig/udev/nuubOS Gamepad.cfg"
 endef
