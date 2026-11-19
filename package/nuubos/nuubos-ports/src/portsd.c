@@ -69,7 +69,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <linux/audit.h>
+#include <linux/filter.h>
 #include <linux/loop.h>
+#include <linux/seccomp.h>
 #include <linux/openat2.h>
 
 #define RUN_ROOT "/run/nuubos"
@@ -933,8 +936,52 @@ static int set_media_access(const char *port, bool on)
  * fork). */
 static char sandbox_src[PATH_MAX];
 
+/*
+ * A seccomp program for bwrap --seccomp: every chown family call succeeds
+ * without doing anything, like on vfat/exFAT with "quiet". Inside the
+ * sandbox only uid/gid 0 are mapped and no capability is left, so a real
+ * chown can never change an owner; installers that restore archive owners
+ * (cpio/tar running as "root", e.g. the Mina the Hollower patcher with a
+ * macOS package, uid 501: GitHub #41) then fail with EINVAL. A filter, not
+ * an LD_PRELOAD shim, so ports' static tools are covered too. Returns an fd
+ * (not close-on-exec) holding the program, or -1.
+ */
+static int chown_filter_fd(void)
+{
+#define NR(n) BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (n), 0, 1), BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | 0)
+	/* aarch64: fchownat 54, fchown 55. 32-bit ARM EABI (armhf ports):
+	 * lchown 16, fchown 95, chown 182, lchown32 198, fchown32 207,
+	 * chown32 212, fchownat 325. */
+	static const struct sock_filter prog[] = {
+		BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
+		/* Not aarch64: skip its 6 instructions to the ARM check. */
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 0, 6),
+		BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+		NR(54), NR(55),
+		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+		/* Not ARM either: skip its 15 instructions to the last allow. */
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_ARM, 0, 15),
+		BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+		NR(16), NR(95), NR(182), NR(198), NR(207), NR(212), NR(325),
+		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+	};
+#undef NR
+	int fd = (int)syscall(SYS_memfd_create, "nuubos-ports-seccomp", 0);
+
+	if (fd < 0)
+		return -1;
+	if (write(fd, prog, sizeof(prog)) != (ssize_t)sizeof(prog) || lseek(fd, 0, SEEK_SET) != 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
 static void sandbox_exec(const char *script)
 {
+	static char seccomp_fd[16];
+	int filter = chown_filter_fd();
 	const char *port = strrchr(script, '/') ? strrchr(script, '/') + 1 : script;
 	static char *argv[160];
 	int n = 0;
@@ -953,6 +1000,12 @@ static void sandbox_exec(const char *script)
 	ARG("--unshare-cgroup-try");
 	ARG("--die-with-parent");
 	ARG2("--cap-drop", "ALL");
+	if (filter >= 0) {
+		snprintf(seccomp_fd, sizeof(seccomp_fd), "%d", filter);
+		ARG2("--seccomp", seccomp_fd);
+	} else {
+		log_msg("portsd: chown filter not created, archive owners may fail");
+	}
 	/* The system, read-only. */
 	ARG3("--ro-bind", "/usr", "/usr");
 	ARG3("--ro-bind", "/bin", "/bin");
