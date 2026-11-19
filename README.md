@@ -9,10 +9,10 @@ nuubOS boots straight into a controller-first home screen, plays games through
 RetroArch, streams from your PC, plays music and video, and keeps itself up to date
 with signed, rollback-safe updates.
 
-> **Status: release candidate (1.0.0-rc.4).** Bug fixes only until 1.0.0; nightly
+> **Status: release candidate (1.0.0-rc.5).** Bug fixes only until 1.0.0; nightly
 > images are for testers. Keep a backup of your saves. See [Known issues](https://github.com/baf93/nuubOS/wiki/Known-Issues).
 
-**[Download](https://github.com/baf93/nuubOS/releases)** ·
+**[Download](https://sourceforge.net/projects/nuubos/files/)** ·
 **[User guide (wiki)](https://github.com/baf93/nuubOS/wiki)** ·
 **[Discord](https://discord.gg/VHfUANfVvX)** ·
 **[Technical documentation](docs/technical/README.md)** ·
@@ -39,8 +39,9 @@ with signed, rollback-safe updates.
   download Valve's app from the console).
 - **Media**: a music and video player for local files, network shares and Jellyfin.
   You can turn the screen off and use the console as a music player.
-- **Connectivity**: Wi-Fi, Bluetooth audio and controllers, a web control panel over
-  HTTPS, SSH/SFTP and a Terminal app, SMB file sharing, Syncthing sync between consoles
+- **Connectivity**: Wi-Fi, Bluetooth audio and controllers, USB-C headsets and DACs, a
+  web control panel over HTTPS, SSH/SFTP and a Terminal app, SMB file sharing, Syncthing
+  sync between consoles
   (saves, states, covers and, if you want, games), and screen casting to Chromecast,
   Miracast and DLNA TVs.
 - **Two cards**: games on the second card are used as they are, from most other
@@ -63,15 +64,16 @@ prepare the SD card.
 | RG40XX-V, RG40XX-V V2 | Tested |
 | RG CubeXX | Tested |
 | RG35XX Pro | Tested (new backlight driver not tested yet) |
-| RG35XX H, RG35XX SP, RG40XX H, RG SP | Community tested |
-| RG35XX 2024, RG35XX Plus, RG34XX, RG34XX SP, RG28XX | Supported, not tested on hardware yet |
+| RG35XX H, RG35XX Plus, RG35XX SP, RG34XX, RG34XX SP, RG40XX H, RG SP | Community tested |
+| RG35XX 2024, RG28XX | Supported, not tested on hardware yet |
 
 Details and the exact device names: [Supported Devices](https://github.com/baf93/nuubOS/wiki/Supported-Devices).
 
 ## Quick start
 
 1. Download `nuubOS-<version>-anbernic-h700.img.xz` from
-   [Releases](https://github.com/baf93/nuubOS/releases).
+   [SourceForge](https://sourceforge.net/projects/nuubos/files/) (stable releases are also on
+   [GitHub Releases](https://github.com/baf93/nuubOS/releases)).
 2. Write it to a microSD card (8 GB or larger) with
    [Raspberry Pi Imager](https://www.raspberrypi.com/software/): *Choose OS* →
    *Use custom* → the downloaded file. Answer *No* if Imager offers OS customisation.

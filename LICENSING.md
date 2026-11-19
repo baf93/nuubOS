@@ -48,7 +48,7 @@ hardware that is sold.
 Every published nuubOS image comes with its `legal-info` archive: the manifest of all
 packages with their licenses, license texts, and the complete corresponding source
 code of the GPL/LGPL components and the patches applied to them. The archive is
-attached to the same GitHub release as the image. Third-party notices for the Rust
+published next to the image (SourceForge, and GitHub Releases for stable releases). Third-party notices for the Rust
 crates and Go modules linked into nuubOS programs are installed in the image under
 `/usr/share/licenses/`.
 
