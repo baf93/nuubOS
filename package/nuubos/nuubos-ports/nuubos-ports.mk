@@ -28,6 +28,9 @@ define NUUBOS_PORTS_BUILD_CMDS
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		-std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -Wno-format-truncation \
 		$(@D)/ports-move.c -o $(@D)/nuubos-ports-move
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) -shared -fPIC \
+		-std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror \
+		$(@D)/mono-gl-fix.c -o $(@D)/mono-gl-fix.so -ldl
 endef
 
 # Port scripts expect /roms/ports (PortMaster's default layout); USERDATA
@@ -42,6 +45,10 @@ define NUUBOS_PORTS_INSTALL_TARGET_CMDS
 	ln -sfn mount $(TARGET_DIR)/usr/lib/nuubos/ports/bin/umount
 	$(INSTALL) -D -m 0644 $(@D)/portmaster/mod_nuubOS.txt \
 		$(TARGET_DIR)/usr/share/nuubos/ports/mod_nuubOS.txt
+	$(INSTALL) -D -m 0644 $(@D)/portmaster/bash-env.sh \
+		$(TARGET_DIR)/usr/lib/nuubos/ports/bash-env.sh
+	$(INSTALL) -D -m 0755 $(@D)/mono-gl-fix.so \
+		$(TARGET_DIR)/usr/lib/nuubos/ports/mono-gl-fix.so
 	$(INSTALL) -D -m 0755 $(@D)/S49nuubos-portsd $(TARGET_DIR)/etc/init.d/S49nuubos-portsd
 	$(INSTALL) -D -m 0755 $(@D)/57-ports \
 		$(TARGET_DIR)/usr/lib/nuubos/lifecycle-hooks/pre-power.d/57-ports

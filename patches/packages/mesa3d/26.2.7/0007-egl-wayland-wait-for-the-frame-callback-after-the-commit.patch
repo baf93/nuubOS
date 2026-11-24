@@ -1,0 +1,58 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] egl/wayland: wait for the frame callback after the commit
+ (NUUBOS_SWAP_WAIT_AFTER)
+
+eglSwapBuffers waits for the frame callback of the swap before, then
+attaches and commits the new frame. A client that renders right after
+the callback (RetroArch with vsync) then commits every frame just after
+the compositor has composed: on the H700 with labwc, RetroArch's swap
+returned 0.5 ms after each vblank, labwc composed at 0.27 ms, so each
+frame waited ~15 ms in the swap, then a refresh in labwc, then the
+scan-out: three refreshes from the core's input poll to the screen.
+NUUBOS_SWAP_WAIT_AFTER=1 makes the swap commit at once and wait for that
+frame's callback before returning: same frame rate, one refresh less.
+Without the variable nothing changes.
+
+Signed-off-by: nuubOS
+---
+--- a/src/egl/drivers/dri2/platform_wayland.c
++++ b/src/egl/drivers/dri2/platform_wayland.c
+@@ -1480,6 +1480,19 @@
+    .getCapability = dri2_wl_get_capability,
+ };
+ 
++/* nuubOS: NUUBOS_SWAP_WAIT_AFTER=1, see dri2_wl_swap_buffers_with_damage. */
++static bool
++nuubos_swap_wait_after(void)
++{
++   static int on = -1;
++
++   if (on < 0) {
++      const char *v = getenv("NUUBOS_SWAP_WAIT_AFTER");
++      on = v && v[0] == '1';
++   }
++   return on;
++}
++
+ static void
+ wayland_throttle_callback(void *data, struct wl_callback *callback,
+                           uint32_t time)
+@@ -1762,6 +1775,18 @@
+ 
+    wl_display_flush(dri2_dpy->wl_dpy);
+ 
++   /* nuubOS: wait for this frame's callback now, after its commit, instead
++    * of at the start of the next swap before that frame's commit. With the
++    * wait first, a client that renders right after the callback commits
++    * each frame just after the compositor has composed, so every frame
++    * waits a whole refresh in the swap before it is even attached. Same
++    * frame rate, one refresh less from input to screen. */
++   if (draw->SwapInterval > 0 && nuubos_swap_wait_after())
++      while (dri2_surf->throttle_callback != NULL)
++         if (loader_wayland_dispatch(dri2_dpy->wl_dpy, dri2_surf->wl_queue,
++                                     NULL) == -1)
++            return -1;
++
+    return EGL_TRUE;
+ }
+ 

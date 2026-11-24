@@ -1,0 +1,145 @@
+diff --git a/package/mesa3d-headers/mesa3d-headers.mk b/package/mesa3d-headers/mesa3d-headers.mk
+index fd715b5f84..b87e890603 100644
+--- a/package/mesa3d-headers/mesa3d-headers.mk
++++ b/package/mesa3d-headers/mesa3d-headers.mk
+@@ -12,7 +12,7 @@ endif
+ 
+ # Not possible to directly refer to mesa3d variables, because of
+ # first/second expansion trickery...
+-MESA3D_HEADERS_VERSION = 26.1.8
++MESA3D_HEADERS_VERSION = 26.2.7
+ MESA3D_HEADERS_SOURCE = mesa-$(MESA3D_HEADERS_VERSION).tar.xz
+ MESA3D_HEADERS_SITE = https://archive.mesa3d.org
+ MESA3D_HEADERS_DL_SUBDIR = mesa3d
+diff --git a/package/mesa3d/0005-src-intel-compiler-jay-jay_ir.h-do-not-used-typed-en.patch b/package/mesa3d/0005-src-intel-compiler-jay-jay_ir.h-do-not-used-typed-en.patch
+deleted file mode 100644
+index af066287e2..0000000000
+--- a/package/mesa3d/0005-src-intel-compiler-jay-jay_ir.h-do-not-used-typed-en.patch
++++ /dev/null
+@@ -1,41 +0,0 @@
+-From 345ccf93e9d00dfd0f71085832a7df0170b74f74 Mon Sep 17 00:00:00 2001
+-From: Alexander Kanavin <alex@linutronix.de>
+-Date: Sun, 14 Jun 2026 17:42:19 +0200
+-Subject: [PATCH] src/intel/compiler/jay/jay_ir.h: do not used typed enum
+-
+-This is a C23 feature and not supported by gcc < 13, which
+-many host distros still have (e.g. Debian 12).
+-
+-Upstream-Status: Inappropriate [yocto host distro requirements]
+-Signed-off-by: Alexander Kanavin <alex@linutronix.de>
+-Upstream: N/A, code completely changed upstream
+-Signed-off-by: Thomas Petazzoni <thomas.petazzoni@bootlin.com>
+----
+- src/intel/compiler/jay/jay_ir.h | 4 ++--
+- 1 file changed, 2 insertions(+), 2 deletions(-)
+-
+-diff --git a/src/intel/compiler/jay/jay_ir.h b/src/intel/compiler/jay/jay_ir.h
+-index 8307044ef8a..abf175a71bf 100644
+---- a/src/intel/compiler/jay/jay_ir.h
+-+++ b/src/intel/compiler/jay/jay_ir.h
+-@@ -579,7 +579,7 @@ jay_type_is_any_float(enum jay_type t)
+-    return jay_base_type(t) == JAY_TYPE_F || jay_base_type(t) == JAY_TYPE_BF;
+- }
+- 
+--enum jay_predication : uint8_t {
+-+enum jay_predication {
+-    /** No predication. */
+-    JAY_NOT_PREDICATED = 0,
+- 
+-@@ -634,7 +634,7 @@ typedef struct jay_inst {
+-    bool decrement_dep:1;
+-    unsigned padding  :12;
+- 
+--   enum jay_predication predication;
+-+   uint8_t predication;
+-    enum jay_conditional_mod conditional_mod;
+- 
+-    jay_def cond_flag; /**< conditional flag */
+--- 
+-2.55.0
+-
+diff --git a/package/mesa3d/mesa3d.hash b/package/mesa3d/mesa3d.hash
+index dc7776488a..fe931e787e 100644
+--- a/package/mesa3d/mesa3d.hash
++++ b/package/mesa3d/mesa3d.hash
+@@ -1,6 +1,6 @@
+-# From https://lists.freedesktop.org/archives/mesa-announce/2026-August/000865.html
+-sha256  b320f65874fd9653ac6c0bd1616605387344e1247411a50c797b5f3fb9dc0b55  mesa-26.1.8.tar.xz
+-sha512  eb3d46ae9aaba70fdd908486cef24041fec9264ddf586eaebbba65ce55e716d306ef9e91be83e742dfaec4dfc94105a5cd3a36b29bf56614febcbcf6c1f8b516  mesa-26.1.8.tar.xz
++# Hashes calculados localmente sobre mesa-26.2.7.tar.xz (firma PGP no verificada)
++sha256  04294f75d22e9f61cd1e050206bc48b3d39366e788f1803a3368e3d5a872ce18  mesa-26.2.7.tar.xz
++sha512  1886bd11f1a2cf8aad5289636004f26536c8dbef47848c15f1ca307b8f8e98dc853c5901630f9be37bd0f1bc044990b924ab698bd493751ce48acb8eddf569d1  mesa-26.2.7.tar.xz
+ # License
+ sha256  0d1a0472ecc81830e75c20d59b0ea02841e3db21255e0ebad97ab682c54d6615  docs/license.rst
+ sha256  323c587d0ccf10e376f8bf9a7f31fb4ca6078105194b42e0b1e0ee2bc9bde71f  licenses/MIT
+diff --git a/package/mesa3d/mesa3d.mk b/package/mesa3d/mesa3d.mk
+index 87c7f427e4..c501441542 100644
+--- a/package/mesa3d/mesa3d.mk
++++ b/package/mesa3d/mesa3d.mk
+@@ -5,7 +5,7 @@
+ ################################################################################
+ 
+ # When updating the version, please also update mesa3d-headers
+-MESA3D_VERSION = 26.1.8
++MESA3D_VERSION = 26.2.7
+ MESA3D_SOURCE = mesa-$(MESA3D_VERSION).tar.xz
+ MESA3D_SITE = https://archive.mesa3d.org
+ MESA3D_LICENSE = MIT, SGI, Khronos
+@@ -30,7 +30,9 @@ MESA3D_DEPENDENCIES = \
+ 	zlib
+ 
+ MESA3D_CONF_OPTS = \
+-	-Dmicrosoft-clc=disabled
++	-Dgallium-rusticl=false \
++	-Dmicrosoft-clc=disabled \
++	-Dpower8=disabled
+ 
+ ifeq ($(BR2_PACKAGE_MESA3D_DRIVER)$(BR2_PACKAGE_XORG7),yy)
+ MESA3D_DEPENDENCIES += xlib_libxshmfence
+@@ -103,12 +105,6 @@ MESA3D_CONF_OPTS += \
+ 	-Dglx=disabled
+ endif
+ 
+-ifeq ($(BR2_ARM_CPU_HAS_NEON),y)
+-MESA3D_CONF_OPTS += -Dgallium-vc4-neon=auto
+-else
+-MESA3D_CONF_OPTS += -Dgallium-vc4-neon=disabled
+-endif
+-
+ # Drivers
+ 
+ #Gallium Drivers
+@@ -150,6 +146,7 @@ MESA3D_CONF_OPTS += \
+ 	-Dgallium-extra-hud=false
+ else
+ MESA3D_CONF_OPTS += \
++	-Dshared-glapi=enabled \
+ 	-Dgallium-drivers=$(subst $(space),$(comma),$(MESA3D_GALLIUM_DRIVERS-y)) \
+ 	-Dgallium-extra-hud=true
+ endif
+diff --git a/package/wlroots/wlroots.hash b/package/wlroots/wlroots.hash
+index cd1b83e6e4..1d151b4f8a 100644
+--- a/package/wlroots/wlroots.hash
++++ b/package/wlroots/wlroots.hash
+@@ -1,7 +1,7 @@
+ # Locally calculated after checking pgp signature
+ # https://gitlab.freedesktop.org/wlroots/wlroots/-/releases/0.20.0/downloads/wlroots-0.20.0.tar.gz.sig
+ # with key 34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48 "emersion <contact@emersion.fr>"
+-sha256  33f52414e1b280839aeb70786f0ae2c9f54e27ad4873108d86270a2f89c4934b  wlroots-0.20.0.tar.gz
++sha256  80c567d2ed4efb2cfa6b077f22c7a710d9c78ba4e185a75e8694001114af0733  wlroots-0.20.2.tar.gz
+ 
+ # Hashes for license files:
+ sha256  35d427c043dcafe8893b9e7247348f599847c81d9a067703587c80707f3d58df  LICENSE
+diff --git a/package/wlroots/wlroots.mk b/package/wlroots/wlroots.mk
+index 5ce634d402..cae2ff0c5d 100644
+--- a/package/wlroots/wlroots.mk
++++ b/package/wlroots/wlroots.mk
+@@ -4,7 +4,7 @@
+ #
+ ################################################################################
+ 
+-WLROOTS_VERSION = 0.20.0
++WLROOTS_VERSION = 0.20.2
+ WLROOTS_SITE = https://gitlab.freedesktop.org/wlroots/wlroots/-/releases/$(WLROOTS_VERSION)/downloads
+ WLROOTS_LICENSE = MIT
+ WLROOTS_LICENSE_FILES = LICENSE

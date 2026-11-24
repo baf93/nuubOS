@@ -14,6 +14,7 @@ Status: `done`, `in progress`, `next`, `planned`, `rejected`.
 - Transaction elimination (CRC) is already on for render targets; no AFBC on this GPU; Mesa 25.1-26.0 bring no G31 performance work ([relnotes](https://docs.mesa3d.org/relnotes/26.0.0.html)): no Mesa upgrade for performance.
 - Baseline survey (`tools/perf-power/glsurvey.sh`, user settings bezel + CRT on, mains): SNES 50 fps, CPU 40 % of a core, GPU fragment 39 %; GBA 60 / 41 % / 21 %; PS1 50 / 43 % / 39 %; N64 (Mario Kart PAL) 50 / 62 % / 39 %, GPU at 600 MHz 98 % of the time; NDS 60 / 109 %. 2D games spend ~39 % of the GPU only on presentation (bezel bands + CRT pass at 720x720).
 - No battery run-down measurements (user decision 2026-10-28: we do not need to know how much; lower clocks/voltage at the same fps obviously draw less). Judge changes by clock/voltage residency, GPU/CPU busy and fps (glsurvey.sh). The AXP717 cannot read power on battery anyway (platform.md).
+- 2026-11-24: Mesa was upgraded to 26.2.7 for issue #44 (correctness, not performance): patches 0004-0011, Panfrost LLVM/CLC enabled, LTO off. The figures above were measured on Mesa 25.0.6 with 0001-0010 and LTO unless stated otherwise.
 
 ## Phases
 

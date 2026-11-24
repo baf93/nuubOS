@@ -1,0 +1,33 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] nuubOS: idempotent SetFullscreen action
+
+labwc 0.20.2 only has ToggleFullscreen. A window rule that uses it on
+first map would turn fullscreen OFF for a client (an SDL2 port) that
+already requested fullscreen at window creation. Ports need a stable,
+idempotent way to enter fullscreen so wlroots can scan out their surface
+directly; Quick Menu remains a layer surface above it.
+
+Upstream-Status: Pending [matches upstream labwc SetFullscreen action]
+
+--- a/src/action.c
++++ b/src/action.c
+@@ -93,6 +93,7 @@
+ 	X(MAXIMIZE, "Maximize") \
+ 	X(UNMAXIMIZE, "UnMaximize") \
+ 	X(TOGGLE_FULLSCREEN, "ToggleFullscreen") \
++	X(SET_FULLSCREEN, "SetFullscreen") \
+ 	X(SET_DECORATIONS, "SetDecorations") \
+ 	X(TOGGLE_DECORATIONS, "ToggleDecorations") \
+ 	X(TOGGLE_ALWAYS_ON_TOP, "ToggleAlwaysOnTop") \
+@@ -1202,6 +1203,11 @@
+ 			view_toggle_fullscreen(view);
+ 		}
+ 		break;
++	case ACTION_TYPE_SET_FULLSCREEN:
++		if (view) {
++			view_set_fullscreen(view, true);
++		}
++		break;
+ 	case ACTION_TYPE_SET_DECORATIONS:
+ 		if (view) {
+ 			enum lab_ssd_mode mode = action_get_int(action,

@@ -1,0 +1,59 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] panfrost: dirty textures and samplers only when they change
+
+panfrost_set_sampler_views() and panfrost_bind_sampler_states() marked
+the stage's texture/sampler state dirty on every call, and st/mesa calls
+them again at most draws with the same views and samplers (a core that
+binds a texture per draw, e.g. Flycast), so every draw emitted new
+texture and sampler descriptors into the batch pool. Mark them dirty
+only when a slot really changes. Everything else that needs new
+descriptors already dirties all state: a new batch, a BO replaced on a
+busy resource, a layout conversion (it flushes the batches reading the
+resource), and panfrost_update_sampler_view() still follows the
+resource whenever descriptors are emitted.
+
+Signed-off-by: nuubOS Project <noreply@nuubos.invalid>
+---
+--- a/src/gallium/drivers/panfrost/pan_context.c
++++ b/src/gallium/drivers/panfrost/pan_context.c
+@@ -327,7 +327,13 @@
+                              unsigned num_sampler, void **sampler)
+ {
+    struct panfrost_context *ctx = pan_context(pctx);
+-   ctx->dirty_shader[shader] |= PAN_DIRTY_STAGE_SAMPLER;
++
++   /* st/mesa binds the same samplers again at most draws: re-emitting the
++    * descriptors only when one changes (a new batch dirties everything). */
++   for (unsigned i = 0; i < num_sampler; i++) {
++      if (ctx->samplers[shader][start_slot + i] != (sampler ? sampler[i] : NULL))
++         ctx->dirty_shader[shader] |= PAN_DIRTY_STAGE_SAMPLER;
++   }
+ 
+    for (unsigned i = 0; i < num_sampler; i++) {
+       unsigned p = start_slot + i;
+@@ -393,11 +399,24 @@
+                            struct pipe_sampler_view **views)
+ {
+    struct panfrost_context *ctx = pan_context(pctx);
+-   ctx->dirty_shader[shader] |= PAN_DIRTY_STAGE_TEXTURE;
+ 
+    unsigned new_nr = 0;
+    unsigned i;
+ 
++   /* The same views bound again (st/mesa does it at most draws) need no new
++    * texture descriptors: a new batch, a replaced BO (pan_resource.c) and a
++    * layout conversion (it flushes the batches reading the resource) dirty
++    * everything anyway, and panfrost_update_sampler_view() follows the
++    * resource when descriptors are emitted. */
++   for (i = 0; i < num_views + unbind_num_trailing_slots; ++i) {
++      struct pipe_sampler_view *view =
++         (i < num_views && views) ? views[i] : NULL;
++
++      if ((struct pipe_sampler_view *)ctx->sampler_views[shader][i + start_slot] !=
++          view)
++         ctx->dirty_shader[shader] |= PAN_DIRTY_STAGE_TEXTURE;
++   }
++
+    for (i = 0; i < num_views; ++i) {
+       struct pipe_sampler_view *view = views ? views[i] : NULL;
+       unsigned p = i + start_slot;

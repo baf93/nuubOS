@@ -89,6 +89,10 @@ BR2_PACKAGE_LIBDRM=y
 # GPU userspace - Mesa/Panfrost
 BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_PACKAGE_MESA3D=y
+# Mesa 26.2.7 requires LLVM for Panfrost: CLC is mandatory for this driver
+# (meson.build: `CLC requires LLVM`). Buildroot selects NEEDS_PRECOMP_COMPILER,
+# spirv-llvm-translator and spirv-tools through the panfrost Kconfig entry.
+BR2_PACKAGE_MESA3D_LLVM=y
 BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST=y
 BR2_PACKAGE_MESA3D_OPENGL_EGL=y
 BR2_PACKAGE_MESA3D_OPENGL_ES=y

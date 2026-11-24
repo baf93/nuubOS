@@ -1,0 +1,49 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] panfrost: keep a BO's CPU mapping while it is in the BO cache
+
+Rebased for the extra `bo->dev &&` guard in panfrost_bo_unreference()
+and for the current panfrost_bo_free(). The munmap now happens in
+panfrost_bo_free(), which requires a forward declaration.
+
+Upstream-Status: Pending
+
+---
+
+diff --git a/src/gallium/drivers/panfrost/pan_bo.c b/src/gallium/drivers/panfrost/pan_bo.c
+index d0ce95c..f63cd04 100644
+--- a/src/gallium/drivers/panfrost/pan_bo.c
++++ b/src/gallium/drivers/panfrost/pan_bo.c
+@@ -102,6 +102,8 @@ err_alloc:
+    return NULL;
+ }
+ 
++static void panfrost_bo_munmap(struct panfrost_bo *bo);
++
+ static void
+ panfrost_bo_free(struct panfrost_bo *bo)
+ {
+@@ -111,6 +113,9 @@ panfrost_bo_free(struct panfrost_bo *bo)
+    struct pan_kmod_vm *vm = bo->dev->kmod.vm;
+    uint64_t gpu_va = bo->ptr.gpu;
+ 
++   /* A cached BO keeps its CPU mapping until it is freed. */
++   panfrost_bo_munmap(bo);
++
+    /* BO will be freed with the sparse array, but zero to indicate free */
+    memset(bo, 0, sizeof(*bo));
+ 
+@@ -456,9 +461,11 @@ panfrost_bo_unreference(struct panfrost_bo *bo)
+     * the slot has been returned already.
+     */
+    if (bo->dev && p_atomic_read(&bo->refcnt) == 0) {
+-      /* When the reference count goes to zero, we need to cleanup */
+-      panfrost_bo_munmap(bo);
+-
++      /* When the reference count goes to zero, we need to cleanup. The
++       * CPU mapping stays while the BO is in the cache (it is unmapped
++       * when the BO is freed, also when the kernel purged it meanwhile):
++       * unmapping on every release cost an mmap, page faults and a munmap
++       * at each reuse, e.g. every batch pool slab of every frame. */
+       if (dev->debug & (PAN_DBG_TRACE | PAN_DBG_SYNC))
+          pandecode_inject_free(dev->decode_ctx, bo->ptr.gpu,
+                                panfrost_bo_size(bo));

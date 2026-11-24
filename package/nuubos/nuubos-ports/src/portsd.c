@@ -140,6 +140,9 @@ static const char *in_ports(const char *sub)
 #define SB_BIN "/usr/lib/nuubos/ports/bin"
 #define BWRAP "/usr/bin/bwrap"
 #define BASH "/bin/bash"
+/* Read by every non-interactive bash of a port session: launchers export
+ * graphics hints after mod_nuubOS.txt, so pin them here instead. */
+#define BASH_ENV_FILE "/usr/lib/nuubos/ports/bash-env.sh"
 
 #define CGROUP_ROOT "/sys/fs/cgroup"
 #define CGROUP_DIR CGROUP_ROOT "/nuubos-ports"
@@ -1070,6 +1073,18 @@ static void sandbox_exec(const char *script)
 	setenv("WAYLAND_DISPLAY", "wayland-0", 1);
 	setenv("PIPEWIRE_RUNTIME_DIR", RUN_ROOT "/pipewire", 1);
 	setenv("SDL_VIDEODRIVER", "wayland", 1);
+	/* PortMaster launchers export EGL_PLATFORM=surfaceless and
+	 * SDL_RENDER_DRIVER=opengles2 after mod_nuubOS.txt is sourced. Make
+	 * those two names readonly-without-value in bash so the late exports
+	 * cannot reach the game; children inherit the SDL3 shim's hint. */
+	if (strcmp(port, "PortMaster.sh"))
+		setenv("BASH_ENV", BASH_ENV_FILE, 1);
+	/* SDL2 2.32.10 has no SDL_APP_ID hint: its Wayland backend uses this
+	 * variable as xdg_toplevel.app_id. labwc matches it to put port
+	 * windows in fullscreen, where wlroots can scan them out directly.
+	 * The PortMaster interface itself is not a game. */
+	if (strcmp(port, "PortMaster.sh"))
+		setenv("SDL_VIDEO_WAYLAND_WMCLASS", "nuubos-port", 1);
 	/* No window frames (labwc draws none, rc.xml): SDL would draw its own
 	 * with libdecor, a desktop title bar over the port. */
 	setenv("SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR", "0", 1);

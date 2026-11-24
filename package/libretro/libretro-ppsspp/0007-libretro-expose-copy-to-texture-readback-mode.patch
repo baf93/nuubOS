@@ -1,0 +1,55 @@
+From: nuubOS Project <noreply@nuubos.invalid>
+Subject: [PATCH] libretro: expose the "Copy to texture" GPU readback mode
+
+PPSSPP has three Skip GPU Readback modes (no skip, skip, copy to texture),
+but the libretro core only maps its option to the first two: any value
+other than "disabled" becomes SKIP. A game that reads a rendered
+framebuffer back for effects (the Persona 4 port uses it for motion blur)
+loses previous-frame data with SKIP, while NO_SKIP pays for a blocking
+GPU-to-CPU readback on every transfer, which is very slow on Panfrost.
+COPY_TO_TEXTURE keeps the copy on the GPU (CreateRAMFramebuffer plus
+BlitFramebuffer) and is much faster.
+
+Expose it as a third "texture" value of ppsspp_skip_gpu_readbacks. The
+existing "disabled"/"enabled" values and the upstream default are kept, so
+current configs and the nuubOS default (enabled) are unaffected.
+
+Upstream-Status: Pending
+---
+--- a/libretro/libretro_core_options.h
++++ b/libretro/libretro_core_options.h
+@@ -18,6 +18,14 @@
+    { NULL, NULL },       \
+ }
+ 
++#define SKIP_GPU_READBACK_OPTIONS   \
++{                                   \
++   { "disabled", NULL },            \
++   { "enabled",  NULL },            \
++   { "texture",  NULL },            \
++   { NULL, NULL },                  \
++}
++
+ #define MAC_ADDRESS_OPTIONS \
+ {                           \
+    { "0", NULL },           \
+@@ -534,7 +542,7 @@
+       "Some games require GPU readbacks, so be careful.",
+       NULL,
+       "hacks",
+-      BOOL_OPTIONS,
++      SKIP_GPU_READBACK_OPTIONS,
+       "disabled"
+    },
+    {
+--- a/libretro/libretro.cpp
++++ b/libretro/libretro.cpp
+@@ -794,6 +794,8 @@
+    {
+       if (!strcmp(var.value, "disabled"))
+          g_Config.iSkipGPUReadbackMode = (int)SkipGPUReadbackMode::NO_SKIP;
++      else if (!strcmp(var.value, "texture"))
++         g_Config.iSkipGPUReadbackMode = (int)SkipGPUReadbackMode::COPY_TO_TEXTURE;
+       else
+          g_Config.iSkipGPUReadbackMode = (int)SkipGPUReadbackMode::SKIP;
+    }

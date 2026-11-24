@@ -28,6 +28,14 @@
     <windowRule title="*">
       <action name="HideCursor" />
     </windowRule>
+    <!-- PortMaster games carry this app_id (portsd/mod_nuubOS.txt). A
+         fullscreen client leaves a single scene entry that wlroots can
+         scan out directly; SetFullscreen is idempotent (a port may already
+         have asked for fullscreen). The Quick Menu is a layer surface, so
+         it only forces composition while it is visible. -->
+    <windowRule identifier="nuubos-port">
+      <action name="SetFullscreen" />
+    </windowRule>
     <windowRule title="*" type="normal">
       <action name="Maximize" />
     </windowRule>
