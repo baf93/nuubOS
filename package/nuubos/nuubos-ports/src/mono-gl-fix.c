@@ -13,7 +13,9 @@
  *
  * For MonoGame processes only (mono executable or MONOGAME_PATCH set): also
  * bypass gl4es and advertise the desktop-GL framebuffer extensions that GLES3
- * has as core but MonoGame's DESKTOPGL build still looks up by name.
+ * has as core but MonoGame's DESKTOPGL build still looks up by name. Its
+ * glGetTexImage (used by Texture2D.GetData to recolour textures at runtime)
+ * is emulated with an FBO readback for RGBA8/level-0 2D textures.
  */
 
 #include <dlfcn.h>
@@ -85,10 +87,124 @@ static void trace_getintegerv(unsigned int pname, int *data)
 		*data = 96;
 }
 
+/* glGetTexImage is not in GLES: MonoGame's DESKTOPGL build calls it from
+ * Texture2D.GetData(). Emulate it for the RGBA8/level-0 case Stardew uses to
+ * recolour the farmer at runtime. The FBO size is learned from the texture
+ * specification calls; other formats/levels fall through to the real proc. */
+#define MAXTEX 65536
+static struct { unsigned short w, h; } texsz[MAXTEX];
+static unsigned bound2d;
+
+static void (*real_bindtex)(unsigned, unsigned);
+static void (*real_teximage2d)(unsigned, int, int, int, int, int,
+			       unsigned, unsigned, const void *);
+static void (*real_texstorage2d)(unsigned, int, unsigned, int, int);
+static void (*real_gettex)(unsigned, int, unsigned, unsigned, void *);
+
+static void (*gl_genfb)(int, unsigned *);
+static void (*gl_delfb)(int, const unsigned *);
+static void (*gl_bindfb)(unsigned, unsigned);
+static void (*gl_fbtex2d)(unsigned, unsigned, unsigned, unsigned, int);
+static void (*gl_readpix)(int, int, int, int, unsigned, unsigned, void *);
+static void (*gl_getint)(unsigned, int *);
+
+static void load_gl(void)
+{
+	if (gl_genfb)
+		return;
+	gl_genfb   = (void (*)(int, unsigned *))real_getproc("glGenFramebuffers");
+	gl_delfb   = (void (*)(int, const unsigned *))real_getproc("glDeleteFramebuffers");
+	gl_bindfb  = (void (*)(unsigned, unsigned))real_getproc("glBindFramebuffer");
+	gl_fbtex2d = (void (*)(unsigned, unsigned, unsigned, unsigned, int))real_getproc("glFramebufferTexture2D");
+	gl_readpix = (void (*)(int, int, int, int, unsigned, unsigned, void *))real_getproc("glReadPixels");
+	gl_getint  = (void (*)(unsigned, int *))real_getproc("glGetIntegerv");
+}
+
+static void hook_bindtex(unsigned target, unsigned id)
+{
+	if (target == 0x0DE1)		/* GL_TEXTURE_2D */
+		bound2d = id;
+	real_bindtex(target, id);
+}
+
+static void hook_teximage2d(unsigned t, int lvl, int ifmt, int w, int h,
+			    int border, unsigned fmt, unsigned type,
+			    const void *px)
+{
+	if (t == 0x0DE1 && lvl == 0 && bound2d < MAXTEX) {
+		texsz[bound2d].w = w;
+		texsz[bound2d].h = h;
+	}
+	real_teximage2d(t, lvl, ifmt, w, h, border, fmt, type, px);
+}
+
+static void hook_texstorage2d(unsigned t, int levels, unsigned ifmt,
+			      int w, int h)
+{
+	if (t == 0x0DE1 && bound2d < MAXTEX) {
+		texsz[bound2d].w = w;
+		texsz[bound2d].h = h;
+	}
+	real_texstorage2d(t, levels, ifmt, w, h);
+}
+
+/* Limits: RGBA8/UNSIGNED_BYTE/level 0 only; the bound texture is not tracked
+ * per texture unit; sizes come only from glTexImage2D/glTexStorage2D; texsz
+ * is not cleared on glDeleteTextures (overwritten on reuse); ids >= MAXTEX
+ * are not tracked. Any other case calls the original (likely a no-op). */
+static void hook_gettex(unsigned t, int lvl, unsigned fmt, unsigned type,
+			void *px)
+{
+	unsigned fbo;
+	int prev = 0;
+
+	load_gl();
+	if (t != 0x0DE1 || lvl != 0 || bound2d >= MAXTEX ||
+	    !texsz[bound2d].w || fmt != 0x1908 /* GL_RGBA */ ||
+	    type != 0x1401 /* GL_UNSIGNED_BYTE */ ||
+	    !gl_genfb || !gl_delfb || !gl_bindfb || !gl_fbtex2d ||
+	    !gl_readpix || !gl_getint) {
+		if (real_gettex)
+			real_gettex(t, lvl, fmt, type, px);
+		return;
+	}
+	gl_getint(0x8CAA /* GL_READ_FRAMEBUFFER_BINDING */, &prev);
+	gl_genfb(1, &fbo);
+	gl_bindfb(0x8CA8 /* GL_READ_FRAMEBUFFER */, fbo);
+	gl_fbtex2d(0x8CA8, 0x8CE0 /* GL_COLOR_ATTACHMENT0 */, 0x0DE1,
+		   bound2d, 0);
+	gl_readpix(0, 0, texsz[bound2d].w, texsz[bound2d].h,
+		   0x1908 /* GL_RGBA */, 0x1401 /* GL_UNSIGNED_BYTE */, px);
+	gl_bindfb(0x8CA8, (unsigned)prev);
+	gl_delfb(1, &fbo);
+}
+
 static void *trace_getproc(const char *name)
 {
 	void *p = real_getproc(name);
 
+	/* These must be installed even when SDL/GLES returns NULL for the
+	 * desktop-GL entry point, hence before the early return below. */
+	if (strcmp(name, "glBindTexture") == 0 && p) {
+		real_bindtex = (void (*)(unsigned, unsigned))p;
+		return (void *)hook_bindtex;
+	}
+	if (strcmp(name, "glTexImage2D") == 0 && p) {
+		real_teximage2d = (void (*)(unsigned, int, int, int, int, int,
+					    unsigned, unsigned,
+					    const void *))p;
+		return (void *)hook_teximage2d;
+	}
+	if (strcmp(name, "glTexStorage2D") == 0 && p) {
+		real_texstorage2d =
+			(void (*)(unsigned, int, unsigned, int, int))p;
+		return (void *)hook_texstorage2d;
+	}
+	if (strcmp(name, "glGetTexImage") == 0) {
+		real_gettex = (void (*)(unsigned, int, unsigned, unsigned,
+					void *))p;	/* may be NULL */
+		return (void *)hook_gettex;
+	}
 	if (!p)
 		return p;
 	if (strcmp(name, "glGetString") == 0) {
