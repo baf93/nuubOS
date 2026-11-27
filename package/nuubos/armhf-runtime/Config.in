@@ -1,0 +1,13 @@
+config BR2_PACKAGE_ARMHF_RUNTIME
+	bool "nuubOS armhf runtime for 32-bit PortMaster games"
+	depends on BR2_aarch64
+	depends on !BR2_STATIC_LIBS
+	help
+	  Minimal 32-bit ARM userland for PortMaster ports that still ship an
+	  armhf ELF: the ld-linux-armhf.so.3 loader, glibc, libgcc/libstdc++,
+	  SDL2, Mesa 25.2.8/Panfrost (EGL, GLESv2, DRI drivers and glvnd vendor
+	  file) and their runtime dependencies. Installed under
+	  /usr/lib/arm-linux-gnueabihf, which is also how PortMaster detects
+	  DEVICE_HAS_ARMHF. Libraries of the other ABI are ignored by each
+	  loader, so no LD_LIBRARY_PATH hacks or 32-bit ld.so.cache are needed.
+	  Binary provenance and licences: NOTICE.md.

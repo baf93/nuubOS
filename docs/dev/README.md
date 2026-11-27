@@ -17,5 +17,7 @@
 | streaming-media | Moonlight, Steam Link, media, Web, screen casting | 37.14–15, 37.25, 37.27 |
 | open-items | known defects | 37.8 |
 | perf-power | performance/battery roadmap (GPU, Mesa/Panfrost, clocks), status per step | — |
+| mesa-263-perf-candidates | Mesa 26.3.x commit-by-commit performance candidate review for H700/G31 | — |
+| thin-shim-gl-implementacion | estado y decisiones de la implementación de `libgl_nuubos_shim.so` (v2.1) | — |
 
 User-facing technical documentation (architecture, building, releasing, devices): `docs/technical/`. User guide: the GitHub wiki (source kept in `../nuubOS.wiki`).

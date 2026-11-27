@@ -183,6 +183,10 @@ BR2_PACKAGE_NUUBOS_TAILSCALE=y
 # Ports (EPIC-058): PortMaster is downloaded on the device; the image holds
 # the sandbox and what ports expect (bash, Python 3, SDL2 + extras).
 BR2_PACKAGE_NUUBOS_PORTS=y
+# Desktop GL -> GLES thin shim for PortMaster (aarch64 + armhf).
+BR2_PACKAGE_GL_NUUBOS_SHIM=y
+# 32-bit ELF runtime for armhf PortMaster ports (loader, glibc, SDL2).
+BR2_PACKAGE_ARMHF_RUNTIME=y
 # Terminal (RC4, user decision 2026-10-27): foot with root's login shell.
 # foot needs a UTF-8 locale.
 BR2_PACKAGE_NUUBOS_TERMINAL=y

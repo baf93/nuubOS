@@ -1,0 +1,10 @@
+config BR2_PACKAGE_GL_NUUBOS_SHIM
+	bool "nuubOS Desktop GL -> GLES thin shim"
+	depends on !BR2_STATIC_LIBS
+	depends on BR2_TOOLCHAIN_HAS_THREADS
+	help
+	  libgl_nuubos_shim.so translates Desktop OpenGL calls to OpenGL ES 3.x
+	  for PortMaster games. It is built for both the native aarch64 ABI
+	  (/usr/lib) and armhf (/usr/lib32) and is preloaded by bash-env.sh in
+	  game sessions. The armhf build needs the cross compiler installed in
+	  nuubos-dev:0.5 (gcc-arm-linux-gnueabihf).

@@ -11,13 +11,22 @@
 
 readonly EGL_PLATFORM
 readonly SDL_RENDER_DRIVER
+
+# Only the SDL3->SDL2 shim is forced onto Wayland. Native SDL2 ports get the
+# hint from PortMaster's own mod_nuubOS.txt; keep SDL_VIDEODRIVER writable and
+# do not add Wayland scaling or S3TC decompression here (see the 2026-11-26
+# regression note in docs/dev/thin-shim-gl-implementacion.md).
 export SDL3SHIM_SDL2_VIDEODRIVER=wayland
 readonly SDL3SHIM_SDL2_VIDEODRIVER
 
-# Mesa 26 ships libLLVM.so.22.1; mono-sgen has a static LLVM with the same
-# symbols, so Mesa's dlopen() needs RTLD_DEEPBIND or a shader compile writes
-# into mono's uninitialized data. MonoGame also needs desktop-GL extension
-# names that GLES3 has as core. The shim only takes effect when /proc/self/exe
-# starts with mono or MONOGAME_PATCH is set; other ports get an inert preload.
-# BASH_ENV is set only for game sessions, never for PortMaster.sh itself.
-export LD_PRELOAD="/usr/lib/nuubos/ports/mono-gl-fix.so${LD_PRELOAD:+:$LD_PRELOAD}"
+# Universal Desktop GL -> GLES thin shim. The bare SONAME is resolved by each
+# ABI's own ld.so: /usr/lib on aarch64, /usr/lib/arm-linux-gnueabihf on armhf
+# (also /usr/lib32 for older launchers). It absorbs the old Mono/LLVM fix and
+# redirects PortMaster's bundled gl4es to Mesa GLES (its desktop GL path drew
+# a black window on nuubOS); native GLES programs stay untouched. Nested bash
+# shells re-read BASH_ENV, so never add the preload twice. BASH_ENV is only
+# set for game sessions.
+case ":${LD_PRELOAD:-}:" in
+  *libgl_nuubos_shim.so*) ;;
+  *) export LD_PRELOAD="libgl_nuubos_shim.so${LD_PRELOAD:+:$LD_PRELOAD}" ;;
+esac

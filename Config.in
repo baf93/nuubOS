@@ -37,6 +37,8 @@ source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-cast/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-sync/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-tailscale/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-ports/Config.in"
+source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/gl-nuubos-shim/Config.in"
+source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/armhf-runtime/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-web/Config.in"
 source "$BR2_EXTERNAL_NUUBOS_PATH/package/nuubos/nuubos-terminal/Config.in"
 
