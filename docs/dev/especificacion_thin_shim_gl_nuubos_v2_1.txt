@@ -1,0 +1,2552 @@
+================================================================================
+ESPECIFICACIÓN DE IMPLEMENTACIÓN COMPLETA (v2.1, REVISADA): libgl_nuubos_shim.so
+================================================================================
+Sistema Objetivo : nuubOS (Linux Mainline 6.x+, Wayland/labwc, Mesa 26 Panfrost)
+Hardware Objetivo: Allwinner H700 (Quad-Core Cortex-A53 ARMv8-A + Mali-G31 MP2)
+Arquitecturas    : Multiarch Nativo (aarch64 en /usr/lib + armhf en /usr/lib32)
+Estándar Código  : C11 (-std=c11 -D_GNU_SOURCE -O2 -Wall -Wextra -fPIC -shared)
+Licencia         : 100 % Software Libre / Open Source (Sin blobs propietarios)
+Destinatario     : Agente de código que implementará la librería desde cero.
+================================================================================
+
+LEER PRIMERO: CÓMO USAR ESTE DOCUMENTO
+--------------------------------------------------------------------------------
+Este documento es la versión 2 de la especificación. Mantiene TODO el contenido
+de la v1 (módulos A-H, integración con el SO, compilación y pruebas) y añade
+correcciones, decisiones de diseño explicadas y comprobaciones previas. Donde la
+v1 tenía un defecto, aquí se explica QUÉ fallaba y POR QUÉ, para que el agente
+entienda la razón y no reintroduzca el error.
+
+Convenciones:
+  - "DEBE" / "NO DEBE": obligatorio. "DEBERÍA": recomendado salvo razón fuerte.
+  - "Modo pasivo" / "modo escritorio": ver sección 0.4. Es un concepto nuevo y
+    central de la v2.
+  - Todo valor hexadecimal de constante está en el Apéndice A.
+  - Toda variable de entorno reconocida está en el Apéndice B.
+  - La tabla de funciones interceptadas está en el Apéndice C y la de alias
+    ARB/EXT en el Apéndice D.
+  - El orden recomendado de implementación (hitos) está en el Apéndice E.
+  - Lo que NO se implementa (a propósito) está en la sección 6. El agente NO
+    debe intentar implementarlo: es deliberado para mantener el shim "thin".
+    (v2.1: la traducción de shaders de función fija, sampler1D, double y clip
+    distance YA NO está en esa lista; es el Módulo G.2. Ver el ANEXO v2.1 al
+    final para los cambios que afectan a H, 5.0, 6 y Apéndices B, C, E.)
+
+Orden de lectura sugerido: 0 -> 1 -> 2 -> 3.0 -> módulos A..H (G.2 tras G) -> 4 -> 5 -> 6 ->
+apéndices.
+
+
+REGISTRO DE CAMBIOS RESPECTO A LA v1 (resumen para el agente)
+--------------------------------------------------------------------------------
+A) ERRORES CORREGIDOS (la v1 los tenía y provocaban crash o corrupción):
+  A1. Fallback `dlsym(RTLD_NEXT,"dlsym")` en shim_init: llamaba al dlsym del
+      propio shim con real_dlsym == NULL (segfault). Eliminado; se usa solo
+      dlvsym con varias versiones + inicialización perezosa (sección 2.1).
+  A2. Descompresión DXT: el bucle de bloques 4x4 escribía fuera del búfer cuando
+      width/height no eran múltiplos de 4 (mips 2x2, 1x1): heap overflow.
+      Ahora se recorta al borde (Módulo E.4).
+  A3. Detección de error por `glGetError()==GL_INVALID_ENUM` tras la llamada real
+      podía leer un error previo ajeno. Ahora se lee/guarda antes (política de
+      errores, sección 3.0.4).
+  A4. Reescritura de shaders: el preámbulo `precision ...` se insertaba antes de
+      directivas `#extension` del propio shader, y Mesa (GLSL ES) las rechaza si
+      van después de tokens. Ahora se inserta al final de la zona de cabecera
+      (Módulo G).
+  A5. Reescritura de shaders: `#version 130/140/150` con `attribute`, `varying`,
+      `texture2D`, `gl_FragColor` no compilaba en `300 es`. Ahora hay traducción
+      léxica (Módulo G, función translate_legacy_to_es300).
+  A6. Detección de Mono: `/proc/self/exe` es una ruta completa; "empieza por
+      mono" nunca se cumplía. Ahora se compara el basename y además se activa el
+      aislamiento al ver cargar libmonosgen/libcoreclr/libhostfxr (sección 2.1).
+  A7. `ensure_gl_ptrs()` cargaba libGLESv2 con real_dlopen sin aplicar
+      RTLD_DEEPBIND, rompiendo el aislamiento para Mono (la instancia sin
+      DEEPBIND quedaba cargada primero). Ahora usa la misma función de flags
+      (sección 3.0.2).
+  A8. `glMapBuffer(GL_WRITE_ONLY)` usaba GL_MAP_INVALIDATE_BUFFER_BIT, que
+      descarta el contenido previo del búfer: las apps que escriben parcialmente
+      perdían el resto. Ahora solo GL_MAP_WRITE_BIT (Módulo D).
+  A9. Tablas de tamaño fijo g_buf_sizes/g_tex_dim[65536] ignoraban IDs >= 65536
+      (glMapBuffer devolvía NULL y la app crasheaba). Eliminadas: se consulta
+      al driver (Módulos D y E).
+  A10. tls_bound_ibo: GL_ELEMENT_ARRAY_BUFFER es estado del VAO, no del hilo.
+      Eliminado el sombreado de estado de binding (3.0.3).
+  A11. DXT1 RGB (0x83F0) con c0 <= c1: el color 3 debe ser negro OPACO (alfa
+      255), no transparente (Módulo E.4).
+  A12. Bucle `while (real_glGetError() != 0)` infinito si el contexto se pierde
+      (GL_CONTEXT_LOST devuelve el mismo error siempre). Ahora está acotado.
+  A13. `SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR=0` en bash-env.sh no tenía efecto:
+      la variable de entorno usa el VALOR del hint, no el nombre de la macro.
+      Correcto: `SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR=0` (sección 1.2).
+  A14. Alpha test: la v1 solo implementaba "descartar si a <= ref" (GL_GREATER).
+      Ahora se implementan las 8 funciones de comparación (Módulo H.2).
+
+B) DECISIONES DE DISEÑO CAMBIADAS (con razón):
+  B1. Modo pasivo/escritorio (0.4): la v1 inyectaba el engaño "OpenGL 3.3
+      Compatibility" a TODOS los procesos, también a ports GLES nativos que
+      detectan "OpenGL ES" en GL_VERSION. Ahora el shim solo se activa cuando
+      la app pide GL de escritorio.
+  B2. "CERO overhead" reformulado (0.1): es imposible devolver un puntero real
+      condicional desde dlsym. Se mantienen wrappers mínimos solo donde son
+      imprescindibles; el resto es puntero real directo.
+  B3. Estado por contexto, no por hilo (3.0.3). El estado GL pertenece al
+      contexto EGL; el shim mantiene una estructura ShimCtx por contexto y
+      engancha eglMakeCurrent/eglCreateContext/eglDestroyContext.
+  B4. Tamaños de búferes y dimensiones de texturas se CONSULTAN al driver
+      (glGetBufferParameteriv, glGetTexLevelParameteriv) en vez de sombrearlos.
+      Elimina tablas, mutex y wrappers de glBindBuffer/glBufferData/
+      glBindTexture/glActiveTexture/glDelete*.
+  B5. Límites de GL (MAX_TEXTURE_IMAGE_UNITS, etc.) NO se inflan: mentir sobre
+      ellos hace que la app use unidades que el hardware no tiene.
+  B6. Versión anunciada configurable y honesta por defecto (Módulo A).
+  B7. Preload con nombre de SONAME sin ruta (alternativa a `$LIB`, que es una
+      constante de compilación de glibc y suele resolver a "lib" en armhf).
+  B8. GL_QUADS con índices relativos + glDrawElementsBaseVertex cuando exista,
+      para no resubir el IBO en casi cada llamada (Módulo F).
+  B9. Atributos genéricos y client arrays de Módulo H se implementan con
+      glVertexAttribPointer sobre las copias de los arrays (sin conversión
+      innecesaria a ImmVertex) salvo en modo inmediato.
+
+C) AÑADIDOS (no estaban en la v1):
+  C1. Negociación de contexto EGL (2.5): eglBindAPI/eglChooseConfig/
+      eglCreateContext/eglMakeCurrent/eglDestroyContext.
+  C2. Símbolos exportados con nombre real para llamadas por PLT (2.6).
+  C3. Tabla de alias ARB/EXT/APPLE (Apéndice D) para que las extensiones
+      anunciadas tengan sus funciones.
+  C4. Filtrado de capacidades de escritorio en glEnable/glDisable/glIsEnabled
+      (Módulo H.2), GL_CLAMP, targets 1D, GL_BGR, tipos REV, formatos float.
+  C5. Respeto de GL_UNPACK_*/GL_PACK_* y de PBOs en swizzle BGRA y
+      glGetTexImage (Módulo E).
+  C6. GL_QUAD_STRIP y GL_POLYGON; glDrawElements(GL_QUADS).
+  C7. Módulo H ampliado: glTexEnv (MODULATE/REPLACE/DECAL/ADD), matriz de
+      textura, glPushAttrib/glPopAttrib, glGetFloatv de matrices, glMultiTexCoord,
+      punteros con tipos/stride/VBO.
+  C8. Fase 0 de verificación del entorno (sección 5.0), pruebas con criterios de
+      aceptación (5.1-5.3) y lista explícita de lo que queda fuera (sección 6).
+
+D) AMPLIACIÓN v2.1 (shaders de perfil Compatibility; ver Módulo G.2):
+  D1. La v2 dejaba FUERA los built-ins de función fija en shaders (gl_Vertex,
+      gl_Color, gl_Normal, gl_MultiTexCoord*, matrices gl_*, gl_TexCoord[],
+      gl_FrontColor/BackColor, gl_Fog*, gl_Light*, gl_Material*, ftransform()),
+      sampler1D/texture1D, double/dvec y gl_ClipVertex/gl_ClipDistance, y
+      mandaba esos ports a gl4es. Era incoherente con 2.2 (que redirige gl4es a
+      Mesa + shim). Ahora SE TRADUCEN (G.2), salvo geometry/tessellation
+      (emulación experimental y opt-in con compute, G.3).
+  D2. Estado de función fija expuesto al shader mediante UN UBO `ShimFF` de
+      3648 bytes (G.2.4) sincronizado con un anillo de 4 búferes (G.2.5).
+  D3. El camino rápido de dibujo cambia SOLO en la condición de entrada
+      (`(legacy_va_enabled | ff_dirty | emu_cur) == 0`, 0.1). Las apps GLES puras no
+      ejecutan código nuevo (prueba T-G2-7/8).
+  D4. Wrappers nuevos: glLinkProgram, glUseProgram, glDrawRangeElements (0.1).
+      Funciones de estado nuevas: luces, material, fog, planos de recorte,
+      color de texenv, color secundario/fogcoord, glUniform*d (G.2.7, G.2.8).
+  D5. Geometry y tessellation: emulación EXPERIMENTAL y opt-in con compute
+      shaders (Módulo G.3). Rectifica la afirmación inicial de G.2 de que no
+      había camino viable: lo hay en ES >= 3.1, a un coste alto. Incluye el
+      aplanado de bloques de interfaz in/out (G.3.3-bis), útil también sin GS.
+
+
+================================================================================
+0. DIRECTRICES ARQUITECTÓNICAS PARA EL AGENTE DE CÓDIGO
+================================================================================
+
+0.1. Filosofía "Thin Shim" (overhead mínimo en el hot-path de renderizado)
+--------------------------------------------------------------------------------
+     - Esta librería NO es un traductor de estado completo como gl4es. Es un
+       interpositor ligero cargado mediante LD_PRELOAD que intercepta únicamente
+       los puntos de incompatibilidad entre Desktop OpenGL (1.1 a 3.3 Core y
+       Compatibility) y OpenGL ES nativo de Mesa 26 Panfrost.
+       (v2.1) Los shaders GLSL de perfil Compatibility (gl_Vertex,
+       gl_ModelViewMatrix, ftransform()...) SÍ son un punto de incompatibilidad
+       y se traducen (Módulo G.2) reutilizando el estado que el Módulo H ya
+       mantiene; no se añade ningún traductor de estado en el camino rápido.
+     - Reemplaza y absorbe por completo al anterior
+       `/usr/lib/nuubos/ports/mono-gl-fix.so`, manteniendo el aislamiento
+       `RTLD_DEEPBIND` exclusivo para procesos Mono/.NET y añadiendo
+       compatibilidad multiarch y Desktop GL para el resto de ports.
+     - REGLA DE ORO DEL HOT-PATH (reformulada respecto a la v1):
+       dlsym/GetProcAddress devuelven UN puntero por nombre; no es posible
+       devolver "el real salvo que mode == GL_QUADS". Por tanto:
+         (a) Funciones cuyo comportamiento ES ya correcto en GLES se devuelven
+             como puntero REAL de libGLESv2.so.2 sin wrapper. Lista mínima
+             garantizada: glUniform*, glUniformMatrix*, glBindBuffer,
+             glBufferData, glBufferSubData, glGenBuffers, glDeleteBuffers,
+             glBindVertexArray, glGenVertexArrays, glDeleteVertexArrays,
+             glActiveTexture, glDeleteTextures, glGenTextures, glViewport,
+             glScissor, glBlendFunc, glBlendFuncSeparate, glBlendEquation,
+             glDepthFunc, glDepthMask, glColorMask, glClear, glClearColor,
+             glVertexAttribPointer, glEnableVertexAttribArray,
+             glDisableVertexAttribArray, glFramebuffer*, glBindFramebuffer,
+             glRenderbuffer*, glGenerateMipmap, glUnmapBuffer, glFlush, glFinish,
+             glReadPixels, glPixelStorei, glCullFace, glFrontFace, glLineWidth,
+             glPolygonOffset, glStencil*, glSampler*, glBindSampler, query
+             objects, uniform buffer objects, instanced draws, glBlitFramebuffer.
+         (b) Funciones que NECESITAN corrección se envuelven con un wrapper
+             cuyo camino rápido es UNA comparación y la llamada real. Son pocas:
+             glDrawArrays, glDrawElements, glDrawRangeElements, glEnable,
+             glDisable, glIsEnabled, glUseProgram, glLinkProgram (v2.1, G.2.6),
+             glBindTexture, glTexParameter*, glTexImage2D, glTexSubImage2D,
+             glCompressedTexImage2D, glCompressedTexSubImage2D, glTexStorage2D,
+             glShaderSource, glGetString, glGetStringi, glGetIntegerv,
+             glGetFloatv, glReadBuffer, glGetError (solo para errores
+             pendientes, ver 3.0.4).
+         (c) Funciones que NO existen en GLES (solo escritorio) se implementan
+             en el shim (glDrawBuffer, glMapBuffer, glPolygonMode, glBegin...).
+       Un wrapper con un branch cuesta unos pocos nanosegundos frente a los
+       microsegundos de una llamada a Panfrost: es aceptable. Lo que NO es
+       aceptable es añadir mutex, malloc, glGet* o consultas de estado en
+       el camino rápido de glDrawArrays/glDrawElements/glBindTexture.
+     - Camino rápido de dibujo (obligatorio):
+         void shim_glDrawArrays(GLenum mode, GLint first, GLsizei count) {
+             ShimCtx *c = tls_ctx_ptr;            /* lectura TLS, sin mutex */
+             if (__builtin_expect(c == NULL || ((c->legacy_va_enabled | c->ff_dirty | c->emu_cur) == 0 &&
+                 mode != GL_QUADS && mode != GL_QUAD_STRIP &&
+                 mode != GL_POLYGON), 1)) {
+                 real_glDrawArrays(mode, first, count);
+                 return;
+             }
+             ... camino lento (emulación) ...
+         }
+       Nótese que `legacy_va_enabled` es un simple flag que se pone a 1 cuando
+       la app llama a glEnableClientState(GL_VERTEX_ARRAY). Las apps GLES/core
+       nunca lo llaman, así que no pagan nada más.
+       (v2.1) `ff_dirty` es una máscara de bits (0 = nada pendiente) que solo
+       se activa si ya se tradujo algún shader de función fija
+       (g_ff_shader_count > 0, ver G.2.5). En una app GLES pura vale siempre 0.
+
+0.2. Portabilidad Multiarch y Resolución Dinámica
+--------------------------------------------------------------------------------
+     - Prohibido escribir rutas absolutas como "/usr/lib/libGLESv2.so.2" en el
+       código fuente C. Pasa siempre nombres de SONAME base ("libGLESv2.so.2",
+       "libEGL.so.1") a real_dlopen() para que el enlazador dinámico del
+       kernel/glibc (ld-linux-aarch64.so.1 o ld-linux-armhf.so.3) resuelva
+       automáticamente /usr/lib o /usr/lib32 según la arquitectura del proceso
+       ejecutado.
+     - No utilizar cabeceras externas propietarias ni dependencias de
+       compilación pesadas (como GLEW o glad); definir localmente en un bloque
+       de cabecera todos los typedef y constantes necesarias. Incluir antes:
+         #include <stddef.h>
+         #include <stdint.h>
+         #include <stdlib.h>
+         #include <string.h>
+         #include <stdio.h>
+         #include <pthread.h>
+         #include <dlfcn.h>
+         #include <unistd.h>
+         #include <limits.h>
+       Bloque de tipos (v1 + los que faltaban en la v1 marcados con [+]):
+         typedef unsigned int   GLenum;
+         typedef unsigned int   GLuint;
+         typedef int            GLint;
+         typedef int            GLsizei;
+         typedef ptrdiff_t      GLsizeiptr;
+         typedef ptrdiff_t      GLintptr;
+         typedef unsigned char  GLboolean;
+         typedef unsigned int   GLbitfield;
+         typedef float          GLfloat;
+         typedef double         GLdouble;
+         typedef float          GLclampf;
+         typedef char           GLchar;
+         typedef unsigned char  GLubyte;
+         typedef signed char    GLbyte;          /* [+] */
+         typedef short          GLshort;         /* [+] */
+         typedef unsigned short GLushort;        /* [+] */
+         typedef unsigned short GLhalf;          /* [+] */
+         typedef int64_t        GLint64;         /* [+] */
+         typedef uint64_t       GLuint64;        /* [+] */
+         typedef struct __GLsync *GLsync;        /* [+] */
+         typedef void*          EGLDisplay;
+         typedef void*          EGLContext;      /* [+] */
+         typedef void*          EGLSurface;      /* [+] */
+         typedef void*          EGLConfig;       /* [+] */
+         typedef int32_t        EGLint;
+         typedef unsigned int   EGLBoolean;
+         typedef unsigned int   EGLenum;         /* [+] */
+     - Un único archivo fuente `nuubos_gl_shim.c`, organizado con banners de
+       sección en el mismo orden que este documento. Objetivo orientativo:
+       3000-5000 líneas. Marcar todo lo interno como `static`; exportar
+       solo los símbolos listados en 2.6 con
+       `__attribute__((visibility("default")))` y compilar con
+       `-fvisibility=hidden` (ver 4.1).
+
+0.3. Concurrencia, Seguridad de Hilos y Gestión de Errores
+--------------------------------------------------------------------------------
+     - Motores como MonoGame/FNA y Godot cargan texturas en hilos secundarios
+       mientras el hilo principal dibuja pantallas de carga. Cada hilo suele
+       tener su PROPIO contexto EGL (compartido o no).
+     - Estado compartido global del proceso (protegido con pthread_mutex_t):
+         * g_ctx_registry (lista/tabla de ShimCtx por EGLContext)
+         * g_ext_list_cache / g_ext_tokens / g_ext_count (se construye una vez,
+           con pthread_once)
+         * g_dlist_table (listas de visualización; ver Módulo H.4)
+         * g_prog_ff (tabla programa -> máscara de atributos FF; ver G.2.6)
+         * g_ff_shader_count y g_ff_need_variants (atómicos, sin mutex; G.2.5)
+       NOTA: la v1 incluía g_tex_dim y g_buf_sizes; ya NO existen (B4).
+     - Estado POR CONTEXTO EGL (ShimCtx, ver 3.0.3): matrices, color actual,
+       punteros de client arrays, programa/VAO/VBO internos de Módulo H, IBO de
+       quads, flags de características, error pendiente. El estado GL pertenece
+       al contexto, NO al hilo. Un contexto solo está actual en un hilo a la
+       vez, por lo que el acceso desde ese hilo no necesita mutex.
+     - Lo ÚNICO que se guarda en TLS (__thread) es el puntero al ShimCtx actual
+       y búferes de trabajo (scratch):
+         static __thread ShimCtx *tls_ctx_ptr = NULL;
+         static __thread EGLContext tls_ctx_handle = NULL;
+         static __thread uint8_t *tls_scratch = NULL;
+         static __thread size_t   tls_scratch_cap = 0;
+       La v1 guardaba tls_active_unit/tls_bound_tex2d/tls_bound_vbo/
+       tls_bound_ibo: ELIMINADOS (el binding es estado del contexto/VAO y se
+       consulta al driver cuando hace falta).
+     - Los búferes scratch TLS DEBEN liberarse al salir el hilo mediante una
+       clave pthread_key_create con destructor (free).
+     - Errores GL: ver política en 3.0.4. Resumen: no emitir llamadas
+       inválidas para no generar errores; si una llamada de prueba es
+       inevitable (fallback DXT), guardar el error pendiente de la app, ejecutar,
+       drenar con bucle ACOTADO (máx. 8 iteraciones) y restaurar el pendiente.
+     - Logging: silencio absoluto en disco y consola por defecto. Solo emitir
+       trazas por `stderr` si `getenv("NUUBOS_SHIM_DEBUG") != NULL`. Leer la
+       variable una sola vez en shim_init y cachearla en `g_debug`.
+
+0.4. Modo pasivo y modo escritorio (NUEVO en v2)
+--------------------------------------------------------------------------------
+     MOTIVO: BASH_ENV inyecta LD_PRELOAD en TODA la sesión de juego, incluidos
+     ports que son GLES nativos (renderer SDL2, Godot GLES3, ScummVM, PPSSPP...).
+     Si el shim les anunciara "OpenGL 3.3 Compatibility" y GLSL 3.30, esos
+     programas (que detectan el prefijo "OpenGL ES") elegirían rutas
+     equivocadas. Por eso el shim tiene dos modos globales del proceso:
+
+     int g_desktop_mode;   /* 0 = pasivo, 1 = escritorio. Acceso atómico. */
+
+     MODO PASIVO (por defecto al arrancar):
+       - shim_lookup_gl() devuelve NULL para TODO nombre => dlsym/
+         SDL_GL_GetProcAddress/eglGetProcAddress devuelven los punteros REALES
+         de Mesa. glGetString & co. NO se interceptan.
+       - SÍ permanecen activos en pasivo: (1) la redirección de dlopen de
+         gl4es (ver 2.2, que además pasa a modo escritorio si procede), (2) el
+         aislamiento RTLD_DEEPBIND para Mono (2.2), (3) el clamp de
+         eglSwapInterval (2.4), (4) los hooks EGL que mantienen tls_ctx_handle.
+     MODO ESCRITORIO (se activa, una sola vez, de forma irreversible):
+       Condiciones de activación (la primera que ocurra):
+         a) `NUUBOS_SHIM_DESKTOP_GL=1` en el entorno (forzado).
+         b) El hook de dlopen detecta una petición de libGL/libOpenGL/gl4es
+            (ver 2.2).
+         c) El hook de eglBindAPI recibe EGL_OPENGL_API (SDL pidiendo contexto
+            GL de escritorio).
+         d) eglChooseConfig pide EGL_OPENGL_BIT en EGL_RENDERABLE_TYPE.
+         e) eglCreateContext trae EGL_CONTEXT_OPENGL_PROFILE_MASK o una
+            versión mayor/menor de GL de escritorio (>= 3.2 o perfil core).
+       Si `NUUBOS_SHIM_DESKTOP_GL=0`, el modo escritorio nunca se activa.
+       Valor "auto" (o variable ausente) = comportamiento descrito arriba.
+     En modo escritorio shim_lookup_gl() devuelve los wrappers de la tabla del
+     Apéndice C; los nombres que no estén en la tabla siguen devolviendo NULL
+     (=> puntero real).
+     LIMITACIÓN CONOCIDA Y ACEPTADA: punteros obtenidos ANTES de activarse el
+     modo escritorio son los reales. Como las condiciones a)-e) ocurren antes de
+     que el motor cargue funciones GL, esto no afecta en la práctica.
+
+     Además, el constructor NO debe hacer trabajo pesado: no cargar libGLESv2 ni
+     tocar GL en shim_init. Procesos auxiliares (bash, sed, unzip, gptokeyb...)
+     que heredan LD_PRELOAD deben pagar un coste despreciable (solo resolver
+     dlsym/dlopen reales y leer /proc/self/exe).
+
+
+================================================================================
+1. INTEGRACIÓN COMPLETA CON EL SISTEMA OPERATIVO (NUUBOS)
+================================================================================
+1.1. Compilación Multiarch en el Build System de nuubOS:
+     - Kernel Linux mainline configurado con `CONFIG_COMPAT=y` para ejecución
+       nativa por hardware de binarios ARMv7 de 32 bits (`armhf`). (El
+       Cortex-A53 soporta AArch32 en EL0.)
+     - Dos pasadas limpias en el sistema de construcción de nuubOS:
+       * Pasada 1 (64-bit aarch64 -> /usr/lib):
+         Mesa 26 Panfrost (-Dgallium-drivers=panfrost, S3TC activo), SDL2 /
+         sdl2-compat, SDL2_mixer, SDL2_image, SDL2_ttf, openal-soft y
+         `/usr/lib/libgl_nuubos_shim.so`.
+       * Pasada 2 (32-bit arm-linux-gnueabihf -> /usr/lib32):
+         Mismo stack open source compilado con `-march=armv7-a -mfpu=neon-vfpv4
+         -mfloat-abi=hard` y `/usr/lib32/libgl_nuubos_shim.so`.
+     - Resolución del shim en LD_PRELOAD (REVISADO, ver 1.2): hay dos opciones.
+       OPCIÓN A (RECOMENDADA, v2): LD_PRELOAD con el nombre SONAME sin ruta
+         ("libgl_nuubos_shim.so"). Cuando un nombre de LD_PRELOAD no contiene
+         "/", ld.so lo busca con las reglas normales de búsqueda
+         (ld.so.cache y directorios por defecto de SU propia ABI). Requisito:
+         el ld.so de 32 bits debe tener /usr/lib32 en su ld.so.conf/caché
+         (ejecutar ldconfig de ambas ABIs en el build). Este requisito es el
+         MISMO que ya exige el punto 0.2 para resolver "libGLESv2.so.2" por
+         nombre, así que no añade complejidad.
+       OPCIÓN B (la de la v1): `/usr/\$LIB/libgl_nuubos_shim.so`. El token $LIB
+         es una constante de compilación de glibc: por defecto expande a "lib"
+         (en Debian multiarch a "lib/<triplete>"), NO a "lib32" en armhf salvo
+         que glibc se compile/parchee para ello. Si se elige esta opción, el
+         build DEBE asegurar `$LIB` => `lib` (aarch64) y `lib32` (armhf) y
+         comprobarlo con `LD_DEBUG=libs` en ambas arquitecturas.
+
+1.2. Análisis y Actualización de `bash-env.sh` (`nuubos-portsd`):
+     - `nuubos-portsd` inyecta `BASH_ENV` únicamente en sesiones de juego
+       (nunca en `PortMaster.sh`).
+     - Análisis del código previo (v1) y su estado:
+       1) `readonly EGL_PLATFORM` y `readonly SDL_RENDER_DRIVER` (sin valor)
+          tienen pleno sentido y DEBEN MANTENERSE: los lanzadores de PortMaster
+          exportan pistas gráficas (`EGL_PLATFORM=fbdev`, etc.) *después* de
+          cargar `mod_nuubOS.txt`. Declararlas `readonly` bloquea en silencio
+          esos `export` tardíos sin abortar el lanzador ni contaminar a los
+          hijos (una variable readonly sin valor no se exporta).
+          AVISO: en bash (modo no POSIX) un `export VAR=x` sobre una variable
+          readonly imprime un error por stderr y continúa. Si algún lanzador usa
+          `set -e`, abortaría. Probar con lanzadores reales que usen `set -e`.
+       2) `SDL3SHIM_SDL2_VIDEODRIVER=wayland` debe mantenerse y complementarse
+          con `SDL_VIDEODRIVER=wayland` (para binarios enlazados directamente a
+          SDL2 nativo) y `SDL_VIDEO_WAYLAND_SCALE_TO_DISPLAY=1` (para escalar
+          resoluciones fijas como `640x480` en Wayland con direct scan-out).
+       3) CORRECCIÓN v2: la v1 exportaba `SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR=0`.
+          SDL lee el entorno usando el TEXTO del hint, que es
+          "SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR" (la macro lleva el prefijo
+          SDL_HINT_, el texto no). La variable de la v1 no tenía ningún
+          efecto. Correcto: `export SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR=0`.
+       4) `export LD_PRELOAD="/usr/lib/nuubos/ports/mono-gl-fix.so..."` DEBE
+          SUSTITUIRSE por el nuevo shim (ya que absorbe el arreglo de
+          Mono/LLVM y extiende el soporte a multiarch y a todos los motores
+          OpenGL). Además, cada `bash` anidado vuelve a leer BASH_ENV, por lo
+          que hay que evitar duplicar la entrada (guarda anti-duplicados).
+     - Código definitivo para `bash-env.sh` (OPCIÓN A, recomendada):
+
+       #!/bin/bash
+       #
+       # SPDX-License-Identifier: GPL-3.0+
+       #
+       # BASH_ENV for port sessions (set by nuubos-portsd). PortMaster launchers
+       # export graphics hints *after* mod_nuubOS.txt, which is sourced too early to
+       # help. Declaring these names readonly without a value lets the launcher
+       # continue while its late exports fail; children inherit neither variable.
+
+       readonly EGL_PLATFORM
+       readonly SDL_RENDER_DRIVER
+
+       # Force Wayland backend for both SDL3->SDL2 shim and native SDL2 ports, and
+       # allow fixed-resolution ports to scale cleanly on labwc with direct scan-out.
+       export SDL3SHIM_SDL2_VIDEODRIVER=wayland
+       readonly SDL3SHIM_SDL2_VIDEODRIVER
+       export SDL_VIDEODRIVER=wayland
+       readonly SDL_VIDEODRIVER
+       export SDL_VIDEO_WAYLAND_SCALE_TO_DISPLAY=1
+       export SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR=0
+
+       # Enable Mesa 26 Gallium S3TC (DXT1/3/5) decompression globally for ports.
+       export force_s3tc_enable=true
+
+       # Universal Desktop GL -> GLES thin shim (replaces mono-gl-fix.so).
+       # The bare SONAME is resolved by each ABI's own ld.so (/usr/lib on aarch64,
+       # /usr/lib32 on armhf). The shim stays passive for native GLES programs and
+       # switches to desktop mode only when the program asks for desktop OpenGL.
+       # Guard: nested bash shells re-read BASH_ENV, so never add it twice.
+       # BASH_ENV is set only for game sessions, never for PortMaster.sh itself.
+       case ":${LD_PRELOAD:-}:" in
+         *libgl_nuubos_shim.so*) ;;
+         *) export LD_PRELOAD="libgl_nuubos_shim.so${LD_PRELOAD:+:$LD_PRELOAD}" ;;
+       esac
+
+     - Variante OPCIÓN B (solo si el build garantiza `$LIB`): sustituir el bloque
+       `case` por:
+         export LD_PRELOAD="/usr/\$LIB/libgl_nuubos_shim.so${LD_PRELOAD:+:$LD_PRELOAD}"
+       (la barra invertida evita que bash expanda $LIB; debe llegar literal a
+       ld.so).
+     - No modificar ni parchear archivos internos de PortMaster (como
+       `libgl_default.txt`), garantizando supervivencia total ante updates.
+
+1.3. Regla del Compositor Wayland (labwc) y Direct Scan-out:
+     - Aprovechar la acción idempotente `SetFullscreen` de labwc en `rc.xml`
+       para garantizar que `wlroots` realice direct scan-out sobre el plano
+       DRM primario de `sun4i-drm` (Allwinner DE2) mientras el Quick Menu
+       permanece como superficie `layer-shell` superior:
+       <windowRule identifier="*">
+         <action name="SetDecorations" mode="none" />
+         <action name="SetFullscreen" />
+       </windowRule>
+     - VERIFICACIÓN OBLIGATORIA (v2): comprobar en `labwc-actions(5)` de la
+       versión instalada que existen exactamente las acciones `SetDecorations`
+       y `SetFullscreen` y que `windowRule` admite elementos <action>. Si
+       alguna no existe, usar la alternativa equivalente de esa versión
+       (p. ej. `<windowRule identifier="*" serverDecoration="no">` para quitar
+       decoraciones y la acción de pantalla completa idempotente que ofrezca).
+       No asumir el nombre sin comprobarlo.
+     - CAVEAT del direct scan-out: wlroots solo puede escanear directamente el
+       buffer del cliente si NINGUNA otra superficie visible lo solapa. Una
+       superficie layer-shell del Quick Menu que esté mapeada (aunque sea
+       transparente) obliga a componer. Por tanto el Quick Menu DEBE estar
+       desmapeado/oculto cuando no está en uso, y solo mapearse al invocarlo.
+       Es normal que el scan-out se suspenda mientras el menú está visible.
+
+1.4. Reglas udev para Ejecución Sin Root:
+     - Garantizar acceso del usuario de sesión (grupos `render`, `video`, `input`)
+       a los nodos DRM e input:
+       SUBSYSTEM=="drm", KERNEL=="renderD*", GROUP="render", MODE="0660"
+       SUBSYSTEM=="input", KERNEL=="event*", GROUP="input", MODE="0660"
+     - Notas: en el H700 el nodo de render (`renderD*`) lo aporta Panfrost; el
+       nodo de display (`card*`, sun4i-drm) lo abre el compositor mediante
+       seatd/logind y normalmente ya pertenece al grupo `video` por las reglas
+       por defecto de udev.
+     - Requisito de resolución de bibliotecas: ejecutar `ldconfig` para ambas
+       ABIs durante el build (necesario para la OPCIÓN A de 1.1).
+
+================================================================================
+2. INTERPOSICIÓN DEL ENLAZADOR DINÁMICO Y EGL (CORE HOOKS)
+================================================================================
+2.1. Constructor (`__attribute__((constructor))`) y Destructor
+--------------------------------------------------------------------------------
+     INICIALIZACIÓN PEREZOSA (NUEVO): el orden de ejecución de constructores
+     entre librerías no está garantizado respecto a las llamadas a dlopen/dlsym
+     de otras librerías. Por eso TODOS los hooks (dlopen, dlsym, eglX...) deben
+     empezar por `shim_ensure_init()`, que usa pthread_once para ejecutar
+     shim_init una sola vez. El constructor `__attribute__((constructor))` solo
+     llama a shim_ensure_init().
+
+     En `shim_init(void)`:
+       1) Resolver `real_dlsym` (ORDEN y reglas):
+          a) `dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.34")` (glibc >= 2.34, todas
+             las arquitecturas: dlsym pasó a libc.so.6 con esa versión).
+          b) si NULL: `dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.17")` (aarch64 con
+             glibc < 2.34).
+          c) si NULL: `dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.4")` (armhf con
+             glibc < 2.34).
+          d) PROHIBIDO usar `dlsym(RTLD_NEXT, "dlsym")` como último recurso
+             (v1): esa llamada resuelve al dlsym EXPORTADO por este mismo shim,
+             que usaría `real_dlsym == NULL` => SIGSEGV. Si a)-c) fallan, el
+             shim debe quedar en modo inerte: marcar g_shim_dead = 1 y que
+             todos los hooks hagan passthrough imposible => en ese caso abortar
+             el proceso con un mensaje por stderr (fallo de integración que el
+             build debe detectar con la prueba 4 de 5.3).
+       2) Resolver `real_dlopen` con `real_dlsym(RTLD_NEXT, "dlopen")`.
+       3) Ejecutar `setenv("force_s3tc_enable", "true", 0);` (no sobrescribe si
+          ya existe; redundante con bash-env.sh pero protege ejecuciones fuera
+          de la sesión de ports). Mesa lee esta opción driconf desde el entorno
+          al inicializar el driver, así que debe fijarse antes de crear el
+          primer contexto: el constructor llega a tiempo.
+       4) Leer `/proc/self/exe` mediante `readlink()`; extraer el BASENAME
+          (texto tras la última '/'). Si el basename empieza por `"mono"`
+          (cubre mono, mono-sgen) o `"dotnet"`, o existe
+          `getenv("MONOGAME_PATCH") != NULL`, fijar `g_isolate_llvm = 1`.
+          (La v1 comparaba la ruta completa, que empieza por "/", y nunca
+          coincidía.)
+          ADEMÁS (NUEVO): el hook de dlopen (2.2) pondrá `g_isolate_llvm = 1` si
+          alguien carga un archivo cuyo nombre contenga "libmonosgen",
+          "libmono-2.0", "libcoreclr" o "libhostfxr". Esto cubre lanzadores
+          nativos (p. ej. el ejecutable de un juego FNA) cuyo basename no es
+          mono/dotnet. La condición se evalúa ANTES de decidir los flags
+          de cualquier dlopen posterior.
+       5) Leer `getenv("NUUBOS_SHIM_DEBUG")` => g_debug;
+          `getenv("NUUBOS_SHIM_DESKTOP_GL")` => g_desktop_policy
+          (auto/0/1). Si es "1": g_desktop_mode = 1 inmediatamente.
+          Leer `NUUBOS_SHIM_GL_VERSION` y `NUUBOS_SHIM_BGRA_MODE` (Apéndice B).
+     En `shim_fini(void)` (`__attribute__((destructor))`):
+       * Liberar exclusivamente asignaciones de memoria RAM en CPU (`free()`):
+         ShimCtx del registro y sus arrays, g_ext_tokens, listas de
+         visualización, scratch del hilo actual.
+       * PROHIBIDO llamar a funciones `glDelete*` en el destructor: SDL2/EGL
+         destruye el contexto gráfico antes de ejecutar destructores de
+         librerías `LD_PRELOAD`, y llamar a Mesa sin contexto activo provoca
+         SIGSEGV al cerrar el juego.
+
+2.2. Hook de `dlopen(const char *file, int flags)`
+--------------------------------------------------------------------------------
+     - Si `file != NULL`:
+       0) (NUEVO) Si `strstr(file, "libmonosgen") || strstr(file,"libmono-2.0")
+          || strstr(file,"libcoreclr") || strstr(file,"libhostfxr")`:
+          `g_isolate_llvm = 1;` (ver 2.1.4).
+       1) Redirección transparente de gl4es y Desktop GL hacia Mesa nativo:
+          - Si `(strstr(file, "gl4es") != NULL && strstr(file, "libEGL") != NULL)`
+            o `strcmp(file, "libEGL.so.1") == 0` o `strcmp(file, "libEGL.so") == 0`:
+            `file = "libEGL.so.1";`
+          - Si `(strstr(file, "gl4es") != NULL && strstr(file, "libGL.so") != NULL)`
+            o `strcmp(file, "libGLESv2.so.2") == 0` o `strcmp(file, "libGL.so.1") == 0`
+            o `strcmp(file, "libGL.so") == 0`
+            o (NUEVO) `strcmp(file, "libOpenGL.so.0") == 0`:
+            `file = "libGLESv2.so.2";`
+            Y ADEMÁS (NUEVO), si la petición original era de GL de escritorio
+            (es decir, `file` original NO era "libGLESv2.so.2", sino gl4es,
+            "libGL.so*" o "libOpenGL.so.0"): activar modo escritorio
+            (`shim_enter_desktop_mode()`, salvo política "0").
+       2) Aislamiento de símbolos LLVM para Mono/FNA (`g_isolate_llvm == 1`),
+          mediante la función común `shim_dl_flags(file, flags)` (que también
+          usa ensure_gl_ptrs, ver 3.0.2):
+          - Si `strstr(file, "libGLESv2") != NULL` || `strstr(file, "libLLVM") != NULL`
+            || `strstr(file, "libgallium") != NULL`:
+            `flags |= RTLD_DEEPBIND;`
+          - NOTA CRÍTICA: Jamás activar `RTLD_DEEPBIND` en procesos nativos C/C++
+            o Godot, ya que rompe la resolución interna de tablas de dispatch
+            entre `libEGL.so.1` y `libGLESv2.so.2` en Mesa. (`g_isolate_llvm`
+            solo se activa para Mono/.NET, nunca por defecto.)
+          - VERIFICACIÓN (v2, ver 5.0): el flag DEEPBIND solo afecta a objetos
+            que se cargan por ESA llamada. Si Mesa trae `libgallium-*.so` como
+            dependencia DT_NEEDED de `libEGL_mesa.so` (que se cargó antes sin
+            DEEPBIND), el flag sobre libGLESv2 NO aísla libgallium. Comprobar
+            con `LD_DEBUG=libs,files` en un proceso Mono qué dlopen carga
+            realmente libgallium/libLLVM y, si hace falta, añadir "libEGL" a
+            la lista de DEEPBIND SOLO bajo g_isolate_llvm.
+     - Llamar y devolver `real_dlopen(file, flags)`.
+     - (NUEVO) Tras un dlopen exitoso de la biblioteca EGL (nombre que
+       contenga "libEGL"), no hace falta nada más: las funciones EGL se obtienen
+       después por dlsym/eglGetProcAddress y ahí se interceptan (2.3).
+
+2.3. Hooks de Resolución de Símbolos (`dlsym`, `SDL_GL_GetProcAddress`, `eglGetProcAddress`)
+--------------------------------------------------------------------------------
+     - `void *dlsym(void *handle, const char *name)`:
+       * `shim_ensure_init()`. Si `!name`, retornar NULL.
+       * Si `strcmp(name, "SDL_GL_GetProcAddress") == 0`:
+         guardar puntero real en `real_sdl_getproc` (si no está guardado) y
+         devolver `(void *)shim_SDL_GL_GetProcAddress`.
+       * Si `strcmp(name, "eglGetProcAddress") == 0`:
+         guardar puntero real en `real_egl_getproc` y devolver
+         `(void *)shim_eglGetProcAddress`.
+       * Si `strcmp(name, "eglSwapInterval") == 0`:
+         guardar puntero real en `real_egl_swap_interval` y devolver
+         `(void *)shim_egl_swap_interval`.
+       * (NUEVO) Si name es "eglBindAPI", "eglChooseConfig", "eglCreateContext",
+         "eglMakeCurrent" o "eglDestroyContext": guardar el puntero real
+         (`real_dlsym(handle, name)`) en su variable real_egl_* y devolver el
+         hook correspondiente (2.5).
+       * Si `name[0]=='g' && name[1]=='l' && name[2] >= 'A' && name[2] <= 'Z'`
+         (la v1 usaba solo strncmp "gl" y capturaba "glob", "glibc_*", etc.):
+         consultar `void *fn = shim_lookup_gl(name);` -> si `fn != NULL`,
+         devolver `fn`. (En modo pasivo shim_lookup_gl devuelve NULL siempre.)
+       * En cualquier otro caso, devolver `real_dlsym(handle, name)`.
+       * Caso `handle == RTLD_NEXT`: se reenvía igualmente a
+         real_dlsym(RTLD_NEXT, name). LIMITACIÓN CONOCIDA: glibc resuelve
+         RTLD_NEXT respecto al objeto que llama a real_dlsym, que ahora es el
+         shim y no el llamante original. Puede afectar a otros interpositores
+         en la misma sesión; está aceptado (documentarlo en comentarios).
+     - `void *shim_SDL_GL_GetProcAddress(const char *proc)`:
+       * Consultar `void *fn = shim_lookup_gl(proc);` -> si `fn != NULL`,
+         devolver `fn`.
+       * Llamar a `real_sdl_getproc(proc)`. Si devuelve NULL, intentar
+         `real_dlsym(RTLD_DEFAULT, proc)` como respaldo.
+     - `void *shim_eglGetProcAddress(const char *procname)`:
+       * Consultar `void *fn = shim_lookup_gl(procname);` (y para nombres que
+         empiecen por "egl", `shim_lookup_egl(procname)`, que devuelve los
+         hooks de 2.4/2.5) -> si `fn != NULL`, devolver `fn`.
+       * Llamar a `real_egl_getproc(procname)`.
+     - `shim_lookup_gl(const char *name)` (NUEVO, detalle):
+       1. Si `g_desktop_mode == 0` devolver NULL.
+       2. Búsqueda binaria (o hash perfecto) en la tabla ordenada del Apéndice C.
+          Si hay coincidencia exacta, devolver el wrapper.
+       3. Si no, buscar en la tabla de alias del Apéndice D (nombres con sufijo
+          ARB/EXT/APPLE/OES/KHR). Cada entrada apunta a un nombre destino: se
+          resuelve primero en la tabla de wrappers y, si no está, como símbolo
+          real de libGLESv2 (`ensure_gl_sym(nombre_destino)`).
+       4. Si no hay coincidencia devolver NULL (=> el llamador usa el real).
+       RAZÓN DEL PASO 3: se anuncian extensiones como GL_EXT_framebuffer_object,
+       cuyas funciones (glGenFramebuffersEXT...) NO existen en libGLESv2. Sin la
+       tabla de alias la app obtendría NULL y crashearía.
+
+2.4. Control de VSync y Framepacing (`shim_egl_swap_interval`)
+--------------------------------------------------------------------------------
+     - Firma: `EGLBoolean shim_egl_swap_interval(EGLDisplay dpy, EGLint interval)`
+     - Si `getenv("NUUBOS_ALLOW_UNCAP") == NULL && interval == 0`:
+       sobrescribir `interval = 1` para impedir que motores antiguos saturen
+       un núcleo Cortex-A53 al 100 % en bucles sin espera sobre Wayland.
+       (Leer la variable una vez en shim_init y cachearla.)
+     - Retornar `real_egl_swap_interval(dpy, interval)`.
+     - Activo tanto en modo pasivo como en escritorio.
+     - `real_egl_swap_interval` se rellena desde el hook de dlsym; si aún es
+       NULL al llamar (la app obtuvo el símbolo por eglGetProcAddress), resolver
+       con `real_egl_getproc("eglSwapInterval")` o `dlsym(RTLD_NEXT, ...)`.
+
+2.5. Negociación de Contexto EGL (NUEVO en v2)
+--------------------------------------------------------------------------------
+     MOTIVO: una app que pide GL de escritorio a través de SDL2 hace
+     eglBindAPI(EGL_OPENGL_API), eglChooseConfig con EGL_OPENGL_BIT y
+     eglCreateContext con versión/perfil de escritorio. Con un driver solo-ES
+     (o ES + GL limitado) eso falla antes de que el resto del shim sirva de nada.
+     La v1 no cubría este paso. Los hooks se obtienen por dlsym (2.3) y por
+     eglGetProcAddress (shim_lookup_egl), y se exportan con su nombre real (2.6).
+
+     Constantes EGL (Apéndice A): EGL_OPENGL_API=0x30A2, EGL_OPENGL_ES_API=0x30A0,
+     EGL_RENDERABLE_TYPE=0x3040, EGL_OPENGL_BIT=0x0008, EGL_OPENGL_ES2_BIT=0x0004,
+     EGL_OPENGL_ES3_BIT=0x0040, EGL_NONE=0x3038, EGL_CONTEXT_MAJOR_VERSION=0x3098
+     (=EGL_CONTEXT_CLIENT_VERSION), EGL_CONTEXT_MINOR_VERSION=0x30FB,
+     EGL_CONTEXT_OPENGL_PROFILE_MASK=0x30FD, EGL_CONTEXT_OPENGL_DEBUG=0x31B0,
+     EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE=0x31B1.
+
+     1) `EGLBoolean shim_eglBindAPI(EGLenum api)`:
+        - Si `api == EGL_OPENGL_API`: activar modo escritorio (salvo política
+          "0") y devolver `real_eglBindAPI(EGL_OPENGL_ES_API)`.
+        - En otro caso, `real_eglBindAPI(api)`.
+        Si la política es "0" (pasivo forzado) o el modo escritorio no se
+        puede activar, devolver `real_eglBindAPI(api)` sin tocar.
+     2) `EGLBoolean shim_eglChooseConfig(EGLDisplay dpy, const EGLint *attribs,
+                        EGLConfig *configs, EGLint config_size, EGLint *num)`:
+        - Solo si `g_desktop_mode`: copiar `attribs` a un arreglo local (hasta
+          el EGL_NONE, máximo 128 pares; si no cabe, pasar el original).
+          Para cada par cuyo atributo sea EGL_RENDERABLE_TYPE: calcular
+          `v = (v & ~EGL_OPENGL_BIT) | EGL_OPENGL_ES3_BIT` si tenía
+          EGL_OPENGL_BIT. Llamar a real_eglChooseConfig; si devuelve 0
+          configuraciones, reintentar con EGL_OPENGL_ES2_BIT en lugar de
+          ES3_BIT.
+        - Si el atributo EGL_RENDERABLE_TYPE no está en la lista, no tocar.
+     3) `EGLContext shim_eglCreateContext(EGLDisplay dpy, EGLConfig cfg,
+                        EGLContext share, const EGLint *attribs)`:
+        - Solo si `g_desktop_mode`: construir una lista nueva:
+            * EGL_CONTEXT_MAJOR_VERSION / MINOR_VERSION: sustituir por
+              MAJOR=3, MINOR=0 (Mesa devuelve el contexto ES más alto
+              compatible, p. ej. 3.1). NO pedir 3.2 explícitamente: si el
+              driver solo ofrece 3.1, la creación fallaría.
+            * Descartar EGL_CONTEXT_OPENGL_PROFILE_MASK y
+              EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE (no existen en ES).
+            * Mantener EGL_CONTEXT_OPENGL_DEBUG y cualquier otro atributo.
+            * Si la lista original no traía versión, añadir MAJOR=3, MINOR=0.
+            * Terminar con EGL_NONE.
+        - Llamar a real_eglCreateContext. Si devuelve EGL_NO_CONTEXT con
+          MAJOR=3, reintentar con MAJOR=2 (EGL_CONTEXT_CLIENT_VERSION=2).
+        - Registrar el contexto en g_ctx_registry (crear ShimCtx perezoso).
+        - Debe llamarse real_eglBindAPI(EGL_OPENGL_ES_API) antes de crear si
+          la app solo hizo BindAPI(OPENGL) (ya cubierto por 1).
+     4) `EGLBoolean shim_eglMakeCurrent(EGLDisplay d, EGLSurface draw,
+                        EGLSurface read, EGLContext ctx)`:
+        - Llamar a real_eglMakeCurrent. Si tuvo éxito: `tls_ctx_handle = ctx;
+          tls_ctx_ptr = NULL;` (el puntero se resuelve perezosamente con
+          shim_get_ctx(), ver 3.0.3). Si ctx == EGL_NO_CONTEXT, ambos a NULL.
+        - Debe funcionar igual en modo pasivo (solo mantiene tls_ctx_handle).
+     5) `EGLBoolean shim_eglDestroyContext(EGLDisplay d, EGLContext ctx)`:
+        - Llamar a real_eglDestroyContext. NO liberar el ShimCtx aquí (otro
+          hilo podría seguir usándolo hasta soltar el contexto): marcar
+          `destroyed = 1` y liberar en shim_fini. El ShimCtx es pequeño.
+          PROHIBIDO llamar a glDelete* para los recursos internos (VAO, VBO,
+          programa, IBO): Mesa los libera al destruir el contexto.
+     6) `shim_lookup_egl(name)` devuelve los hooks anteriores, el de
+        eglSwapInterval y (si procede) el de eglGetProcAddress.
+     - NOTA sobre apps que usan SDL con GLES explícito (SDL_GL_CONTEXT_PROFILE
+       _ES): no activan el modo escritorio (no piden EGL_OPENGL_API) y los
+       hooks se limitan a mantener tls_ctx_handle. Es el camino esperado para
+       los ports GLES nativos.
+
+2.6. Símbolos exportados con nombre real (NUEVO en v2)
+--------------------------------------------------------------------------------
+     MOTIVO: una app enlazada con DT_NEEDED a libSDL2/libEGL llama a
+     SDL_GL_GetProcAddress/eglGetProcAddress por PLT; el hook de dlsym no la
+     ve. La v1 solo definía shim_* (nombres internos) y por tanto no
+     interceptaba esas llamadas.
+     El shim DEBE exportar (visibility "default"), con el nombre real, estas
+     funciones; cada una reenvía a su implementación shim_* y, en modo pasivo,
+     se comporta como passthrough puro hacia el símbolo real obtenido con
+     `dlsym(RTLD_NEXT, "<nombre>")` (o el puntero guardado desde el hook de
+     dlsym si RTLD_NEXT no lo encuentra aún):
+         SDL_GL_GetProcAddress, eglGetProcAddress, eglSwapInterval,
+         eglBindAPI, eglChooseConfig, eglCreateContext, eglMakeCurrent,
+         eglDestroyContext.
+     También DEBE exportar, con alias del nombre real, TODAS las funciones del
+     Apéndice C marcadas "solo-escritorio" (no existen en GLES): glClearDepth,
+     glDepthRange, glDrawBuffer, glMapBuffer, glPolygonMode, glPointSize,
+     glTexImage1D, glTexSubImage1D, glGetTexImage, glGetDoublev, glBegin, glEnd,
+     glVertex*, glColor*, glTexCoord*, glNormal*, glOrtho, glFrustum,
+     glMatrixMode, glLoadIdentity, glPushMatrix, glPopMatrix, glTranslate*,
+     glRotate*, glScale*, glLoadMatrix*, glMultMatrix*, glAlphaFunc,
+     glEnableClientState, glDisableClientState, glVertexPointer, glColorPointer,
+     glTexCoordPointer, glNormalPointer, glTexEnv*, glShadeModel,
+     glPushAttrib, glPopAttrib, glGenLists, glDeleteLists, glNewList,
+     glEndList, glCallList, glCallLists, glListBase, glIsList,
+     glClientActiveTexture, glMultiTexCoord2f,
+     (v2.1, G.2.7/G.2.8) glLightf/fv/i/iv, glMaterialf/fv/i/iv,
+     glLightModelf/fv/i/iv, glFogf/fv/i/iv, glClipPlane, glColorMaterial,
+     glGetLightfv, glGetMaterialfv, glGetClipPlane, glSecondaryColor3f/3fv,
+     glFogCoordf/fv, glSecondaryColorPointer, glFogCoordPointer,
+     glUniform{1,2,3,4}d[v], glUniformMatrix{2,3,4}dv.
+     Esto sirve para apps que dispongan de un `libGL.so.1` real o de un stub
+     del sistema por DT_NEEDED. En modo pasivo estas exportaciones no se usan
+     (nadie las llama).
+     Las funciones que SÍ existen en GLES (glDrawArrays, glEnable, glBindTexture,
+     glTexImage2D...) NO se exportan: una app enlazada por DT_NEEDED a
+     libGLESv2 es, por definición, una app GLES y sus llamadas por PLT deben
+     ir directas a Mesa. Su interceptación en modo escritorio se hace solo por
+     dlsym/SDL_GL_GetProcAddress/eglGetProcAddress.
+     Apps con DT_NEEDED a "libGL.so.1": quedan FUERA DE ALCANCE salvo que
+     nuubOS proporcione un `libGL.so.1` stub (decisión de la distribución).
+
+
+================================================================================
+3. MÓDULOS DE TRADUCCIÓN Y EMULACIÓN OPENGL (DESKTOP GL -> GLES)
+================================================================================
+3.0. INFRAESTRUCTURA COMÚN (NUEVO: la v1 la dejaba implícita)
+--------------------------------------------------------------------------------
+3.0.1. Punteros reales `real_gl*` (resolución perezosa)
+     Todos los punteros `real_gl*` deben resolverse de forma perezosa mediante
+     una función `ensure_gl_ptrs()` protegida por pthread_once que obtenga el
+     handle de `"libGLESv2.so.2"` y cada símbolo con `real_dlsym(handle, ...)`.
+     Recomendación: tabla X-macro para no repetir código:
+         #define GLFUNCS(X) \
+           X(const GLubyte *, glGetString, (GLenum)) \
+           X(void, glDrawArrays, (GLenum, GLint, GLsizei)) \
+           ...
+         #define X(ret, name, args) static ret (*real_##name) args;
+         GLFUNCS(X)
+         #undef X
+     Las firmas salen de las cabeceras Khronos GLES3 (definidas localmente).
+     Lista mínima de funciones reales que se deben cargar: glGetError,
+     glGetString, glGetStringi, glGetIntegerv, glGetFloatv, glGetBooleanv,
+     glIsEnabled, glEnable, glDisable, glClearDepthf, glDepthRangef,
+     glDrawBuffers, glReadBuffer, glBindBuffer, glBufferData, glBufferSubData,
+     glGenBuffers, glDeleteBuffers, glMapBufferRange, glUnmapBuffer,
+     glGetBufferParameteriv, glBindTexture, glActiveTexture, glTexImage2D,
+     glTexSubImage2D, glTexStorage2D, glTexParameteri, glTexParameterf,
+     glTexParameteriv, glTexParameterfv, glGenerateMipmap,
+     glCompressedTexImage2D, glCompressedTexSubImage2D,
+     glGetTexLevelParameteriv (ES >= 3.1), glPixelStorei, glReadPixels,
+     glGenFramebuffers, glBindFramebuffer, glFramebufferTexture2D,
+     glCheckFramebufferStatus, glDeleteFramebuffers, glDrawArrays,
+     glDrawElements, glGenVertexArrays, glBindVertexArray,
+     glDeleteVertexArrays, glVertexAttribPointer, glEnableVertexAttribArray,
+     glDisableVertexAttribArray, glVertexAttrib4f, glVertexAttrib2f,
+     glGetVertexAttribfv, glUseProgram, glCreateShader, glShaderSource,
+     glCompileShader, glGetShaderiv, glGetShaderInfoLog, glCreateProgram,
+     glAttachShader, glBindAttribLocation, glLinkProgram, glGetProgramiv,
+     glGetProgramInfoLog, glGetUniformLocation, glUniform1i, glUniform1f,
+     glUniform4f, glUniformMatrix4fv, glDeleteShader, glBlendFunc,
+     glBlendFuncSeparate, glBlendEquation, glDepthFunc, glDepthMask,
+     glColorMask, glClearColor, glViewport, glScissor, glCullFace,
+     glFrontFace, glStencilFunc, glStencilOp, glStencilMask, glLineWidth,
+     (v2.1, G.2) glDrawRangeElements, glLinkProgram, glUseProgram,
+     glGetUniformBlockIndex, glUniformBlockBinding, glGetAttribLocation,
+     glBindBufferBase, glUniform1fv, glUniform2fv, glUniform3fv, glUniform4fv,
+     glUniformMatrix2fv, glUniformMatrix3fv.
+     Funciones que libGLESv2 (glvnd) puede NO exportar por nombre (extensiones
+     como glDrawElementsBaseVertexEXT/OES) se obtienen con el
+     `real_egl_getproc` (requiere contexto actual): función
+     `ensure_gl_ext(name)`. Todo puntero que resulte NULL debe tratarse como
+     "característica no disponible" (nunca llamar a un puntero NULL).
+
+3.0.2. Carga de libGLESv2 con los mismos flags que la v1 pero coherentes con el aislamiento
+     - `ensure_gl_ptrs()` abre la biblioteca con
+       `real_dlopen("libGLESv2.so.2", shim_dl_flags("libGLESv2.so.2",
+       RTLD_LAZY | RTLD_GLOBAL))`, donde `shim_dl_flags` es LA MISMA función que
+       usa el hook de dlopen (añade RTLD_DEEPBIND si g_isolate_llvm).
+       (La v1 pasaba solo RTLD_LAZY|RTLD_GLOBAL, de modo que en Mono la
+       instancia sin DEEPBIND quedaba cargada primero y anulaba el aislamiento.)
+     - Antes, intentar `real_dlopen("libGLESv2.so.2", RTLD_NOLOAD | RTLD_LAZY)`
+       para reutilizar la instancia que ya cargó la aplicación.
+     - Nunca llamar a ensure_gl_ptrs() desde el constructor (carga perezosa en
+       el primer uso real, que ocurre después de que la app cargara GL).
+
+3.0.3. Estructura ShimCtx (estado por contexto EGL) y shim_get_ctx()
+     struct ShimCtx {
+         EGLContext egl;               /* handle EGL                         */
+         int  destroyed;               /* marcado en eglDestroyContext       */
+         /* --- características detectadas (una vez, con el contexto actual) */
+         int  features_ready;
+         int  es_major, es_minor;      /* de GL_VERSION "OpenGL ES M.m ..."  */
+         int  has_bgra8888;            /* GL_EXT_texture_format_BGRA8888     */
+         int  has_s3tc;                /* GL_EXT_texture_compression_s3tc    */
+         int  has_base_vertex;         /* glDrawElementsBaseVertex(+EXT/OES) */
+         int  has_color_buffer_float;  /* EXT_color_buffer_float             */
+         int  has_border_clamp;        /* EXT/OES_texture_border_clamp       */
+         int  has_clip_cull_distance;  /* GL_EXT_clip_cull_distance (G.2.9)  */
+         int  max_vertex_attribs;      /* GL_MAX_VERTEX_ATTRIBS real (G.2.2) */
+         int  max_ubo_bindings;        /* GL_MAX_UNIFORM_BUFFER_BINDINGS     */
+         /* --- estado legacy (Módulo H) ---------------------------------- */
+         int  legacy_va_enabled;       /* glEnableClientState(GL_VERTEX_ARRAY)*/
+         ... matrices, color actual, punteros de arrays, imm_vao/imm_vbo,
+             programa interno, quad_ibo/capacidad, tmp_ibo,
+             alpha_test/func/ref, tex2d_enabled, texenv_mode, point_size,
+             pila de atributos, lista gen_mipmap_ids[64], pending_error ...
+         /* --- v2.1: shaders de función fija (Módulo G.2) ------------------ */
+         uint32_t ff_dirty;            /* FFD_*; 0 = nada pendiente          */
+         int  ff_ready, ff_ubo_cur, ff_ubo_binding;
+         GLuint ff_ubo[4];             /* anillo de UBO ShimFF               */
+         GLuint cur_prog;              /* último glUseProgram                */
+         uint32_t clip_enable_mask;    /* GL_CLIP_PLANE0+i habilitados       */
+         ... luces[8], material front/back, lm_ambient, fog, clip_plane[8],
+             texenv_color[8], matrices derivadas cacheadas ...
+     };
+     - `ShimCtx *shim_get_ctx(void)`:
+         1. `if (tls_ctx_ptr) return tls_ctx_ptr;`
+         2. `if (!tls_ctx_handle) return NULL;`
+         3. Bajo g_ctx_mutex: buscar/crear la entrada del registro para
+            tls_ctx_handle; `tls_ctx_ptr = entry;` y devolverla.
+         4. Si la entrada no tiene `features_ready`, calcularlas ahora
+            (hay contexto actual): parsear `real_glGetString(GL_VERSION)` con
+            sscanf("OpenGL ES %d.%d") y comprobar la presencia de cada extensión
+            en `real_glGetString(GL_EXTENSIONS)` (o glGetStringi). Para
+            has_base_vertex: true si es ES >= 3.2 o si existen las extensiones/
+            funciones EXT/OES de base vertex.
+     - En modo pasivo, shim_get_ctx() NO debe llamarse nunca desde el camino
+       rápido de dibujo (el camino rápido solo lee `tls_ctx_ptr`, que en modo
+       pasivo es siempre NULL).
+     - Contextos compartidos: los IDs de objetos GL (texturas, búferes) son
+       del grupo de compartición. Los recursos INTERNOS del shim (VAO, VBO,
+       programa, IBO) se crean por ShimCtx y nunca se comparten.
+
+3.0.4. Política de errores GL
+     1. PREVENIR: no emitir llamadas inválidas en GLES. Filtrar capacidades,
+        remapear targets y formatos ANTES de llamar a Mesa (por eso existe el
+        filtrado de glEnable, GL_CLAMP, 1D, etc.).
+     2. Cuando una llamada de prueba sea inevitable (fallback de DXT),
+        usar el patrón:
+            GLenum saved = real_glGetError();   /* error pendiente de la app */
+            drain(); /* hasta 8 iteraciones */
+            ... llamada de prueba ...
+            GLenum e = real_glGetError();
+            drain();
+            if (saved) ctx->pending_error = saved;  /* se devolverá luego */
+     3. `shim_glGetError()`: si `ctx && ctx->pending_error != 0` devolver y
+        limpiar ese valor; en otro caso devolver `real_glGetError()`.
+        (glGetError está envuelto solo para esto; es barato.)
+     4. `drain()`: `for (int i = 0; i < 8; i++) if (real_glGetError() == 0)
+        break;` — acotado para no colgarse con GL_CONTEXT_LOST.
+     5. Los errores que la app genere por sí misma NO se ocultan.
+
+--------------------------------------------------------------------------------
+MÓDULO A: Identidad del Driver, Versiones y Extensiones
+--------------------------------------------------------------------------------
+Solo activo en MODO ESCRITORIO (en pasivo estas funciones son las reales).
+
+Constantes GLenum:
+  GL_VENDOR                           = 0x1F00
+  GL_RENDERER                         = 0x1F01
+  GL_VERSION                          = 0x1F02
+  GL_EXTENSIONS                       = 0x1F03
+  GL_SHADING_LANGUAGE_VERSION         = 0x8B8C
+  GL_MAJOR_VERSION                    = 0x821B
+  GL_MINOR_VERSION                    = 0x821C
+  GL_NUM_EXTENSIONS                   = 0x821D
+  GL_MAX_VERTEX_ATTRIBS               = 0x8869
+  GL_MAX_TEXTURE_IMAGE_UNITS          = 0x8872
+  GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS = 0x8B4D
+  GL_CONTEXT_PROFILE_MASK             = 0x9126
+  GL_CONTEXT_COMPATIBILITY_PROFILE_BIT= 0x00000002
+  GL_MATRIX_MODE                      = 0x0BA0
+  GL_MODELVIEW_MATRIX                 = 0x0BA6
+  GL_PROJECTION_MATRIX                = 0x0BA7
+  GL_TEXTURE_MATRIX                   = 0x0BA8
+
+VERSIÓN ANUNCIADA (cambio B6). La v1 anunciaba siempre
+"3.3 (Compatibility Profile)", lo cual promete lighting, fog, glTexEnv completo,
+geometry shaders, glBindFragDataLocation, etc., que NO están implementados.
+Reglas v2:
+  - Versión por defecto = la que el shim puede cumplir: 3.1 si el ES real es
+    >= 3.1, 3.0 si es ES 3.0.
+  - Se puede subir con `NUUBOS_SHIM_GL_VERSION=3.3` (formato "M.m", máximo 3.3,
+    mínimo 3.0) por port, para motores que exigen 3.3 (Godot/algunos
+    Love2D). Es una mentira CONSCIENTE y limitada al modo escritorio; se
+    documenta aquí para que quien empaquete un port la use solo si hace falta.
+  - Tabla de GLSL anunciada: 3.0 -> "1.30", 3.1 -> "1.40", 3.2 -> "1.50",
+    3.3 -> "3.30".
+  - Texto de GL_VERSION: "<M>.<m> Mesa <versión real> (nuubOS Panfrost)"; si
+    M.m >= 3.2 añadir " (Compatibility Profile)" tras M.m:
+    "3.3 (Compatibility Profile) Mesa 26.0.0 (nuubOS Panfrost)".
+    La parte "Mesa X.Y.Z" se DERIVA del GL_VERSION real (texto tras "Mesa "),
+    NO se hardcodea.
+  - Se construye una única vez (pthread_once/mutex) en un búfer estático
+    seguro (`static char g_ver_str[128]`) y se devuelve ese puntero.
+
+Funciones a interceptar:
+1. `const GLubyte *shim_glGetString(GLenum name)`:
+   - `GL_VERSION`: obtener la cadena nativa de `real_glGetString(GL_VERSION)`.
+     Si empieza por `"OpenGL ES"`, construir/devolver la cadena anunciada
+     descrita arriba. Si la nativa NO empieza por "OpenGL ES" (contexto de
+     escritorio real), devolverla tal cual. Si `real_glGetString` devuelve
+     NULL (sin contexto), devolver NULL.
+   - `GL_SHADING_LANGUAGE_VERSION`: devolver la cadena GLSL de la tabla
+     anterior (p. ej. `(const GLubyte *)"1.40"` por defecto con 3.1, "3.30"
+     con 3.3).
+   - `GL_EXTENSIONS`: construir una única vez (protegida por mutex o
+     pthread_once) una cadena concatenando `real_glGetString(GL_EXTENSIONS)`
+     (en ES 3.x, si esa cadena viene vacía o NULL, construirla desde
+     `real_glGetStringi` iterando `GL_NUM_EXTENSIONS`) más las siguientes
+     extensiones de escritorio soportadas nativa o vía shim (sin duplicar las
+     existentes; comprobar presencia por token completo, no por substring):
+     * `GL_ARB_framebuffer_object`
+     * `GL_EXT_framebuffer_object`
+     * `GL_EXT_framebuffer_blit`
+     * `GL_EXT_framebuffer_multisample`
+     * `GL_ARB_vertex_array_object`
+     * `GL_ARB_texture_non_power_of_two`
+     * `GL_ARB_texture_float`
+     * `GL_ARB_half_float_pixel`
+     * `GL_ARB_texture_rg`
+     * `GL_ARB_draw_buffers`
+     * `GL_ARB_instanced_arrays`
+     * `GL_ARB_draw_instanced`
+     * `GL_ARB_map_buffer_range`
+     * `GL_ARB_uniform_buffer_object`
+     * `GL_ARB_sampler_objects`
+     * `GL_EXT_texture_compression_s3tc`
+     * `GL_EXT_bgra`   (NUEVO: el shim convierte BGRA, Módulo E)
+     REGLA (NUEVO): toda extensión anunciada DEBE tener disponibles sus
+     funciones a través de shim_lookup_gl (tabla de alias del Apéndice D).
+     Antes de anunciar una extensión, el agente comprueba esa correspondencia:
+       GL_EXT_framebuffer_object  -> glBindFramebufferEXT, glBindRenderbufferEXT,
+         glGenFramebuffersEXT, glGenRenderbuffersEXT, glDeleteFramebuffersEXT,
+         glDeleteRenderbuffersEXT, glFramebufferTexture2DEXT,
+         glFramebufferRenderbufferEXT, glRenderbufferStorageEXT,
+         glCheckFramebufferStatusEXT, glGenerateMipmapEXT, glIsFramebufferEXT,
+         glIsRenderbufferEXT, glGetFramebufferAttachmentParameterivEXT,
+         glGetRenderbufferParameterivEXT
+       GL_EXT_framebuffer_blit        -> glBlitFramebufferEXT
+       GL_EXT_framebuffer_multisample -> glRenderbufferStorageMultisampleEXT
+       GL_ARB_draw_buffers            -> glDrawBuffersARB
+       GL_ARB_instanced_arrays        -> glVertexAttribDivisorARB
+       GL_ARB_draw_instanced          -> glDrawArraysInstancedARB,
+                                         glDrawElementsInstancedARB
+       Las demás (VAO, map_buffer_range, UBO, sampler objects, texture_*)
+       usan nombres sin sufijo, ya presentes en GLES 3.
+     Esta cadena se usa en modo escritorio SOLO; es la misma que tokeniza
+     glGetStringi.
+
+2. `const GLubyte *shim_glGetStringi(GLenum name, GLuint index)`:
+   - Requerido por motores modernos (Godot 3/4, SDL2 GL 3.3+, MonoGame GL3).
+   - Tokenizar por espacios la cadena unificada generada en `GL_EXTENSIONS` en
+     un array dinámico `static char **g_ext_tokens` de longitud `g_ext_count`
+     (construcción única con pthread_once; ver 0.3).
+   - Si `name == GL_EXTENSIONS` y `index < (GLuint)g_ext_count`, devolver
+     `(const GLubyte *)g_ext_tokens[index]`.
+   - En otro caso, delegar en `real_glGetStringi(name, index)`.
+
+3. `void shim_glGetIntegerv(GLenum pname, GLint *data)`:
+   - Si `data == NULL`, salir (sin llamar a Mesa).
+   - Interceptar ANTES de llamar a Mesa estos `pname` (así no se genera
+     ningún GL_INVALID_ENUM):
+     * `GL_CONTEXT_PROFILE_MASK` (0x9126, no existe en ES): `*data =
+       GL_CONTEXT_COMPATIBILITY_PROFILE_BIT` (2) si la versión anunciada es
+       >= 3.2; si es < 3.2, `*data = 0`.
+     * `GL_MATRIX_MODE` (0x0BA0): `*data =` modo actual de la pila de matrices
+       del ShimCtx (Módulo H).
+     * `GL_MODELVIEW_MATRIX`/`GL_PROJECTION_MATRIX`/`GL_TEXTURE_MATRIX` no se
+       sirven aquí (son 16 valores; ver glGetFloatv/glGetDoublev abajo).
+   - Para el resto: llamar a `real_glGetIntegerv(pname, data)` y luego:
+     * `GL_NUM_EXTENSIONS`: asegurar inicialización de `g_ext_tokens` y
+       escribir `*data = g_ext_count;`.
+     * `GL_MAJOR_VERSION`: `*data =` mayor anunciado (3).
+     * `GL_MINOR_VERSION`: `*data =` menor anunciado (0, 1 o 3 según 3.0/3.1/3.3).
+   - CAMBIO v2 (B5): se ELIMINAN los "ajustes" de la v1 sobre
+     GL_MAX_VERTEX_ATTRIBS (16), GL_MAX_TEXTURE_IMAGE_UNITS (32) y
+     GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS (96). Inflar estos límites hace que la
+     app use unidades de textura que el hardware no tiene (glActiveTexture
+     inválido, texturas ausentes). Se devuelven los valores REALES del driver.
+     (GLES 3 garantiza >= 16 atributos y >= 16 unidades por etapa.)
+4. `void shim_glGetFloatv(GLenum pname, GLfloat *data)` y
+   `void shim_glGetDoublev(GLenum pname, GLdouble *data)` (este último no existe
+   en GLES; exportarlo, ver 2.6):
+   - `GL_MODELVIEW_MATRIX`, `GL_PROJECTION_MATRIX`, `GL_TEXTURE_MATRIX`:
+     copiar los 16 floats (column-major) de la cima de la pila correspondiente
+     del ShimCtx (convertir a double en glGetDoublev).
+   - `GL_CURRENT_COLOR` (0x0B00): 4 valores del color actual del ShimCtx.
+   - `GL_CURRENT_TEXTURE_COORDS` (0x0B03): 4 valores (s, t, 0, 1).
+   - `GL_POINT_SIZE` (0x0B11): ctx->point_size.
+   - Resto: glGetFloatv -> `real_glGetFloatv`; glGetDoublev -> llamar a
+     `real_glGetFloatv` sobre un arreglo temporal de 16 floats y copiar N
+     valores donde N sale de esta tabla: GL_VIEWPORT 4, GL_COLOR_CLEAR_VALUE 4,
+     GL_SCISSOR_BOX 4, GL_DEPTH_RANGE 2, el resto 1.
+
+--------------------------------------------------------------------------------
+MÓDULO B: Conversión de Tipos Double a Float
+--------------------------------------------------------------------------------
+OpenGL ES elimina los puntos de entrada con parámetros `double` de precisión
+doble usados por OpenGL de escritorio:
+- `void shim_glClearDepth(GLdouble depth)`:
+  Llamar a `real_glClearDepthf((GLfloat)depth)`.
+- `void shim_glDepthRange(GLdouble nearVal, GLdouble farVal)`:
+  Llamar a `real_glDepthRangef((GLfloat)nearVal, (GLfloat)farVal)`.
+- Las funciones matriciales `glOrtho`, `glFrustum`, `glLoadMatrixd`,
+  `glMultMatrixd`, `glTranslated`, `glRotated`, `glScaled` se implementan en
+  el Módulo H convirtiendo sus argumentos a `float` internamente.
+- `glGetDoublev`: ver Módulo A.4.
+
+--------------------------------------------------------------------------------
+MÓDULO C: Búferes de Dibujo y Lectura (FBO / Default Framebuffer)
+--------------------------------------------------------------------------------
+Constantes GLenum:
+  GL_NONE                     = 0x0000
+  GL_FRONT_LEFT               = 0x0400
+  GL_FRONT_RIGHT              = 0x0401
+  GL_BACK_LEFT                = 0x0402
+  GL_BACK_RIGHT               = 0x0403
+  GL_FRONT                    = 0x0404
+  GL_BACK                     = 0x0405
+  GL_FRONT_AND_BACK           = 0x0408
+  GL_DRAW_FRAMEBUFFER_BINDING = 0x8CA6
+  GL_READ_FRAMEBUFFER_BINDING = 0x8CAA
+
+1. `void shim_glDrawBuffer(GLenum mode)`:
+   - Consultar `GLint fbo = 0; real_glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fbo);`.
+   - Si `fbo == 0` y `mode` es uno de {GL_FRONT, GL_FRONT_AND_BACK,
+     GL_FRONT_LEFT, GL_FRONT_RIGHT, GL_BACK_LEFT, GL_BACK_RIGHT}:
+     ajustar `mode = GL_BACK;` (en EGL/Wayland el framebuffer por defecto es
+     double-buffered y solo acepta `GL_BACK` o `GL_NONE`).
+   - Llamar a `real_glDrawBuffers(1, &mode);`.
+2. (NUEVO) `void shim_glDrawBuffers(GLsizei n, const GLenum *bufs)`:
+   si `fbo == 0 && n == 1` aplicar la misma corrección que glDrawBuffer; en
+   otro caso delegar. (Función existente en GLES, envuelta solo en modo
+   escritorio.)
+3. `void shim_glReadBuffer(GLenum mode)`:
+   - Consultar `GLint fbo = 0; real_glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &fbo);`.
+   - Si `fbo == 0 && (mode == GL_FRONT || mode == GL_FRONT_LEFT ||
+     mode == GL_BACK_LEFT)`: ajustar `mode = GL_BACK;`.
+   - Llamar a `real_glReadBuffer(mode);`.
+
+--------------------------------------------------------------------------------
+MÓDULO D: Mapeo de Búferes (glMapBuffer -> glMapBufferRange)
+--------------------------------------------------------------------------------
+Constantes GLenum:
+  GL_ARRAY_BUFFER              = 0x8892
+  GL_ELEMENT_ARRAY_BUFFER      = 0x8893
+  GL_ARRAY_BUFFER_BINDING      = 0x8894
+  GL_ELEMENT_ARRAY_BUFFER_BINDING = 0x8895
+  GL_BUFFER_SIZE               = 0x8764
+  GL_READ_ONLY                 = 0x88B8
+  GL_WRITE_ONLY                = 0x88B9
+  GL_READ_WRITE                = 0x88BA
+  GL_MAP_READ_BIT              = 0x0001
+  GL_MAP_WRITE_BIT             = 0x0002
+  GL_MAP_INVALIDATE_BUFFER_BIT = 0x0008
+
+CAMBIO v2 (B4, A8, A9, A10): ya NO se sombrean los tamaños de búfer ni los
+bindings. Se ELIMINAN: la tabla `g_buf_sizes[65536]`, su mutex y los wrappers de
+glBindBuffer, glBufferData y glDeleteBuffers (pasan a ser punteros REALES).
+Razón: la tabla ignoraba IDs >= 65536; el binding de GL_ELEMENT_ARRAY_BUFFER
+es estado del VAO (no del hilo); y consultar al driver es exacto para TODOS
+los targets (UBO, PBO, COPY_*...).
+
+Implementación:
+- Implementar `void *shim_glMapBuffer(GLenum target, GLenum access)`:
+  * Consultar el tamaño real:
+      `GLint size = 0; real_glGetBufferParameteriv(target, GL_BUFFER_SIZE, &size);`
+    Si `size <= 0`, devolver NULL (dejar que el error lo genere el driver al
+    no haber búfer enlazado).
+  * Traducir `access`:
+    - `GL_READ_ONLY`  -> `GLbitfield flags = GL_MAP_READ_BIT;`
+    - `GL_WRITE_ONLY` -> `GLbitfield flags = GL_MAP_WRITE_BIT;`
+      (CAMBIO v2: SIN GL_MAP_INVALIDATE_BUFFER_BIT. La invalidación descarta el
+      contenido previo y rompe a las apps que escriben solo parte del búfer.
+      Se acepta el posible coste de sincronización a cambio de corrección.)
+    - `GL_READ_WRITE` -> `GLbitfield flags = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;`
+    - otro valor: dejar que `real_glMapBufferRange` falle (no tocar).
+  * Devolver `real_glMapBufferRange(target, 0, (GLsizeiptr)size, flags);`.
+- Implementar `GLboolean shim_glUnmapBuffer(GLenum target)`: es el real de
+  GLES (puntero real directo). No hace falta wrapper.
+- `glMapBufferARB` / `glUnmapBufferARB`: alias (Apéndice D).
+- NOTA: los targets distintos de ARRAY/ELEMENT (UNIFORM, PIXEL_PACK,
+  PIXEL_UNPACK, COPY_READ/WRITE, TRANSFORM_FEEDBACK) funcionan igual porque el
+  tamaño se consulta con el target recibido.
+
+--------------------------------------------------------------------------------
+MÓDULO E: Texturas, Readback Multi-Formato, Swizzle BGRA y Compresión DXT/S3TC
+--------------------------------------------------------------------------------
+Constantes GLenum (ver Apéndice A para la lista completa):
+  GL_TEXTURE_1D                    = 0x0DE0
+  GL_TEXTURE_2D                    = 0x0DE1
+  GL_TEXTURE0                      = 0x84C0
+  GL_TEXTURE_BINDING_2D            = 0x8069
+  GL_TEXTURE_WIDTH                 = 0x1000
+  GL_TEXTURE_HEIGHT                = 0x1001
+  GL_RED                           = 0x1903
+  GL_ALPHA                         = 0x1906
+  GL_RGB                           = 0x1907
+  GL_RGBA                          = 0x1908
+  GL_BGR                           = 0x80E0
+  GL_BGRA                          = 0x80E1
+  GL_UNSIGNED_BYTE                 = 0x1401
+  GL_UNSIGNED_INT_8_8_8_8_REV      = 0x8367
+  GL_READ_FRAMEBUFFER              = 0x8CA8
+  GL_COLOR_ATTACHMENT0             = 0x8CE0
+  GL_FRAMEBUFFER_COMPLETE          = 0x8CD5
+  GL_COMPRESSED_RGB_S3TC_DXT1_EXT  = 0x83F0
+  GL_COMPRESSED_RGBA_S3TC_DXT1_EXT = 0x83F1
+  GL_COMPRESSED_RGBA_S3TC_DXT3_EXT = 0x83F2
+  GL_COMPRESSED_RGBA_S3TC_DXT5_EXT = 0x83F3
+  GL_COMPRESSED_SRGB_S3TC_DXT1_EXT       = 0x8C4C
+  GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT = 0x8C4D
+  GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT = 0x8C4E
+  GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT = 0x8C4F
+
+1. Estado de texturas (CAMBIO v2: ya no se sombrea)
+   - Se ELIMINAN `g_tex_dim[65536]`, `tls_active_unit`, `tls_bound_tex2d[32]` y
+     los wrappers de glActiveTexture y glDeleteTextures (pasan a ser reales).
+   - Cuando haga falta saber qué textura está enlazada o su tamaño, se consulta
+     al driver:
+        GLint id = 0; real_glGetIntegerv(GL_TEXTURE_BINDING_2D, &id);
+        GLint w = 0, h = 0;
+        real_glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH,  &w);
+        real_glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT, &h);
+     (glGetTexLevelParameteriv existe en ES >= 3.1.)
+   - FALLBACK SOLO SI es_version < 3.1 (comprobado en ShimCtx): mantener una
+     tabla HASH dinámica (no un array fijo) {id -> w,h por nivel 0}, protegida
+     con mutex, rellenada en shim_glTexImage2D/shim_glTexStorage2D y limpiada
+     en glDeleteTextures (que en ese caso se envuelve). No hay límite de ID.
+   - `void shim_glBindTexture(GLenum target, GLuint texture)`:
+     wrapper SIN ESTADO (solo remapeo de target):
+        if (target == GL_TEXTURE_1D) target = GL_TEXTURE_2D;
+        real_glBindTexture(target, texture);
+   - `shim_glTexParameteri/f/iv/fv(target, pname, param...)`:
+        * `if (target == GL_TEXTURE_1D) target = GL_TEXTURE_2D;`
+        * Si `pname` es GL_TEXTURE_WRAP_S/T/R y el valor es GL_CLAMP (0x2900):
+          sustituir por GL_CLAMP_TO_EDGE (0x812F). (GL_CLAMP no existe en ES
+          y devuelve INVALID_ENUM; muy común en apps antiguas.)
+        * Si el valor es GL_CLAMP_TO_BORDER (0x812D) y el contexto no tiene
+          has_border_clamp: sustituir por GL_CLAMP_TO_EDGE.
+        * Si `pname == GL_GENERATE_MIPMAP` (0x8191, no existe en ES): si el valor
+          es verdadero, anotar el ID de la textura enlazada (consulta
+          GL_TEXTURE_BINDING_2D) en `ctx->gen_mipmap_ids[]` (lista pequeña, 64
+          entradas, circular); NO llamar a Mesa. En shim_glTexImage2D(level==0)
+          y shim_glTexSubImage2D: si el ID enlazado está en la lista, llamar
+          después a `real_glGenerateMipmap(GL_TEXTURE_2D)`. Si es falso,
+          quitar el ID de la lista.
+        * Si `pname` es GL_TEXTURE_LOD_BIAS (0x8501), GL_DEPTH_TEXTURE_MODE
+          (0x884B) o GL_TEXTURE_PRIORITY (0x8066): ignorar (no existen en ES).
+        * Resto: delegar.
+   - `shim_glActiveTexture` NO se envuelve (real).
+
+2. Subida de Texturas, Swizzle BGRA y Texturas 1D
+   (Solo se envuelven glTexImage2D/glTexSubImage2D; en modo escritorio.)
+   - En `shim_glTexImage2D(target, level, internalFormat, width, height, border, format, type, pixels)`:
+     A) Remapeos baratos (no tocan datos):
+        * `type == GL_UNSIGNED_INT_8_8_8_8_REV (0x8367)` con `format` BGRA o
+          RGBA: tratarlo como `type = GL_UNSIGNED_BYTE` (en little-endian
+          el orden en memoria es el mismo que BGRA/RGBA + UNSIGNED_BYTE).
+        * internalFormat legacy sin equivalente en ES: 0x8040 (LUMINANCE8) ->
+          GL_LUMINANCE (0x1909); 0x8045 (LUMINANCE8_ALPHA8) ->
+          GL_LUMINANCE_ALPHA (0x190A); 0x803C (ALPHA8) -> GL_ALPHA (0x1906).
+        * ES 3.x exige internalFormat SIZED para tipos float/half-float. Si
+          `internalFormat == format` (formato sin tamaño) y `type == GL_FLOAT`
+          (0x1406) o `GL_HALF_FLOAT` (0x140B): mapear
+            GL_RGBA: FLOAT -> GL_RGBA32F (0x8814), HALF -> GL_RGBA16F (0x881A)
+            GL_RGB : FLOAT -> GL_RGB32F  (0x8815), HALF -> GL_RGB16F  (0x881B)
+            GL_RG  : FLOAT -> GL_RG32F   (0x8230), HALF -> GL_RG16F   (0x822F)
+            GL_RED : FLOAT -> GL_R32F    (0x822E), HALF -> GL_R16F    (0x822D)
+            GL_DEPTH_COMPONENT (0x1902) + FLOAT -> GL_DEPTH_COMPONENT32F (0x8CAC)
+     B) BGRA / BGR (modo configurable, `NUUBOS_SHIM_BGRA_MODE`, Apéndice B):
+        - Modo `cpu` (POR DEFECTO, comportamiento v1 mejorado) y modo `ext`.
+        - Condición de intervención: `format == GL_BGRA (0x80E1)` o
+          `internalFormat == GL_BGRA`, o `format == GL_BGR (0x80E0)`.
+        - Si `internalFormat == GL_BGRA`: `internalFormat = GL_RGBA;`.
+          Si `internalFormat == GL_BGR` (0x80E0): `internalFormat = GL_RGB;`.
+        - MODO `ext` (opt-in, solo si ctx->has_bgra8888 y formato soportado):
+          pasar la subida tal cual con `internalFormat = format = GL_BGRA`
+          (0x80E1 == GL_BGRA_EXT). Cero copias. Requiere haber validado en el
+          H700 que el formato BGRA es renderizable si se va a leer con
+          glGetTexImage; por eso NO es el modo por defecto.
+        - MODO `cpu`: swizzle en CPU, SOLO si `type == GL_UNSIGNED_BYTE` y
+          `pixels != NULL`:
+            1. Consultar el estado de desempaquetado (glGetIntegerv):
+               GL_UNPACK_ROW_LENGTH (0x0CF2), GL_UNPACK_SKIP_ROWS (0x0CF3),
+               GL_UNPACK_SKIP_PIXELS (0x0CF4), GL_UNPACK_ALIGNMENT (0x0CF5) y
+               GL_PIXEL_UNPACK_BUFFER_BINDING (0x88EF).
+            2. bpp = 4 (BGRA) o 3 (BGR). row_len = ROW_LENGTH > 0 ? ROW_LENGTH
+               : width. stride = alinear_arriba(row_len * bpp, ALIGNMENT).
+               Origen de lectura = base + SKIP_ROWS * stride + SKIP_PIXELS * bpp.
+               (La v1 suponía datos contiguos width*height y leía mal cuando
+               ROW_LENGTH/SKIP != 0, típico en subidas de atlas.)
+            3. Si hay PBO de desempaquetado enlazado, `pixels` es un OFFSET:
+               mapear el PBO con `real_glMapBufferRange(GL_PIXEL_UNPACK_BUFFER,
+               0, size_consultado, GL_MAP_READ_BIT)`, usar base = mapa +
+               (uintptr_t)pixels, y desmapear al terminar.
+            4. Reservar/reutilizar el buffer scratch TLS (tls_scratch) de
+               tamaño >= width * height * bpp_destino (RGBA: 4, RGB: 3).
+               NO usar malloc/free por cada subida (la v1 lo hacía); crecer el
+               scratch con realloc (potencia de 2) y liberarlo con el
+               destructor de la clave pthread.
+            5. Copiar fila a fila (`height` filas) invirtiendo canales:
+               BGRA: `d[0]=s[2]; d[1]=s[1]; d[2]=s[0]; d[3]=s[3];`
+               BGR : `d[0]=s[2]; d[1]=s[1]; d[2]=s[0];`
+               El resultado queda COMPACTO (sin padding extra salvo la
+               alineación de GL).
+            6. Preparar el estado de desempaquetado para subir desde el scratch:
+               guardar los valores consultados, fijar ROW_LENGTH=0, SKIP_ROWS=0,
+               SKIP_PIXELS=0, ALIGNMENT=1 (con bpp 3 o 4 compacto), y si había
+               PBO enlazado, bind GL_PIXEL_UNPACK_BUFFER a 0 durante la
+               subida.
+            7. Llamar a `real_glTexImage2D(target, level, internalFormat, width,
+               height, border, GL_RGBA /*o GL_RGB*/, type, scratch)`.
+            8. Restaurar el estado de desempaquetado y el PBO. No hace falta
+               free (scratch reutilizable).
+        - Si `format == GL_BGRA` pero `pixels == NULL`: subir sin datos con
+          `format = GL_RGBA` (asignación de almacenamiento).
+        - Si `format == GL_BGRA` y `type != GL_UNSIGNED_BYTE`: no convertir;
+          sustituir formato por GL_RGBA y emitir traza de depuración
+          ("BGRA con tipo no soportado").
+     C) Resto: `real_glTexImage2D(...)` con los remapeos aplicados.
+     D) Si `level == 0` y la textura enlazada está en `ctx->gen_mipmap_ids`:
+        `real_glGenerateMipmap(GL_TEXTURE_2D)`.
+   - `shim_glTexSubImage2D(target, level, xoff, yoff, width, height, format, type, pixels)`:
+     aplicar la misma conversión (B), con las mismas reglas de ROW_LENGTH/SKIP/
+     ALIGNMENT/PBO, usando `width`/`height` del SUB-rectángulo. Aplicar también
+     los remapeos de tipo (A, solo los de `type`).
+   - Interceptar `shim_glTexStorage2D(target, levels, internalFormat, width, height)`:
+     (CAMBIO v2: ya no guarda dimensiones, salvo en el fallback ES < 3.1).
+     * Si `internalFormat` es uno de los S3TC (0x83F0-0x83F3, 0x8C4C-0x8C4F) y
+       NO hay soporte nativo S3TC (has_s3tc == 0): sustituir por
+       `GL_RGBA8 (0x8058)` (o `GL_SRGB8_ALPHA8 (0x8C43)` para las variantes
+       SRGB). Los datos llegarán luego por shim_glCompressedTexSubImage2D, que
+       los descomprime (punto 4).
+     * `internalFormat == GL_BGRA` -> `GL_RGBA8`.
+     * Delegar en `real_glTexStorage2D`.
+   - Implementar `shim_glTexImage1D(target, level, internalFormat, width, border, format, type, pixels)`:
+     redirigir a `shim_glTexImage2D(GL_TEXTURE_2D, level, internalFormat, width, 1, border, format, type, pixels)`.
+   - Implementar `shim_glTexSubImage1D(target, level, xoff, width, format, type, pixels)`:
+     redirigir a `shim_glTexSubImage2D(GL_TEXTURE_2D, level, xoff, 0, width, 1, format, type, pixels)`.
+   - Los shaders que usen `sampler1D`/`texture1D` se traducen en G.2.8 (la
+     textura 1D vive como 2D de alto 1; el shader muestrea en t = 0.5).
+
+3. Readback Completo (`shim_glGetTexImage`)
+   - Firma: `void shim_glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void *pixels)`
+   - Obtener `id` con `real_glGetIntegerv(GL_TEXTURE_BINDING_2D, &id)` y las
+     dimensiones del `level` pedido con glGetTexLevelParameteriv (sin tablas).
+     (Si es_version < 3.1, usar la tabla fallback del punto 1; entonces solo
+     level 0.)
+   - Validar `id > 0 && w > 0 && h > 0 && type == GL_UNSIGNED_BYTE && pixels !=
+     NULL`. CAMBIO v2: soportar cualquier `level` (el FBO se enlaza a ese nivel).
+     Si algún requisito falla (p. ej. `type != GL_UNSIGNED_BYTE` o hay un PBO
+     de empaquetado enlazado), emitir traza de depuración y rellenar `pixels`
+     con ceros cuando se conozcan las dimensiones (comportamiento
+     determinista, en vez de dejar memoria sin inicializar como la v1); si
+     hay PBO de empaquetado (GL_PIXEL_PACK_BUFFER_BINDING 0x88ED != 0) no
+     escribir y salir.
+   - Guardar `GLint prev_fbo = 0; real_glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_fbo);`.
+   - Guardar y fijar el estado de empaquetado: consultar GL_PACK_ROW_LENGTH
+     (0x0D02), GL_PACK_SKIP_ROWS (0x0D03), GL_PACK_SKIP_PIXELS (0x0D04),
+     GL_PACK_ALIGNMENT (0x0D05); poner temporalmente ROW_LENGTH=0, SKIP=0 y
+     ALIGNMENT=4 para leer a un búfer compacto RGBA.
+   - Crear FBO temporal:
+     `GLuint tmp_fbo = 0; real_glGenFramebuffers(1, &tmp_fbo);`
+     `real_glBindFramebuffer(GL_READ_FRAMEBUFFER, tmp_fbo);`
+     `real_glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, id, level);`
+   - Comprobar `real_glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) ==
+     GL_FRAMEBUFFER_COMPLETE` (0x8CD5). Si no lo es (formato no renderizable:
+     comprimido, luminance, etc.): restaurar estado, rellenar ceros, traza y salir.
+   - Reservar `size_t npix = (size_t)w * (size_t)h;` (definirla; la v1 la usaba
+     sin declararla) y el scratch `uint8_t *rgba` de `npix * 4` bytes (usar
+     tls_scratch, no malloc) y ejecutar:
+     `real_glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);`
+   - Restaurar `real_glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prev_fbo);`,
+     destruir `real_glDeleteFramebuffers(1, &tmp_fbo);` y restaurar el estado de
+     empaquetado.
+   - Convertir `rgba` al `format` destino en `pixels` RESPETANDO el estado de
+     empaquetado de la APP (los valores guardados antes de fijarlos a defecto):
+       bpp_dst: RGBA/BGRA = 4; RGB/BGR = 3; RED/ALPHA = 1.
+       row_len = PACK_ROW_LENGTH > 0 ? PACK_ROW_LENGTH : w.
+       stride = alinear_arriba(row_len * bpp_dst, PACK_ALIGNMENT).
+       destino = (uint8_t*)pixels + PACK_SKIP_ROWS*stride + PACK_SKIP_PIXELS*bpp_dst.
+       (La v1 copiaba sin padding; con RGB/RED/ALPHA y anchos no múltiplos de 4
+       las filas quedaban desplazadas.)
+     * `GL_RGBA`: copiar fila a fila (`memcpy` de w*4 por fila).
+     * `GL_BGRA`: bucle intercambiando `R <-> B` por píxel.
+     * `GL_RGB`:  bucle copiando 3 bytes (`R, G, B`) por píxel.
+     * `GL_BGR`:  bucle copiando `B, G, R`.
+     * `GL_RED`:  bucle copiando 1 byte (`R`) por píxel.
+     * `GL_ALPHA`: bucle copiando 1 byte (`A`) por píxel.
+   - Drenar errores con la política 3.0.4 si algún paso pudo generarlos.
+   - Nota (opcional, fase 2): soporte de `type == GL_FLOAT` con GL_RGBA/RGB/RED
+     usando `real_glReadPixels(..., GL_RGBA, GL_FLOAT, ...)` si
+     ctx->has_color_buffer_float o ES >= 3.2.
+
+4. Descompresión DXT1/DXT3/DXT5 en CPU (`shim_glCompressedTexImage2D` y
+   `shim_glCompressedTexSubImage2D`)
+   - Ruta de decisión (CAMBIO v2: ya no se basa solo en "probar y mirar
+     glGetError"):
+     1. Si `internalFormat` NO es de los S3TC (tabla de constantes arriba),
+        delegar tal cual a Mesa.
+     2. Si hay un PBO de desempaquetado enlazado (GL_PIXEL_UNPACK_BUFFER_BINDING
+        != 0), `data` es un offset: delegar tal cual a Mesa (no se puede
+        descomprimir; traza de depuración).
+     3. Si `ctx->has_s3tc` (la lista REAL de extensiones de Mesa, con
+        force_s3tc_enable activo, incluye GL_EXT_texture_compression_s3tc):
+        intentar la ruta nativa con la política de errores 3.0.4:
+            saved = real_glGetError(); drain();
+            real_glCompressedTexImage2D(...);
+            e = real_glGetError(); drain(); restaurar pendiente si saved.
+        Si `e == 0` -> terminado. Si `e == GL_INVALID_ENUM (0x0500)` o
+        `GL_INVALID_OPERATION (0x0502)` -> ir al fallback CPU.
+     4. Si `!ctx->has_s3tc`: ir directamente al fallback CPU (no probar).
+     NOTA: la lista de extensiones anunciada por el shim siempre incluye S3TC
+     (porque el shim garantiza el soporte con CPU); por eso la decisión usa la
+     lista REAL de Mesa, no la anunciada.
+   - Registrar nada en tablas (se eliminan). Solo `width`/`height` del nivel
+     para el cálculo.
+   - Fallback CPU (`shim_dxt_decode`):
+     * Validar `imageSize >= blocks_w * blocks_h * block_bytes` con
+       `blocks_w = (width + 3) / 4`, `blocks_h = (height + 3) / 4`,
+       `block_bytes = 8` (DXT1) o `16` (DXT3/DXT5). Si no cumple, traza y abortar.
+     * Alojar `uint8_t *out = calloc((size_t)width * height, 4)` (usar
+       aritmética size_t; comprobar overflow y NULL).
+     * Recorrer bloques de `4x4` píxeles (`bx = 0..width-1` paso 4,
+       `by = 0..height-1` paso 4). CAMBIO v2 (A2): al escribir cada píxel del
+       bloque (px, py en 0..3) calcular `x = bx + px; y = by + py;` y
+       ESCRIBIR SOLO SI `x < width && y < height` (los mips 2x2, 1x1, 5x3...
+       tienen bloques que sobresalen del borde).
+       - **Bloque color DXT (8 bytes):** leer `uint16_t c0, c1` (little-endian)
+         y `uint32_t code` (little-endian). Extraer RGB565 a RGB888:
+         `r = ((c >> 11) & 0x1F) * 255 / 31;`
+         `g = ((c >> 5)  & 0x3F) * 255 / 63;`
+         `b = (c & 0x1F) * 255 / 31;`
+         Paleta de 4 colores `pal[4][4]`:
+         `pal[0] = {r0, g0, b0, 255}`, `pal[1] = {r1, g1, b1, 255}`.
+         Si `internalFormat` es DXT3/DXT5 (0x83F2/0x83F3/0x8C4E/0x8C4F) o
+         `c0 > c1`:
+           `pal[2] = {(2*r0+r1)/3, (2*g0+g1)/3, (2*b0+b1)/3, 255}`;
+           `pal[3] = {(r0+2*r1)/3, (g0+2*g1)/3, (b0+2*b1)/3, 255}`;
+         Si no (`c0 <= c1` en DXT1):
+           `pal[2] = {(r0+r1)/2, (g0+g1)/2, (b0+b1)/2, 255}`;
+           `pal[3] = {0, 0, 0, 0}` PARA GL_COMPRESSED_RGBA_S3TC_DXT1_EXT
+           (0x83F1 / SRGB_ALPHA 0x8C4D) y `{0, 0, 0, 255}` PARA
+           GL_COMPRESSED_RGB_S3TC_DXT1_EXT (0x83F0 / SRGB 0x8C4C), porque ese
+           formato no tiene canal alfa (CORRECCIÓN v2, A11).
+         Índice del píxel `k = py*4 + px` (0..15): `idx = (code >> (2*k)) & 3`.
+       - **Alfa DXT3 (8 bytes previos al bloque color; el bloque total es de
+         16 bytes: alfa en [0..7], color en [8..15]):** 16 nibbles de 4 bits en
+         un entero de 64 bits little-endian `bits`;
+         para el píxel `k` (`0..15`), `alpha = ((bits >> (k*4)) & 0xF) * 17`.
+       - **Alfa DXT5 (8 bytes previos al bloque color):** `uint8_t a0 = blk[0], a1 = blk[1]`,
+         y entero de 48 bits `acode` (bytes blk[2]..blk[7] little-endian) con 16
+         índices de 3 bits (`idx = (acode >> (k*3)) & 0x7`).
+         Si `a0 > a1`: tabla `atab[8]` con `atab[0]=a0`, `atab[1]=a1` y
+         `atab[1+j] = ((7-j)*a0 + j*a1)/7` para `j=1..6`.
+         Si `a0 <= a1`: `atab[0]=a0`, `atab[1]=a1`,
+         `atab[1+j] = ((5-j)*a0 + j*a1)/5` para `j=1..4`,
+         más `atab[6] = 0` y `atab[7] = 255`.
+         (En DXT3/DXT5 el alfa del píxel REEMPLAZA al 255 de la paleta.)
+     * Subida:
+       - `shim_glCompressedTexImage2D`: `real_glTexImage2D(target, level,
+         ifmt, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, out)` con
+         `ifmt = GL_RGBA` (formatos RGB/RGBA normales) o `GL_SRGB8_ALPHA8`
+         (0x8C43) para las variantes SRGB. Debe usarse el mismo ifmt en TODOS
+         los niveles de la textura (se garantiza porque todos pasan por aquí).
+         El PBO de desempaquetado y los GL_UNPACK_* NO deben afectar a la
+         subida desde `out`: fijar temporalmente ROW_LENGTH=0, SKIP=0,
+         ALIGNMENT=4 y restaurar.
+       - `shim_glCompressedTexSubImage2D(target, level, xoff, yoff, w, h,
+         format, imageSize, data)`: descomprimir el sub-bloque (xoff/yoff
+         múltiplos de 4 según la especificación DXT) y subir con
+         `real_glTexSubImage2D(..., GL_RGBA, GL_UNSIGNED_BYTE, out)`.
+       - Liberar `free(out)` y drenar errores (3.0.4).
+   - Alias `glCompressedTexImage2DARB`, `glCompressedTexSubImage2DARB`
+     (Apéndice D).
+
+--------------------------------------------------------------------------------
+MÓDULO F: Estado de Rasterizado y Conversión de GL_QUADS
+--------------------------------------------------------------------------------
+Constantes GLenum:
+  GL_POINTS                       = 0x0000
+  GL_LINES                        = 0x0001
+  GL_LINE_LOOP                    = 0x0002
+  GL_LINE_STRIP                   = 0x0003
+  GL_TRIANGLES                    = 0x0004
+  GL_TRIANGLE_STRIP               = 0x0005
+  GL_TRIANGLE_FAN                 = 0x0006
+  GL_QUADS                        = 0x0007
+  GL_QUAD_STRIP                   = 0x0008
+  GL_POLYGON                      = 0x0009
+  GL_UNSIGNED_BYTE                = 0x1401
+  GL_UNSIGNED_SHORT               = 0x1403
+  GL_UNSIGNED_INT                 = 0x1405
+  GL_ELEMENT_ARRAY_BUFFER_BINDING = 0x8895
+
+1. `void shim_glPolygonMode(GLenum face, GLenum mode)`: No-op silencioso.
+   (El modo alambre/puntos no existe en GLES; se pierde ese efecto.)
+2. `void shim_glPointSize(GLfloat size)`: Guardar `ctx->point_size = size;`
+   (se usa como uniform `u_point_size` en Módulo H; no existe en GLES).
+3. Camino rápido de dibujo: ver 0.1 (flag `legacy_va_enabled` + comparación de
+   `mode`). Todo lo siguiente es el CAMINO LENTO.
+4. Conversión de `GL_QUADS` en `shim_glDrawArrays(GLenum mode, GLint first, GLsizei count)`:
+   - Si `mode == GL_QUADS`:
+     * Calcular `GLsizei quads = count / 4; GLsizei idx_count = quads * 6;`.
+     * Si `idx_count <= 0`, retornar.
+     * ESTRATEGIA A (preferida; si `ctx->has_base_vertex`):
+       Mantener POR CONTEXTO un IBO (`ctx->quad_ibo`) con índices RELATIVOS
+       (que no dependen de `first`): para cada quad `q` (`0..quads-1`):
+       `base = (uint32_t)(q * 4);`
+       `idx[q*6+0]=base+0; idx[q*6+1]=base+1; idx[q*6+2]=base+2;`
+       `idx[q*6+3]=base+0; idx[q*6+4]=base+2; idx[q*6+5]=base+3;`
+       El IBO solo se REGENERA cuando `idx_count` supera la capacidad actual
+       (crecimiento por duplicación) — nunca cuando cambia `first`.
+       Guardar `prev_ibo` (consulta GL_ELEMENT_ARRAY_BUFFER_BINDING; el binding
+       pertenece al VAO actual), vincular `ctx->quad_ibo` a
+       `GL_ELEMENT_ARRAY_BUFFER`, ejecutar
+       `real_glDrawElementsBaseVertex(GL_TRIANGLES, idx_count,
+       GL_UNSIGNED_INT, NULL, first)` y restaurar `prev_ibo`.
+       La función base-vertex se resuelve con ensure_gl_ext: primero
+       `glDrawElementsBaseVertex` (ES 3.2), luego `glDrawElementsBaseVertexEXT`,
+       luego `glDrawElementsBaseVertexOES`.
+     * ESTRATEGIA B (si NO hay base vertex; comportamiento de la v1):
+       índices absolutos `first + ...` en un IBO por contexto que se
+       actualiza (con orphaning `glBufferData(..., GL_STREAM_DRAW)`)
+       únicamente si cambia el par (first, idx_count) respecto a la última
+       llamada o si se excede la capacidad. Mismo guardado/restauración de IBO.
+       Documentar en comentarios que es la estrategia lenta.
+   - `mode == GL_QUAD_STRIP` (0x0008, NUEVO): vértices v0..v(count-1); para cada
+     par `i` (0 .. (count-2)/2 - 1) generar dos triángulos
+     `(2i, 2i+1, 2i+2)` y `(2i+1, 2i+3, 2i+2)` en el IBO relativo y dibujar
+     con la misma estrategia que GL_QUADS.
+   - `mode == GL_POLYGON` (0x0009, NUEVO): `real_glDrawArrays(GL_TRIANGLE_FAN,
+     first, count)`.
+5. `shim_glDrawElements(mode, count, type, indices)` (NUEVO):
+   - Camino rápido idéntico (flag y mode).
+   - `GL_QUADS`: leer los índices (de memoria cliente si no hay IBO
+     enlazado; si hay IBO enlazado, mapearlo con glMapBufferRange(READ) sobre
+     el rango necesario o, preferible, copiar la parte con
+     glGetBufferSubData si estuviera disponible; si no, mapear), expandir cada
+     4 índices a 6 (`0,1,2, 0,2,3`) en un búfer scratch uint32, subirlo a un
+     IBO temporal por contexto (`ctx->tmp_ibo`, GL_STREAM_DRAW) y dibujar con
+     `real_glDrawElements(GL_TRIANGLES, n, GL_UNSIGNED_INT, 0)` guardando y
+     restaurando el binding de IBO.
+   - `GL_QUAD_STRIP`: ídem con la regla de triángulos del punto 4.
+   - `GL_POLYGON`: `real_glDrawElements(GL_TRIANGLE_FAN, ...)`.
+   - Índices en memoria cliente con modos normales: por seguridad (no dar por
+     válida la lectura de índices cliente en GLES) subirlos a ctx->tmp_ibo y
+     dibujar desde allí.
+   - glDrawRangeElements, glMultiDrawArrays, glDrawArraysInstanced con QUADS:
+     fuera de alcance (traza de depuración).
+
+--------------------------------------------------------------------------------
+MÓDULO G: Reescritura Ligera de Shaders (glShaderSource)
+--------------------------------------------------------------------------------
+Constantes: GL_SHADER_TYPE=0x8B4F, GL_VERTEX_SHADER=0x8B31,
+GL_FRAGMENT_SHADER=0x8B30, GL_COMPUTE_SHADER=0x91B9, GL_GEOMETRY_SHADER=0x8DD9.
+
+Implementación de `shim_glShaderSource(GLuint shader, GLsizei count, const GLchar *const *string, const GLint *length)`:
+
+1. Concatenar los `count` strings (respetando `length[i]` si `length != NULL && length[i] >= 0`)
+   en un único búfer null-terminated `char *src`.
+2. Determinar el tipo de shader: `GLint type = 0;
+   real_glGetShaderiv(shader, GL_SHADER_TYPE, &type);` (disponible en ES 3).
+   Si es COMPUTE o GEOMETRY: NO reescribir (pasar el original).
+3. Análisis de cabecera (`parse_header`):
+   - Recorrer el texto ignorando espacios, comentarios `//` y `/* */`.
+   - La "ZONA DE CABECERA" son las líneas iniciales formadas solo por
+     directivas del preprocesador (`#version`, `#extension`, `#define`,
+     `#pragma`, `#line`, `#if/#ifdef/#else/#endif`...) y comentarios. Termina
+     en el primer token que NO sea de preprocesador. Anotar el offset de fin de
+     la zona (`hdr_end`) y la posición/valor de `#version` si existe.
+   - Extraer `V` (número de versión) y el perfil (`es`, `core`,
+     `compatibility`) si lo hay.
+4. Casos en los que NO se reescribe (se pasa el original tal cual):
+   - La directiva es `#version NNN es` (ES nativo) o `#version 100`
+     (GLSL ES 1.00 existe solo en ES).
+   - No hay `#version` pero el texto contiene `precision ` o los calificadores
+     `highp`/`mediump`/`lowp` (ES 1.00 implícito).
+5. Clasificación (para el resto):
+   - **Caso 1 (GLSL 1.10 hereda a ES 1.00):** `#version 110`, o sin `#version`
+     y sin indicios de ES, y SIN que G.2.1 detecte función fija / sampler1D /
+     double / clip (si los detecta, se usa el Caso 2 con `#version 300 es`).
+     Se emite:
+     ```glsl
+     #version 100
+     [resto de directivas originales de la zona de cabecera, p. ej. #extension]
+     precision highp float;           // en vértice
+     ```
+     y en shaders de FRAGMENTO, en lugar de `precision highp float;`:
+     ```glsl
+     #ifdef GL_FRAGMENT_PRECISION_HIGH
+     precision highp float;
+     #else
+     precision mediump float;
+     #endif
+     ```
+     (En ES 1.00 `highp` en fragmento es opcional; Mali/Panfrost lo soporta,
+     pero la guarda #ifdef evita fallos en otros drivers.)
+   - **Caso 2 (GLSL 1.20, 1.30, 1.40, 1.50, 330, 400+ core/compatibility):**
+     usar `#version 300 es` o, si `ctx->es_minor >= 1` (ES >= 3.1) y el código
+     contiene `layout(binding` / `layout (binding` / `imageLoad` / `imageStore`
+     / `atomicAdd` / `textureGather` / `shared ` / `memoryBarrier`, usar
+     `#version 310 es`. (No usar 320 es salvo necesidad demostrada.) Se emite:
+     ```glsl
+     #version 300 es                       // o 310 es
+     #extension GL_EXT_shader_implicit_conversions : enable
+     [resto de directivas originales de la zona de cabecera]
+     precision highp float;
+     precision highp int;
+     ```
+     NOTA v2 (A4/A5): ya NO se añade `#extension GL_ARB_shading_language_420pack
+     : enable`. Esa extensión no existe en GLSL ES (solo daba un warning) y
+     no aporta `layout(binding=)` en ES; para eso hace falta `310 es`.
+     `GL_EXT_shader_implicit_conversions` hace que el compilador NIR de Mesa
+     Panfrost acepte expresiones como `float x = 1;` sin error de tipo,
+     replicando la permisividad de drivers propietarios. Como usa `enable`
+     (no `require`), si el compilador no la soporta solo emite un warning.
+     Para `1.20` (que permite conversiones implícitas) se usa también el Caso 2.
+     Además: si el shader usa tokens heredados (`attribute `, `varying `,
+     `texture2D(`, `texture3D(`, `textureCube(`, `gl_FragColor`,
+     `gl_FragData[`), aplicar `translate_legacy_to_es300` (punto 6).
+6. `translate_legacy_to_es300(src, type)` (NUEVO; transformación léxica con
+   reconocimiento de límites de identificador y OMITIENDO comentarios y
+   cadenas):
+   - Vértice: `attribute` -> `in`; `varying` -> `out`.
+   - Fragmento: `varying` -> `in`; declarar una salida
+     `out vec4 shim_FragColor;` (justo tras el preámbulo) y sustituir
+     `gl_FragColor` por `shim_FragColor`. `gl_FragData[N]` -> declarar
+     `layout(location = N) out vec4 shim_FragData_N;` para cada N usado y
+     sustituir.
+   - Ambos: `texture2D(` / `texture3D(` / `textureCube(` / `texture2DProj(` ->
+     `texture(` / `textureProj(`; `texture2DLod(` -> `textureLod(`.
+   - `#extension GL_ARB_* : require` -> `: enable` (evita error "extension not
+     supported" al exigir una extensión que ES no reporta). Idem
+     `GL_EXT_gpu_shader4`.
+   - Si el shader trae `layout(location=...)` en varyings (ES 3.00 no lo
+     admite, 3.10 sí): subir a `310 es` si `es_minor >= 1`.
+6B. (NUEVO v2.1) `translate_ff_builtins(src, type, &ffdecl)`: traducción de
+   built-ins de función fija, sampler1D, double y clip distance. Se ejecuta
+   DESPUÉS de translate_legacy_to_es300; su salida `ffdecl` se coloca según el
+   punto 7. Definición completa en el Módulo G.2.
+7. Colocación de las inserciones (corrección A4): el texto emitido es
+   `#version ...` (SIEMPRE primera línea) + `#extension` propios + las líneas
+   originales de la zona de cabecera (que incluyen los `#extension` del autor) +
+   las líneas `precision` + (v2.1) el bloque `ffdecl` de G.2 si existe + el
+   resto del código original desde `hdr_end`.
+   Así ningún `#extension` queda detrás de un token no-preprocesador (Mesa lo
+   rechaza en GLSL ES).
+   Opcional (solo con NUUBOS_SHIM_DEBUG): emitir `#line N` tras el preámbulo
+   para que los números de línea de los errores coincidan con el original.
+8. Llamar a `real_glShaderSource(shader, 1, (const GLchar *const *)&patched, NULL)`
+   y liberar memoria temporal.
+9. Lo que NO traduce el shim (v2.1; si se detecta, traza de depuración y pasar
+   tal cual; fallará al compilar y la app decide): la lista cerrada de G.2.11 y,
+   salvo que se active la emulación opt-in de G.3, los shaders de geometry y
+   tessellation. Los built-ins de función fija, sampler1D/texture1D,
+   double/dvec, gl_ClipVertex y gl_ClipDistance SÍ se traducen: Módulo G.2.
+
+--------------------------------------------------------------------------------
+MÓDULO G.2 (NUEVO v2.1): Shaders de perfil Compatibility
+(built-ins de función fija, sampler1D, double, clip distance)
+--------------------------------------------------------------------------------
+Solo activo en MODO ESCRITORIO (en pasivo glShaderSource es el real).
+
+G.2.0. DECISIÓN, MOTIVO Y COBERTURA
+     La v2 declaraba esto "fuera de alcance" y mandaba esos ports a gl4es. Es
+     incoherente con 2.2: el hook de dlopen REDIRIGE gl4es hacia Mesa nativo +
+     este shim, así que un port cuyo shader use `gl_Vertex` o `ftransform()` ya
+     no tiene gl4es debajo y simplemente no compila. Además no hace falta un
+     traductor de estado nuevo: el Módulo H ya mantiene matrices, color actual,
+     normal y texcoords actuales y punteros de arrays; solo hay que EXPONERLOS
+     al shader. El camino rápido de dibujo de GLES puro no cambia (G.2.5).
+
+     COBERTURA (v2.1):
+       INCLUIDO (DEBE):
+         - Atributos: gl_Vertex, gl_Color, gl_Normal, gl_SecondaryColor,
+           gl_FogCoord, gl_MultiTexCoord0..7                    (G.2.2)
+         - Varyings: gl_FrontColor, gl_BackColor, gl_FrontSecondaryColor,
+           gl_BackSecondaryColor, gl_FogFragCoord, gl_TexCoord[N] (G.2.3)
+         - Uniformes: gl_ModelViewMatrix, gl_ProjectionMatrix,
+           gl_ModelViewProjectionMatrix (+ Inverse/Transpose/InverseTranspose),
+           gl_NormalMatrix, gl_NormalScale, gl_TextureMatrix[],
+           gl_Fog*, gl_LightSource[], gl_LightModel*, gl_FrontMaterial,
+           gl_BackMaterial, gl_Front/BackLightProduct[],
+           gl_Front/BackLightModelProduct, gl_ClipPlane[], gl_TextureEnvColor[],
+           constantes gl_Max*                                   (G.2.4)
+         - ftransform()                                          (G.2.12)
+         - sampler1D / isampler1D / usampler1D y texture1D*      (G.2.8)
+         - double / dvecN / dmatN y literales `lf`               (G.2.8)
+       CONDICIONAL (necesita GL_EXT_clip_cull_distance en el ES real):
+         - gl_ClipDistance y gl_ClipVertex                       (G.2.9)
+       EXPERIMENTAL, OPT-IN (emulación con compute, ES >= 3.1, Módulo G.3):
+         - geometry y tessellation shaders; bloques de interfaz in/out 150+.
+       NO CUBIERTO (poco frecuente, lista cerrada en G.2.11).
+
+     REQUISITOS: ES real >= 3.0 (UBO, `layout(location)` en entradas de
+     vértice, `#version 300 es`). Si `ctx->es_major < 3`, o si
+     `NUUBOS_SHIM_FF_SHADERS=0` (Apéndice B, valor por defecto 1), G.2 se
+     desactiva y glShaderSource se comporta exactamente como en la v2
+     (pasar tal cual + traza de depuración).
+
+G.2.1. DETECCIÓN (`scan_ff_usage`) Y EFECTO EN LA CLASIFICACIÓN
+     Se ejecuta tras parse_header sobre el texto desde `hdr_end`, con el mismo
+     tokenizador léxico que translate_legacy_to_es300 (límites de identificador,
+     omitiendo comentarios). Devuelve una estructura `FFUse`:
+         uint32_t attr_mask;     /* bit K de la tabla G.2.2                   */
+         uint32_t vary_mask;     /* bits: FRONTCOLOR, BACKCOLOR, FSECCOLOR,
+                                    FOGFRAGCOORD, TEXCOORD0..7              */
+         uint32_t uni_mask;      /* cualquier uniforme/constante built-in     */
+         unsigned ftransform:1, s1d:1, is1d:1, us1d:1, dbl:1, clip:1;
+     Si TODO es cero: la salida es idéntica byte a byte a la de la v2
+     (requisito de prueba T-G2-7).
+     Si algo es distinto de cero (y G.2 está activo): el shader se trata como
+     CASO 2 (`#version 300 es`, o `310 es` por las reglas existentes) AUNQUE
+     fuera `#version 110`/`120` o no tuviera `#version`. RAZÓN: GLSL ES 1.00 no
+     admite `layout(location=)` y habría que fijar ubicaciones con
+     glBindAttribLocation antes del link; con 300 es basta el propio shader.
+     Los shaders `#version NNN es` o `#version 100` siguen sin tocarse (punto 4
+     de Módulo G).
+
+G.2.2. ATRIBUTOS DE VÉRTICE (ubicaciones reservadas en lo ALTO del rango)
+     Índice K y tipo; ubicación = `(ctx->max_vertex_attribs - 1) - K`, con
+     `ctx->max_vertex_attribs` = GL_MAX_VERTEX_ATTRIBS real (se lee una vez en
+     features_ready, 3.0.3). Con 16 atributos:
+         K  built-in            nombre shim          tipo    ubicación (16)
+         0  gl_Vertex           shim_Vertex          vec4    15
+         1  gl_Color            shim_Color           vec4    14
+         2  gl_Normal           shim_Normal          vec3    13
+         3..10 gl_MultiTexCoord0..7 shim_MultiTexCoordN vec4 12..5
+         11 gl_SecondaryColor   shim_SecondaryColor  vec4     4
+         12 gl_FogCoord         shim_FogCoord        float    3
+     Emisión (solo los usados), antes del cuerpo:
+         layout(location = 15) in highp vec4 shim_Vertex;
+     RAZÓN de reservar arriba: las apps con shaders de este tipo suelen enlazar
+     sus atributos propios en los índices bajos (0..7) con
+     glBindAttribLocation; así no colisionan. Se acepta esta limitación: si la
+     app enlaza un atributo propio en un índice >= max_vertex_attribs-13, habrá
+     colisión (el link falla). No se hookea glBindAttribLocation; con
+     NUUBOS_SHIM_DEBUG el hook de glLinkProgram (G.2.6) lo notifica.
+     Constantes de la tabla compartidas con el Módulo H: `SHIM_FF_LOC(K)`.
+
+G.2.3. VARYINGS
+     Reglas de renombrado por tipo de shader (cada aparición, por token):
+       VÉRTICE:
+         gl_FrontColor           -> shim_FrontColor           (out highp vec4)
+         gl_FrontSecondaryColor  -> shim_FrontSecondaryColor  (out highp vec4)
+         gl_FogFragCoord         -> shim_FogFragCoord         (out highp float)
+         gl_TexCoord[K]          -> shim_TexCoordK            (out highp vec4)
+         gl_BackColor, gl_BackSecondaryColor -> variables GLOBALES no varying
+           (`highp vec4 shim_BackColor;`): la escritura compila y se descarta.
+           No hay iluminación de dos caras (G.2.11).
+       FRAGMENTO:
+         gl_Color                -> shim_FrontColor           (in highp vec4)
+         gl_SecondaryColor       -> shim_FrontSecondaryColor  (in highp vec4)
+         gl_FogFragCoord         -> shim_FogFragCoord         (in highp float)
+         gl_TexCoord[K]          -> shim_TexCoordK            (in highp vec4)
+     `gl_TexCoord[K]` solo con K entero LITERAL (se admiten espacios:
+     `gl_TexCoord[ 0 ]`). RAZÓN de usar un varying por índice y no un array:
+     ES exige igual tamaño de array en ambas etapas y el vértice suele escribir
+     más índices de los que lee el fragmento; con nombres separados solo se
+     declaran los usados. Índice no literal o uso de `gl_TexCoord` sin índice:
+     no se traduce esa aparición y se emite traza (el shader fallará al
+     compilar; está documentado en G.2.11).
+     Solo se declaran los varyings USADOS en esa etapa. Si el fragmento lee uno
+     que el vértice no escribe, el link falla en ES (en GL de escritorio sería
+     un valor indefinido); se deja así y el log del link lo explica.
+
+G.2.4. UNIFORMES BUILT-IN MEDIANTE UN ÚNICO UBO `ShimFF`
+     DECISIÓN: un solo bloque std140 con TODO el estado, en vez de un uniform
+     por miembro. RAZÓN: (1) evita consultar cientos de ubicaciones por
+     programa (`gl_LightSource[i].ambient`... son ~100); (2) la subida es una
+     sola copia por cambio de estado; (3) ES 3.0 garantiza UBO.
+     Todo shader con `uni_mask != 0` DEBE declarar el bloque COMPLETO e
+     IDÉNTICO (ES exige igualdad entre etapas). Todos los miembros con `highp`
+     explícito (en ES 3.00 el fragmento siempre admite highp):
+
+         struct shim_LightSourceParameters {
+           highp vec4 ambient; highp vec4 diffuse; highp vec4 specular;
+           highp vec4 position; highp vec4 halfVector;
+           highp vec3 spotDirection; highp float spotExponent;
+           highp float spotCutoff; highp float spotCosCutoff;
+           highp float constantAttenuation; highp float linearAttenuation;
+           highp float quadraticAttenuation;
+         };
+         struct shim_MaterialParameters {
+           highp vec4 emission; highp vec4 ambient; highp vec4 diffuse;
+           highp vec4 specular; highp float shininess;
+         };
+         struct shim_LightModelParameters { highp vec4 ambient; };
+         struct shim_LightModelProducts   { highp vec4 sceneColor; };
+         struct shim_LightProducts { highp vec4 ambient; highp vec4 diffuse;
+                                     highp vec4 specular; };
+         struct shim_FogParameters { highp vec4 color; highp float density;
+           highp float start; highp float end; highp float scale; };
+         layout(std140) uniform ShimFF {
+           highp mat4 shim_ModelViewMatrix;                       //    0
+           highp mat4 shim_ProjectionMatrix;                      //   64
+           highp mat4 shim_ModelViewProjectionMatrix;             //  128
+           highp mat4 shim_ModelViewMatrixInverse;                //  192
+           highp mat4 shim_ProjectionMatrixInverse;               //  256
+           highp mat4 shim_ModelViewProjectionMatrixInverse;      //  320
+           highp mat4 shim_ModelViewMatrixTranspose;              //  384
+           highp mat4 shim_ProjectionMatrixTranspose;             //  448
+           highp mat4 shim_ModelViewProjectionMatrixTranspose;    //  512
+           highp mat4 shim_ModelViewMatrixInverseTranspose;       //  576
+           highp mat4 shim_ProjectionMatrixInverseTranspose;      //  640
+           highp mat4 shim_ModelViewProjectionMatrixInverseTranspose; // 704
+           highp mat3 shim_NormalMatrix;                          //  768
+           highp float shim_NormalScale;                          //  816
+           highp mat4 shim_TextureMatrix[8];                      //  832
+           shim_LightSourceParameters shim_LightSource[8];        // 1344
+           shim_MaterialParameters shim_FrontMaterial;            // 2368
+           shim_MaterialParameters shim_BackMaterial;             // 2448
+           shim_LightModelParameters shim_LightModel;             // 2528
+           shim_LightModelProducts shim_FrontLightModelProduct;   // 2544
+           shim_LightModelProducts shim_BackLightModelProduct;    // 2560
+           shim_LightProducts shim_FrontLightProduct[8];          // 2576
+           shim_LightProducts shim_BackLightProduct[8];           // 2960
+           shim_FogParameters shim_Fog;                           // 3344
+           highp vec4 shim_ClipPlane[8];                          // 3376
+           highp vec4 shim_TextureEnvColor[8];                    // 3504
+           highp int shim_ClipEnableMask;                         // 3632
+         };                                                       // 3648
+
+     Espejo en C (el agente DEBE incluir los _Static_assert; verificados con
+     gcc en la redacción de esta spec):
+         typedef struct ShimFFLight {
+             float ambient[4], diffuse[4], specular[4], position[4], halfVector[4];
+             float spotDirection[3], spotExponent;
+             float spotCutoff, spotCosCutoff, constantAttenuation, linearAttenuation;
+             float quadraticAttenuation, _pad[3];
+         } ShimFFLight;                                   /* 128 */
+         typedef struct ShimFFMaterial {
+             float emission[4], ambient[4], diffuse[4], specular[4];
+             float shininess, _pad[3];
+         } ShimFFMaterial;                                /*  80 */
+         typedef struct ShimFFLightProducts {
+             float ambient[4], diffuse[4], specular[4];
+         } ShimFFLightProducts;                           /*  48 */
+         typedef struct ShimFFFog {
+             float color[4]; float density, start, end, scale;
+         } ShimFFFog;                                     /*  32 */
+         typedef struct ShimFFBlock {
+             float mv[16], proj[16], mvp[16];
+             float mv_inv[16], proj_inv[16], mvp_inv[16];
+             float mv_t[16], proj_t[16], mvp_t[16];
+             float mv_it[16], proj_it[16], mvp_it[16];
+             float normal_matrix[12];   /* mat3 std140: 3 columnas vec4        */
+             float normal_scale, _pad0[3];
+             float tex_matrix[8][16];
+             ShimFFLight light[8];
+             ShimFFMaterial front_mat, back_mat;
+             float lm_ambient[4];
+             float front_scene[4], back_scene[4];
+             ShimFFLightProducts front_lp[8], back_lp[8];
+             ShimFFFog fog;
+             float clip_plane[8][4];
+             float texenv_color[8][4];
+             int32_t clip_enable_mask, _pad1[3];
+         } ShimFFBlock;                                   /* 3648 */
+         _Static_assert(sizeof(ShimFFBlock) == 3648, "ShimFFBlock");
+         _Static_assert(offsetof(ShimFFBlock, normal_matrix) == 768, "nm");
+         _Static_assert(offsetof(ShimFFBlock, tex_matrix)    == 832, "tex");
+         _Static_assert(offsetof(ShimFFBlock, light)         == 1344, "light");
+         _Static_assert(offsetof(ShimFFBlock, front_mat)     == 2368, "fm");
+         _Static_assert(offsetof(ShimFFBlock, front_lp)      == 2576, "flp");
+         _Static_assert(offsetof(ShimFFBlock, fog)           == 3344, "fog");
+         _Static_assert(offsetof(ShimFFBlock, clip_plane)    == 3376, "clip");
+         _Static_assert(offsetof(ShimFFBlock, clip_enable_mask) == 3632, "cem");
+     (Los mat4 se guardan column-major, igual que glLoadMatrixf y que la pila
+     del Módulo H: se copian con memcpy.)
+
+     Renombrado (prefijo `gl_` -> `shim_`, por token) de TODOS estos
+     identificadores cuando aparezcan: gl_ModelViewMatrix,
+     gl_ProjectionMatrix, gl_ModelViewProjectionMatrix y sus sufijos Inverse,
+     Transpose, InverseTranspose; gl_NormalMatrix; gl_NormalScale;
+     gl_TextureMatrix; gl_LightSource; gl_LightSourceParameters (tipo);
+     gl_FrontMaterial; gl_BackMaterial; gl_MaterialParameters (tipo);
+     gl_LightModel; gl_LightModelParameters (tipo); gl_FrontLightModelProduct;
+     gl_BackLightModelProduct; gl_LightModelProducts (tipo);
+     gl_FrontLightProduct; gl_BackLightProduct; gl_LightProducts (tipo);
+     gl_Fog; gl_FogParameters (tipo); gl_ClipPlane; gl_TextureEnvColor.
+     NOTA: `gl_TextureMatrix` solo existe con la variante base (no se ofrecen
+     sus Inverse/Transpose: coste de UBO desproporcionado para un uso casi nulo).
+     Constantes (se declaran solo si se usan, tras el bloque):
+         gl_MaxLights, gl_MaxTextureUnits, gl_MaxTextureCoords,
+         gl_MaxClipPlanes -> `const highp int shim_MaxLights = 8;` etc.
+         (todas = 8); gl_MaxVaryingFloats -> `(gl_MaxVaryingVectors * 4)`.
+     `gl_DepthRange`, `gl_Position`, `gl_PointSize`, `gl_FragCoord`,
+     `gl_FrontFacing`, `gl_PointCoord`, `gl_FragDepth`, `gl_VertexID`,
+     `gl_InstanceID` YA existen en GLSL ES 3.00: NO se tocan.
+
+G.2.5. SINCRONIZACIÓN DE ESTADO Y CAMINO RÁPIDO (obligatorio respetarlo)
+     Campos nuevos en ShimCtx (ver 3.0.3): `uint32_t ff_dirty` (máscara de bits
+     FFD_MV, FFD_PROJ, FFD_TEX, FFD_LIGHT, FFD_MAT, FFD_FOG, FFD_CLIP,
+     FFD_TEXENV; 0 = nada pendiente), `GLuint ff_ubo[4]; int ff_ubo_cur,
+     ff_ready, ff_ubo_binding`, el estado de luces/material/fog/planos que
+     define G.2.7, y copias cacheadas de las matrices derivadas.
+     Contador global `g_ff_shader_count` (atómico, lectura relajada): número de
+     shaders que ha traducido G.2 en el proceso.
+     MACRO `SHIM_FF_TOUCH(c, bit)`:
+         if (__atomic_load_n(&g_ff_shader_count, __ATOMIC_RELAXED))
+             (c)->ff_dirty |= (bit);
+     Se invoca desde TODA función del Módulo H que cambie matrices (glLoadMatrix*,
+     glMultMatrix*, glTranslate*, glRotate*, glScale*, glOrtho, glFrustum,
+     glLoadIdentity, glPopMatrix; glPushMatrix no cambia la cima) y desde
+     las funciones nuevas de G.2.7. RAZÓN: mientras ningún shader de función fija
+     haya existido, nadie paga nada; las apps GLES/core nunca llaman a estas
+     funciones (no existen en GLES).
+     CAMINO RÁPIDO DE DIBUJO: la condición de 0.1 pasa a
+         (c->legacy_va_enabled | c->ff_dirty) == 0
+     Dos lecturas y un OR, sin mutex, sin GL. Si no se cumple, el camino lento
+     empieza SIEMPRE por `shim_ff_sync(c)` (también en glDrawElements y
+     glDrawRangeElements, y en los dibujos internos del Módulo H: glEnd,
+     glCallList).
+     `shim_ff_sync(c)`:
+       1. `if (!c->ff_dirty) return;`
+       2. Si `!c->ff_ready`: crear 4 UBO (`glGenBuffers`, `glBindBuffer(
+          GL_UNIFORM_BUFFER)`, `glBufferData(sizeof(ShimFFBlock), NULL,
+          GL_DYNAMIC_DRAW)`), `ff_ubo_binding = max_ubo_bindings - 1`
+          (GL_MAX_UNIFORM_BUFFER_BINDINGS, >= 24 en ES 3.0), `ff_ready = 1`,
+          `ff_dirty = FFD_ALL`.
+       3. Recalcular SOLO lo sucio: si FFD_MV|FFD_PROJ: mvp = proj * mv; si hay
+          `g_ff_need_variants` (atómico, lo pone a 1 G.2 al ver cualquier
+          sufijo Inverse/Transpose/NormalMatrix) calcular inversas, transpuestas
+          e inversa-transpuesta; NormalMatrix = transpuesta de la inversa de la
+          submatriz 3x3 superior izquierda de mv. Matriz singular: inversa =
+          identidad (valor indefinido en GL; así no se propagan NaN).
+          `normal_scale = 1.0f`. Si FFD_LIGHT|FFD_MAT: recalcular productos:
+            front_lp[i].X = front_mat.X * light[i].X   (X = ambient, diffuse,
+            specular; producto componente a componente)
+            front_scene = front_mat.emission + front_mat.ambient * lm_ambient
+            (ídem back_*). `fog.scale = (end != start) ? 1.0f/(end-start) : 0`.
+            `spotCosCutoff = cos(spotCutoff * pi/180)` (si spotCutoff == 180,
+            -1.0f).
+       4. Rotar `ff_ubo_cur = (ff_ubo_cur + 1) & 3` y subir el bloque ENTERO al
+          UBO nuevo. RAZÓN del anillo de 4: reescribir un UBO que un dibujo
+          anterior aún tiene en vuelo obliga a Panfrost a sincronizar; con
+          cambios de matriz por objeto sería la mayor fuente de stalls. El
+          bloque son 3,6 KB: la copia completa es barata.
+          Guardar/restaurar el binding genérico GL_UNIFORM_BUFFER que tuviera la
+          app (`glGetIntegerv(GL_UNIFORM_BUFFER_BINDING)` antes, restaurar tras
+          `glBufferSubData`), y dejar `glBindBufferBase(GL_UNIFORM_BUFFER,
+          ff_ubo_binding, ff_ubo[cur])` apuntando al UBO nuevo.
+       5. `ff_dirty = 0`.
+     Valores iniciales de contexto (los de la especificación GL): ver G.2.7.
+
+G.2.6. PROGRAMAS: ENLACE, USO Y TABLA g_prog_ff
+     Dos wrappers nuevos (solo modo escritorio; ver cambios en 0.1):
+       - `shim_glLinkProgram(prog)`:
+            real_glLinkProgram(prog);
+            if (!g_ff_shader_count) return;           /* coste ~0 sin FF      */
+            real_glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+            if (!ok) { erase g_prog_ff[prog]; return; }
+            idx = real_glGetUniformBlockIndex(prog, "ShimFF");
+            if (idx != GL_INVALID_INDEX)
+                real_glUniformBlockBinding(prog, idx, c->ff_ubo_binding);
+            mask = 0;
+            for K in 0..12: if (real_glGetAttribLocation(prog, ff_attr_name[K]) >= 0)
+                mask |= 1u << K;
+            g_prog_ff[prog] = mask   (bajo mutex; borrar la entrada si mask == 0);
+            c->ff_dirty |= FFD_ALL;   /* para crear/volcar el UBO en el 1.er dibujo */
+         `ff_attr_name[K]` son los nombres shim_* de G.2.2. El binding del
+         bloque es estado del PROGRAMA y se fija una vez aquí.
+       - `shim_glUseProgram(prog)`:
+            real_glUseProgram(prog);
+            if (c) { c->cur_prog = prog;
+                     if (g_ff_shader_count && !c->ff_ready) c->ff_dirty |= FFD_ALL; }
+         (Una lectura TLS y un store: es un wrapper trivial. Se mantiene fuera
+         del camino de dibujo.)
+     No se hookea glDeleteProgram: un ID reutilizado se sobrescribe/borra en su
+     siguiente glLinkProgram. Documentar en comentarios.
+     CONTRATO CON EL MÓDULO H (dibujo con client arrays o glBegin/glEnd):
+       - Si `c->cur_prog == 0`: comportamiento v2 (programa interno de H).
+       - Si `c->cur_prog != 0` y `g_prog_ff[cur_prog] != 0` ("modo FF-usuario"):
+         H NO usa su programa interno; deja el programa de la app y, usando el
+         mismo VAO interno y la misma restauración de estado que ya usa H:
+           por cada K con bit en la máscara:
+             - si el array correspondiente está habilitado: `glEnableVertexAttribArray(loc)`
+               + `glVertexAttribPointer(loc, size, type, normalized, stride, ptr)`
+               con el VBO que tuviera ese puntero en la llamada gl*Pointer
+               (memoria cliente -> subirla al VBO scratch de H, como ya hace). `normalized
+               = GL_TRUE` para colores y normales con tipo entero (GL_UNSIGNED_BYTE,
+               GL_BYTE, GL_SHORT...) y GL_FALSE para posición, texcoords, fogcoord.
+               GL_DOUBLE se convierte a float (Módulo B).
+             - si no: `glDisableVertexAttribArray(loc)` + valor constante con
+               `glVertexAttrib4f(loc, ...)` tomado del estado actual del ShimCtx:
+               color actual (defecto 1,1,1,1), normal actual (0,0,1), texcoord
+               actual de la unidad N (0,0,0,1), secundario (0,0,0,1), fogcoord 0.
+         Correspondencia array <-> K: VERTEX->0, COLOR->1, NORMAL->2,
+         TEXTURE_COORD_ARRAY de la unidad N (glClientActiveTexture)->3+N,
+         SECONDARY_COLOR_ARRAY (0x845E)->11, FOG_COORD_ARRAY (0x8457)->12.
+       - Si `cur_prog != 0` y la máscara es 0: no tocar nada (programa genérico).
+       LIMITACIÓN: no se emula el alias "atributo genérico 0 == gl_Vertex" de
+       algunas implementaciones; las apps deben alimentar gl_Vertex con
+       glVertexPointer (G.2.11).
+
+G.2.7. FUNCIONES DE ESTADO NUEVAS (solo-escritorio; exportar según 2.6; añadir al
+     Apéndice C). Todas guardan en ShimCtx y llaman a SHIM_FF_TOUCH; NINGUNA
+     llama a Mesa.
+       glLightf/glLightfv/glLighti/glLightiv(light, pname, params)
+           light = GL_LIGHT0 (0x4000) + i, i en 0..7 (otro valor: ignorar).
+           pname: GL_AMBIENT 0x1200, GL_DIFFUSE 0x1201, GL_SPECULAR 0x1202,
+           GL_POSITION 0x1203, GL_SPOT_DIRECTION 0x1204, GL_SPOT_EXPONENT 0x1205,
+           GL_SPOT_CUTOFF 0x1206, GL_CONSTANT_ATTENUATION 0x1207,
+           GL_LINEAR_ATTENUATION 0x1208, GL_QUADRATIC_ATTENUATION 0x1209.
+           GL_POSITION se multiplica por la matriz modelview ACTUAL en el momento
+           de la llamada (se guarda en espacio de ojo). GL_SPOT_DIRECTION se
+           transforma con la inversa-transpuesta de la 3x3 superior de modelview.
+           halfVector = normalize(normalize(position.xyz) + (0,0,1)) (visor
+           infinito, como Mesa).
+       glMaterialf/fv/i/iv(face, pname, params)
+           face: GL_FRONT 0x0404, GL_BACK 0x0405, GL_FRONT_AND_BACK 0x0408.
+           pname: GL_AMBIENT, GL_DIFFUSE, GL_SPECULAR, GL_EMISSION 0x1600,
+           GL_SHININESS 0x1601, GL_AMBIENT_AND_DIFFUSE 0x1602.
+       glLightModelf/fv/i/iv(pname, params): GL_LIGHT_MODEL_AMBIENT 0x0B53 se
+           guarda; GL_LIGHT_MODEL_LOCAL_VIEWER 0x0B51 y GL_LIGHT_MODEL_TWO_SIDE
+           0x0B52 se aceptan e ignoran.
+       glFogf/fv/i/iv(pname, params): GL_FOG_DENSITY 0x0B62, GL_FOG_START 0x0B63,
+           GL_FOG_END 0x0B64, GL_FOG_COLOR 0x0B66 (enteros: GL_FOG_COLOR
+           se normaliza como en glColor*i); GL_FOG_MODE 0x0B65 se acepta y se
+           guarda (el shader implementa su propia fórmula).
+       glClipPlane(plane, const GLdouble *eqn): plane = GL_CLIP_PLANE0 (0x3000)+i;
+           la ecuación se multiplica por la INVERSA de modelview actual y se
+           guarda como float.
+       glColorMaterial(face, mode) (0x0B57 GL_COLOR_MATERIAL): DEBERÍA; con la
+           capacidad activa, cada glColor* actualiza el componente de material
+           elegido (marca FFD_MAT).
+       glTexEnvfv/glTexEnviv con target GL_TEXTURE_ENV (0x2300) y pname
+           GL_TEXTURE_ENV_COLOR (0x2201): guardar en `texenv_color[unidad]`
+           (la unidad la define Módulo H.2).
+       glSecondaryColor3f/3fv/3ub, glFogCoordf/fv, glSecondaryColorPointer,
+           glFogCoordPointer (+ GL_SECONDARY_COLOR_ARRAY 0x845E y
+           GL_FOG_COORD_ARRAY 0x8457 en glEnableClientState/DisableClientState):
+           estado actual y punteros para K = 11 y 12 (DEBERÍA).
+       Getters (DEBERÍA): glGetLightfv, glGetMaterialfv, glGetClipPlane
+           (double; Módulo B).
+       glEnable/glDisable de GL_LIGHTING (0x0B50), GL_LIGHT0+i, GL_FOG (0x0B60),
+           GL_COLOR_MATERIAL: siguen filtradas por H.2 (no existen en GLES), y
+           H.2 DEBE registrar GL_CLIP_PLANE0+i / GL_CLIP_DISTANCE0+i (0x3000+i)
+           en `ctx->clip_enable_mask` (marca FFD_CLIP); es el valor que llega al
+           shader como `shim_ClipEnableMask`.
+     VALORES INICIALES (especificación GL): luz 0: diffuse y specular (1,1,1,1),
+     el resto de luces 0; ambient (0,0,0,1); position (0,0,1,0); spotDirection
+     (0,0,-1); spotExponent 0; spotCutoff 180; constant 1, linear 0, quadratic 0.
+     Material: ambient (0.2,0.2,0.2,1), diffuse (0.8,0.8,0.8,1), specular
+     (0,0,0,1), emission (0,0,0,1), shininess 0 (frontal y trasero).
+     lm_ambient (0.2,0.2,0.2,1). Fog: color (0,0,0,0), density 1, start 0,
+     end 1. Planos de recorte 0. texenv_color 0.
+
+G.2.8. sampler1D Y double (transformación léxica dentro de translate_ff_builtins)
+     sampler1D. La textura 1D ya vive como GL_TEXTURE_2D de alto 1 (Módulo E.2),
+     así que el shader declara `sampler2D` y muestrea en t = 0.5 (centro de la
+     única fila; vale con cualquier modo de wrap en T).
+       - Tipos: sampler1D -> sampler2D, isampler1D -> isampler2D,
+         usampler1D -> usampler2D.
+       - Nombres 1.10-1.20: texture1D -> shim_texture1D, texture1DLod ->
+         shim_texture1DLod, texture1DProj -> shim_texture1DProj.
+       - Nombres 1.30+: se recogen los identificadores declarados con
+         (i|u)sampler1D (uniforms y parámetros de función). Una llamada
+         `texture(`, `textureLod(`, `textureProj(`, `texelFetch(`, `textureSize(`
+         cuyo PRIMER argumento sea uno de esos identificadores (con índice
+         opcional `[..]`) se renombra a shim_texture1D, shim_texture1DLod,
+         shim_texture1DProj, shim_texelFetch1D, shim_textureSize1D. Los argumentos
+         NO se parsean ni se tocan: lo hacen las funciones auxiliares.
+       - Funciones auxiliares (se emiten solo las necesarias, tras `ffdecl`):
+           vec4 shim_texture1D(sampler2D s, float x)
+               { return texture(s, vec2(x, 0.5)); }
+           vec4 shim_texture1D(sampler2D s, float x, float b)
+               { return texture(s, vec2(x, 0.5), b); }
+           vec4 shim_texture1DLod(sampler2D s, float x, float l)
+               { return textureLod(s, vec2(x, 0.5), l); }
+           vec4 shim_texture1DProj(sampler2D s, vec2 c)
+               { return texture(s, vec2(c.x / c.y, 0.5)); }
+           vec4 shim_texture1DProj(sampler2D s, vec4 c)
+               { return texture(s, vec2(c.x / c.w, 0.5)); }
+           vec4 shim_texelFetch1D(sampler2D s, int x, int l)
+               { return texelFetch(s, ivec2(x, 0), l); }
+           int  shim_textureSize1D(sampler2D s, int l)
+               { return textureSize(s, l).x; }
+         y las equivalentes con ivec4/isampler2D y uvec4/usampler2D si se usaron
+         isampler1D/usampler1D. (La sobrecarga por tipo de sampler es válida en
+         GLSL ES 3.00.)
+       - FUERA (G.2.11): sampler1DShadow, sampler1DArray.
+     double (la GPU no tiene fp64; se degrada a float):
+       - `double` -> `float`; `dvec2/3/4` -> `vec2/3/4`; `dmat2/3/4` ->
+         `mat2/3/4`; `dmatNxM` -> `matNxM`; literales con sufijo `lf`/`LF`
+         (`1.0lf`) pierden el sufijo.
+       - `#extension GL_ARB_gpu_shader_fp64 : ...` se sustituye por una línea
+         vacía (mantiene la numeración de líneas).
+       - Los uniformes double los pone la app con glUniform1d/2d/3d/4d[v] y
+         glUniformMatrix{2,3,4}dv: el shim DEBE interceptarlas (Módulo B,
+         Apéndice C) y convertir a las versiones float (glUniform{1,2,3,4}fv,
+         glUniformMatrix{2,3,4}fv) con búfer scratch TLS.
+       - Entradas `dvec`/glVertexAttribLPointer: fuera (G.2.11).
+       - Traza de depuración "double degradado a float en shader N".
+
+G.2.9. gl_ClipDistance Y gl_ClipVertex (CONDICIONAL)
+     ES no tiene recorte por usuario salvo con GL_EXT_clip_cull_distance
+     (`ctx->has_clip_cull_distance`, detectado en features_ready). No hay
+     habilitación por plano en ES: un plano declarado siempre recorta.
+     CON la extensión (emitir `#extension GL_EXT_clip_cull_distance : enable`
+     entre los `#extension` propios; el shader que use gl_ClipDistance o
+     gl_ClipVertex declara además el bloque ShimFF: se fuerza `uni_mask`):
+       - `gl_ClipDistance[K] = EXPR;` (K literal, asignación simple hasta el
+         `;` de nivel superior) ->
+         `gl_ClipDistance[K] = ((shim_ClipEnableMask >> K) & 1) != 0 ? (EXPR) : 1.0;`
+         (un plano no habilitado debe valer +1, es decir "dentro").
+       - `gl_ClipVertex = EXPR;` -> bloque
+         `{ highp vec4 shim_cv = (EXPR);` seguido de ocho líneas
+         `gl_ClipDistance[K] = ((shim_ClipEnableMask >> K) & 1) != 0 ?
+         dot(shim_ClipPlane[K], shim_cv) : 1.0;` (K = 0..7) y `}`.
+         Requiere que el shader declare el bloque ShimFF (se fuerza uni_mask).
+       - Otras formas (índice no literal, `+=`, lectura en fragmento): sin
+         traducir + traza.
+     SIN la extensión: `gl_ClipDistance` -> `shim_ClipDistanceSink` (array global
+     `highp float shim_ClipDistanceSink[8];`) y `gl_ClipVertex` ->
+     `shim_ClipVertexSink` (global `highp vec4`). El shader compila y el
+     recorte simplemente NO se aplica. Traza de depuración. DECISIÓN: degradar
+     en vez de fallar, porque un shader que recorta casi siempre sigue siendo
+     jugable sin el recorte (agua, portales) y un fallo de compilación no.
+     Fase 0 (5.0): registrar si el ES real anuncia la extensión.
+
+G.2.10. geometry y tessellation: ver Módulo G.3
+     G.2 NO los traduce (no son traducción léxica: exigen un pipeline de varias
+     etapas). Se emulan con compute shaders en el Módulo G.3, que es EXPERIMENTAL
+     y está DESACTIVADO por defecto (NUUBOS_SHIM_GEOM_EMU / NUUBOS_SHIM_TESS_EMU).
+     Con ambas a 0, los tipos GL_GEOMETRY_SHADER (0x8DD9), GL_TESS_CONTROL_SHADER
+     (0x8E88) y GL_TESS_EVALUATION_SHADER (0x8E87) NO se reescriben, el driver
+     real falla con GL_INVALID_ENUM y ese error NO se oculta (3.0.4, punto 5).
+
+G.2.11. LO QUE G.2 NO CUBRE (lista cerrada; sustituye al punto 9 de la v2)
+     - Iluminación de dos caras (gl_BackColor se descarta, G.2.3).
+     - gl_EyePlaneS/T/R/Q, gl_ObjectPlaneS/T/R/Q (glTexGen) y gl_Point.*
+       (glPointParameter).
+     - gl_TexCoord con índice no literal, o usado sin índice; gl_ClipDistance
+       en fragmento; `invariant gl_FrontColor` y similares.
+     - sampler1DShadow, sampler1DArray, entradas dvec/glVertexAttribL*.
+     - Programas con SOLO shader de vértice (fragmento de función fija): en GLES
+       el link falla; la app decide.
+     - Alias "atributo genérico 0 == gl_Vertex" (G.2.6).
+     - Variantes Inverse/Transpose de gl_TextureMatrix.
+     - geometry/tessellation salvo con la emulación opt-in (G.3).
+     Para estos casos: traza de depuración y pasar el texto tal cual.
+     (La lista de lo que no cubre G.3 está en G.3.8.)
+
+G.2.12. ORDEN DENTRO DE shim_glShaderSource Y ftransform()
+     Sustituye a los pasos 5-8 de Módulo G para shaders con `FFUse != 0`:
+       a. parse_header; descartar si no aplica (punto 4) o si G.2 está
+          desactivado o `es_major < 3`.
+       b. `scan_ff_usage` (G.2.1).
+       c. Elegir `300 es` (o `310 es` con las reglas existentes).
+       d. translate_legacy_to_es300 (punto 6 de Módulo G; trata attribute/
+          varying/texture2D/gl_FragColor/gl_FragData).
+       e. translate_ff_builtins, UNA pasada léxica que aplica G.2.2-G.2.4,
+          G.2.8 y G.2.9 y rellena `ffdecl` (texto de declaraciones: atributos,
+          varyings, structs + bloque ShimFF, constantes, funciones auxiliares
+          1D, sumideros de clip), con los símbolos usados únicamente.
+          `ftransform()` -> `(shim_ModelViewProjectionMatrix * shim_Vertex)`
+          (marca K=0 y uni_mask).
+       f. Montaje (corrige A4 sin cambios): `#version` (primera línea) +
+          `#extension` propios + líneas originales de la zona de cabecera +
+          `precision` + `ffdecl` + cuerpo desde `hdr_end`.
+          DEBERÍA emitir `#line N` tras `ffdecl` (el bloque añade ~70 líneas y
+          desplazaría los números de línea de los errores).
+       g. `__atomic_add_fetch(&g_ff_shader_count, 1, __ATOMIC_RELAXED)`;
+          `c->ff_dirty |= FFD_ALL`; si usó sufijos Inverse/Transpose o
+          NormalMatrix: `g_ff_need_variants = 1`.
+       h. real_glShaderSource con el texto final.
+
+G.2.13. PRUEBAS DE ACEPTACIÓN (añadir a 5.x)
+     T-G2-1  Vértice `gl_Position = ftransform(); gl_FrontColor = gl_Color;
+             gl_TexCoord[0] = gl_MultiTexCoord0;` + fragmento
+             `gl_FragColor = texture2D(t, gl_TexCoord[0].st) * gl_Color;`
+             con glVertexPointer/glColorPointer/glTexCoordPointer: el quad
+             texturizado coincide píxel a píxel con la referencia GLES escrita a
+             mano.
+     T-G2-2  Matrices: tras glRotatef/glTranslatef, `gl_ModelViewProjectionMatrix`
+             y `gl_NormalMatrix` coinciden (tolerancia 1e-5) con glGetFloatv de
+             GL_MODELVIEW_MATRIX/PROJECTION_MATRIX multiplicadas en el test.
+     T-G2-3  Iluminación por píxel con `gl_LightSource[0].position`,
+             `gl_FrontMaterial.diffuse` y `gl_NormalMatrix`: imagen estable al
+             cambiar la luz entre dibujos (verifica ff_dirty y el anillo de UBO).
+     T-G2-4  sampler1D: rampa de 256 texels con glTexImage1D, shader con
+             `texture1D(ramp, x)` y otro 1.30 con `texture(ramp, x)`.
+     T-G2-5  double: shader 4.00 con `double`/`dvec3` compila y renderiza; la
+             uniforme se sube con glUniform1d.
+     T-G2-6  Clip: con la extensión, un plano en `gl_ClipVertex` recorta y al
+             deshabilitar GL_CLIP_DISTANCE0 deja de recortar; sin la extensión
+             el shader compila y no recorta.
+     T-G2-7  REGRESIÓN: un shader GLES `#version 300 es` y uno `#version 330`
+             sin built-ins de función fija producen EXACTAMENTE el mismo texto
+             que en v2; y una app GLES pura (modo pasivo) no ejecuta ningún
+             código de G.2 (g_ff_shader_count == 0, ff_dirty == 0).
+     T-G2-8  Rendimiento: con g_ff_shader_count == 0 el camino rápido de
+             glDrawArrays sigue siendo una comparación y la llamada real;
+             medir <= 5 ns extra respecto a la v2.
+     T-G2-9  Dibujo con `#version 120` + `#extension` del autor: el `#extension`
+             queda ANTES de cualquier token (corrección A4) y el shader compila.
+
+--------------------------------------------------------------------------------
+MÓDULO G.3 (NUEVO v2.1): Geometry y Tessellation shaders emulados con compute
+(EXPERIMENTAL, opt-in)
+--------------------------------------------------------------------------------
+Solo activo en MODO ESCRITORIO y solo si el usuario lo pide (G.3.0).
+
+G.3.0. ALCANCE, ACTIVACIÓN Y HONESTIDAD SOBRE EL COSTE
+     La v2 y la primera redacción de G.2 decían "sin camino viable". Eso era
+     demasiado categórico: ES 3.1 tiene compute shaders, SSBO y transform
+     feedback, y con ellos se puede emular un pipeline VS -> GS/TCS/TES -> FS.
+     NO es "thin" (es el módulo más caro y más frágil de la spec), por eso:
+       - Desactivado por defecto. `NUUBOS_SHIM_GEOM_EMU=1` activa geometry;
+         `NUUBOS_SHIM_TESS_EMU=1` activa tessellation (implica la infraestructura
+         de geometry). Con ambas a 0 el comportamiento es EXACTAMENTE el de G.2
+         (los tipos 0x8DD9/0x8E88/0x8E87 llegan al driver y fallan con
+         GL_INVALID_ENUM).
+       - Requisitos (Fase 0, 5.0, DEBE comprobarse y registrarse): ES real >= 3.1,
+         un compute shader trivial que compile y se ejecute en Panfrost/Mali-G31,
+         GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS >= 128,
+         GL_MAX_SHADER_STORAGE_BLOCK_SIZE >= 64 MiB y transform feedback. Si algo
+         falla, la emulación se desactiva sola y se traza.
+       - Es lenta: cada dibujo con GS pasa por 3 etapas y 2-3 programas. Esperar
+         un coste mucho mayor que el de GL nativo; sirve para que un port que
+         usaba GS (partículas, wireframe, normales) funcione, no para igualar
+         rendimiento. Documentarlo en el README de nuubOS.
+       - Valores de apoyo: `NUUBOS_SHIM_GEOM_CAP_MB` (por defecto 32): tope de
+         memoria de los búferes intermedios; `NUUBOS_SHIM_TESS_MAX` (16): nivel
+         de teselación máximo aplicado (el de GL es 64).
+     Subconjunto soportado (lista cerrada, G.3.8 enumera lo demás):
+       GEOMETRY: entrada points|lines|triangles (sin adjacency), salida
+         points|line_strip|triangle_strip, `max_vertices` literal, un solo flujo,
+         `invocations = 1`.
+       TESSELLATION: `layout(vertices = N) out;` (N <= 32), dominios triangles,
+         quads, isolines; spacing equal_spacing, fractional_even_spacing,
+         fractional_odd_spacing (redondeo, ver G.3.6); cw/ccw; point_mode.
+
+G.3.1. OBJETOS VIRTUALES Y ENGANCHES (solo cuando la emulación está activa)
+     Wrappers adicionales (puntero real detrás; con `g_emu_count == 0` y sin
+     shader virtual cada uno es "una comparación y la llamada real"):
+       glCreateShader, glShaderSource, glCompileShader, glGetShaderiv,
+       glGetShaderInfoLog, glAttachShader, glDetachShader, glDeleteShader,
+       glLinkProgram, glUseProgram, glDeleteProgram, glGetProgramiv,
+       glGetProgramInfoLog, glGetUniformLocation, glUniform{1,2,3,4}{f,i,ui}[v],
+       glUniformMatrix{2,3,4}fv (y las variantes no cuadradas), glGetUniformBlockIndex,
+       glUniformBlockBinding, glPatchParameteri (0x8E72 GL_PATCH_VERTICES, por
+       defecto 3), glDrawArrays/glDrawElements con modo GL_PATCHES (0x000E).
+     SHADER VIRTUAL. `glCreateShader(GL_GEOMETRY_SHADER | GL_TESS_CONTROL_SHADER
+     | GL_TESS_EVALUATION_SHADER)`: el shim llama a `real_glCreateShader(
+     GL_VERTEX_SHADER)` solo para obtener un ID válido y único, y lo registra en
+     `g_vshader[id] = { kind, source, cs_obj, status, log }` (mutex). Es cierto
+     que ese objeto real es un shader de vértice vacío que nunca se compila.
+       - glShaderSource: guardar el texto (no se pasa al driver).
+       - glCompileShader: traducir a compute (G.3.3 o G.3.5), crear
+         `cs_obj = real_glCreateShader(GL_COMPUTE_SHADER)`, compilar, guardar
+         estado y log.
+       - glGetShaderiv(GL_SHADER_TYPE) devuelve el tipo que pidió la app;
+         GL_COMPILE_STATUS y GL_INFO_LOG_LENGTH, y glGetShaderInfoLog, salen del
+         estado/log guardados. glDeleteShader borra `cs_obj` y la entrada.
+     CÓDIGO FUENTE DE VÉRTICE/FRAGMENTO. Con la emulación activa, glShaderSource
+     guarda además el TEXTO FINAL (ya traducido por G/G.2) de todo shader
+     GL_VERTEX_SHADER y GL_FRAGMENT_SHADER en `g_shader_src[id]` (memoria
+     acotada; se libera en glDeleteShader). Se necesita en el enlace.
+     PROGRAMA EMULADO. `glAttachShader(prog, vid)` con `vid` virtual: registrar
+     en `g_emu_prog[prog].gs/.tcs/.tes` y NO llamar al driver. En
+     `glLinkProgram(prog)`, si `g_emu_prog[prog]` tiene algún shader virtual: ver
+     G.3.2 (construcción). `glUseProgram` pone `c->emu_cur = 1` si el programa
+     está en g_emu_prog (ampliando el wrapper de G.2.6).
+     CAMINO RÁPIDO: la condición de 0.1 pasa a
+         (c->legacy_va_enabled | c->ff_dirty | c->emu_cur) == 0
+     Sigue siendo una comparación de tres lecturas sin mutex ni GL.
+     (ShimCtx añade `int emu_cur;` y `struct emu` con tf_buf, búferes de salida y patch_vertices.)
+
+G.3.2. PIPELINE DE EMULACIÓN POR PROGRAMA (3 programas reales + estado)
+     Para un programa de app `prog` con VS + GS + FS el shim construye:
+       P1 = `prog` mismo: el VS de la app + un FS vacío de relleno
+            (`#version 300 es\nprecision mediump float;\nvoid main(){}`),
+            con `glTransformFeedbackVaryings(prog, n, names, GL_INTERLEAVED_ATTRIBS)`
+            ANTES del enlace real. Nombres = gl_Position (siempre el primero),
+            gl_PointSize si el VS la escribe, y los `out` del VS que lea el GS
+            (todos si no se puede determinar), en orden de declaración.
+            RAZÓN de usar `prog` como P1: los atributos, glBindAttribLocation y
+            los uniformes de vértice de la app funcionan sin tocar nada.
+            El FS original de la app se DESACOPLA de `prog` (glDetachShader)
+            y se adjunta a P3.
+       P2 = programa compute con el `cs_obj` del GS (G.3.3).
+       P3 = VS "de paso" generado (G.3.4) + FS original de la app.
+     Si algo falla, `glGetProgramiv(prog, GL_LINK_STATUS)` devuelve 0 y
+     glGetProgramInfoLog devuelve el log concatenado de la etapa que falló.
+     UNIFORMES. Las uniformes de la app deben llegar a P1, P2 y P3 según qué
+     etapa las use:
+       - glGetUniformLocation(prog, name) en un programa emulado devuelve una
+         ubicación VIRTUAL `VLOC_BASE + i` (VLOC_BASE = 0x40000000) y registra
+         `{ name, loc1, loc2, loc3 }`, consultando por ese nombre a P1, P2 y P3
+         (-1 donde no exista); si ninguno la tiene, devuelve -1.
+       - Los wrappers glUniform* de la lista de G.3.1, si `c->emu_cur` y
+         `loc >= VLOC_BASE`, llaman por cada programa con ubicación válida a
+         `glProgramUniform*` (ES 3.1: no hay que cambiar de programa).
+         En cualquier otro caso: llamada real directa.
+       - Bloques de uniformes: glGetUniformBlockIndex devuelve un índice virtual
+         y glUniformBlockBinding reenvía `glUniformBlockBinding(Pk, idx_k,
+         binding)` a cada programa que tenga el bloque. El bloque ShimFF de G.2 se
+         enlaza en cada uno de los programas reales (el hook de G.2.6 se ejecuta
+         para P1, P2 y P3).
+       - Las uniformes internas `shim_nprims`, `shim_first`, `shim_level_*` se
+         ponen con glProgramUniform1ui sobre P2/P2b; la app no las ve.
+     DIBUJO (camino lento; glDrawArrays/glDrawElements con `c->emu_cur`):
+       0. Guardar y restaurar al final: programa actual, VAO, GL_ARRAY_BUFFER,
+          GL_TRANSFORM_FEEDBACK_BUFFER (binding 0), GL_SHADER_STORAGE_BUFFER
+          (bindings 0..3), GL_RASTERIZER_DISCARD, objeto de transform feedback.
+          (Consultas con glGetIntegerv/glIsEnabled; es camino lento.)
+       1. Topología de entrada a "primitivas planas": points -> GL_POINTS;
+          lines/line_strip/line_loop -> GL_LINES; triangles/strip/fan ->
+          GL_TRIANGLES; GL_PATCHES -> GL_POINTS. GL_QUADS/QUAD_STRIP/POLYGON se
+          convierten primero a triángulos con el Módulo F. Nº de primitivas
+          `np` por fórmula (no por query): points n; lines n/2, strip n-1,
+          loop n; triangles n/3, strip/fan n-2; patches n/glPatchVertices.
+          El transform feedback captura los vértices de cada primitiva
+          ENSAMBLADA en orden, así que el búfer es una lista plana (primitiva k
+          ocupa las entradas k*V .. k*V+V-1, V = 1, 2 o 3; para parches,
+          patch_vertices).
+       2. TROZOS (chunking): `chunk = max(1, min(np, cap_bytes / bytes_por_prim))`
+          con `cap_bytes = NUUBOS_SHIM_GEOM_CAP_MB`; si ni una primitiva cabe,
+          omitir el dibujo y trazar. Para cada trozo, pasos 3-6.
+       3. Etapa 1 (TF): activar GL_RASTERIZER_DISCARD, enlazar el búfer TF
+          (`ctx->emu.tf_buf`, crecimiento por duplicación, binding 0),
+          glBeginTransformFeedback(modo plano), dibujar el trozo con la misma
+          llamada de la app (para indexados, el rango de índices del trozo),
+          glEndTransformFeedback, DESENLAZAR el binding TF (ES 3.0 no permite
+          que el mismo búfer esté enlazado como TF y como SSBO a la vez),
+          desactivar discard. `glMemoryBarrier(GL_ALL_BARRIER_BITS)`.
+       4. Etapa 2 (compute): glUseProgram(P2); enlazar SSBO 0 = búfer TF (solo
+          lectura), 1 = búfer de vértices de salida, 2 = búfer de índices de
+          salida; glProgramUniform1ui(P2, shim_nprims, chunk) y shim_first;
+          `glDispatchCompute(ceil(chunk/64), 1, 1)`. Tessellation: ver G.3.5.
+          `glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT |
+          GL_ELEMENT_ARRAY_BARRIER_BIT)`.
+       5. Etapa 3 (raster): glUseProgram(P3), VAO interno del shim con los
+          atributos del búfer de vértices de salida (G.3.4) y el búfer de
+          índices como GL_ELEMENT_ARRAY_BUFFER;
+          `glDrawElements(modo_salida, chunk * maxIdxPorPrim, GL_UNSIGNED_INT, 0)`;
+          modo_salida: points -> GL_POINTS, line_strip -> GL_LINES,
+          triangle_strip -> GL_TRIANGLES.
+       6. Restaurar el estado del paso 0.
+     ORDEN DETERMINISTA. Cada primitiva de entrada ocupa una REGIÓN FIJA del
+     búfer de índices (`p * maxIdxPorPrim`), que el compute RELLENA primero con
+     el índice de su primer vértice (triángulos/líneas degenerados que el
+     rasterizador descarta) y luego sobreescribe con los reales. RAZÓN: así el
+     orden de dibujo coincide con el de GL (importante con blending y con
+     depth-test igual) y no hacen falta atómicos de compactación. Coste: índices
+     de relleno; aceptable para `max_vertices` pequeños (<= 16). Si
+     `max_vertices > 64`, trazar aviso de rendimiento.
+       maxIdxPorPrim: points = max_vertices; line_strip = (max_vertices-1)*2;
+       triangle_strip = (max_vertices-2)*3.
+
+G.3.3. GEOMETRY: TRADUCCIÓN LÉXICA GS -> COMPUTE (`translate_gs_to_cs`)
+     Salida: `#version 310 es`, `layout(local_size_x = 64) in;`, precision,
+     declaraciones, cuerpo. Reglas (mismo tokenizador léxico que G/G.2):
+       - `layout(<in_prim>) in;` -> V (points 1, lines 2, triangles 3).
+         `lines_adjacency`/`triangles_adjacency`, `invocations > 1`, `stream`:
+         NO soportado (traza; el shader fallará al compilar).
+       - `layout(<out_prim>, max_vertices = N) out;` -> MAXV = N (literal).
+       - Entradas del GS (arrays con índice `[i]` por vértice de la primitiva):
+           `gl_in[E].gl_Position` / `.gl_PointSize` -> `shim_in_gl_Position(E)`.
+           `in T name[];` -> función `shim_in_name(int i)`; `NAME[E]` ->
+           `shim_in_name(E)`. `in Blk {..} inst[];` (bloque, aplanado por
+           G.3.3-bis) -> `inst[E].m` -> `shim_in_Blk_m(E)`.
+           `E` es una expresión cualquiera: se parsea el corchete con balanceo.
+         Cada función lee de SSBO 0 como `float` crudos:
+           `T shim_in_name(int i){ uint o = (shim_first_in + uint(i)) * STRIDE + OFF;
+             return vec3(tf[o], tf[o+1u], tf[o+2u]); }`
+           donde `shim_first_in = gl_GlobalInvocationID.x * V`, `STRIDE` y `OFF`
+           salen del orden de los varyings de P1 (floats, sin relleno; los tipos
+           int/uint se leen con floatBitsToInt/floatBitsToUint).
+           Varyings que son arrays o matrices: NO soportado.
+       - Salidas del GS: las declaraciones globales `out T name;` se QUITAN del
+         cuerpo y se redeclaran en el preámbulo como variables privadas
+         `T name;` (también `gl_Position` -> `shim_Position`,
+         `gl_PointSize` -> `shim_PointSize`). `gl_PrimitiveID` y
+         `gl_PrimitiveIDIn` -> `int(shim_first + gl_GlobalInvocationID.x)`.
+         `gl_Layer` y `gl_ViewportIndex` -> variables privadas ignoradas.
+       - `EmitVertex()` -> `shim_emit()`; `EndPrimitive()` -> `shim_endprim()`.
+         Definiciones (preámbulo, tras las salidas privadas):
+           shim_emit(): si `shim_n < MAXV`, escribir en SSBO 1, en el slot
+             `p*MAXV + shim_n`, `shim_Position`, `shim_PointSize` (si procede) y
+             cada salida (floats; int con intBitsToFloat); luego emitir el
+             índice según salida: points -> `idx[p*MAXV + shim_n] = slot`;
+             line_strip: si `shim_k >= 1` escribir (slot-1, slot) en la
+             posición `p*maxIdx + 2*(shim_k-1)`; triangle_strip: si `shim_k >= 2`
+             escribir el triángulo k-2: k par -> (s-2, s-1, s), k impar ->
+             (s-1, s-2, s) (así conserva el sentido de giro de GL) en
+             `p*maxIdx + 3*(shim_k-2)`; luego `shim_n++; shim_k++`.
+           shim_endprim(): `shim_k = 0` (la siguiente tira empieza limpia).
+         Al terminar `main`, GL hace un EndPrimitive implícito: equivale a no
+         hacer nada más.
+       - `void main()` -> `void shim_gs_main()`; se añade
+           `void main(){ if (gl_GlobalInvocationID.x >= shim_nprims) return;
+              shim_n = 0u; shim_k = 0u; shim_fill_indices(); shim_gs_main(); }`
+         con `shim_fill_indices()` rellenando la región con el índice de su
+         primer vértice (ORDEN DETERMINISTA, G.3.2).
+       - `texture(s, c)` de 2 argumentos dentro del GS -> `textureLod(s, c, 0.0)`
+         (en compute no hay derivadas implícitas).
+       - Las `uniform` (incluidos samplers) del GS se dejan tal cual: compute las
+         admite en el bloque por defecto.
+       - Se aplican también las traducciones de G/G.2 del cuerpo (texture2D,
+         double, built-ins de función fija si los hubiera).
+       - Bindings: `layout(std430, binding = 0) readonly buffer ShimIn { float tf[]; };`,
+         `binding = 1` `buffer ShimOutV { float ov[]; };`, `binding = 2`
+         `buffer ShimOutI { uint idx[]; };`.
+
+G.3.3-bis. BLOQUES DE INTERFAZ in/out (también fuera de G.3)
+     ES 3.0/3.1 no admite bloques de interfaz en in/out entre etapas
+     (`out VS_OUT { vec3 n; } vs_out;`, típico de GLSL 1.50). Se aplana en
+     translate_ff_builtins/translate_legacy en CUALQUIER shader 150+ de vértice
+     o fragmento, aunque no haya GS:
+       - Un bloque `out|in NOMBRE { T1 a; T2 b; } inst;` -> declaraciones
+         `out|in T1 NOMBRE_a; out|in T2 NOMBRE_b;` (calificadores flat/smooth se
+         conservan por miembro). Sin nombre de instancia: los miembros son
+         globales y mantienen su nombre.
+       - `inst.a` -> `NOMBRE_a` (token a token, con espacios admitidos).
+       - REGLA CLAVE: el nombre aplanado sale del nombre del BLOQUE, no del de la
+         instancia, porque GL empareja por nombre de bloque y las instancias
+         pueden llamarse distinto entre VS, GS y FS.
+       - Arrays de instancias solo se admiten en el GS (entradas por vértice).
+
+G.3.4. SALIDA DEL GS Y VS "DE PASO" PARA RASTERIZAR (P3)
+     Con las salidas del GS (tipo y nombre, ya aplanadas) se genera, UNA vez por
+     enlace, el VS de paso:
+         #version 300 es
+         layout(location = 0) in highp vec4 shim_a_pos;
+         [layout(location = 1) in highp float shim_a_psize;]   (si hay PointSize)
+         layout(location = k) in T shim_a_<name>;               (k = 2, 3, ...)
+         [flat] out T <name>;                                   (flat si int/uint)
+         void main(){ gl_Position = shim_a_pos; [gl_PointSize = shim_a_psize;]
+                      <name> = shim_a_<name>; ... }
+     Los nombres de `out` coinciden con los `in` del FS original (por eso G.3.3-bis
+     usa el nombre de bloque). El VAO interno configura cada atributo sobre SSBO 1
+     con `glVertexAttribPointer(k, n, GL_FLOAT, GL_FALSE, OSTRIDE*4, OFF*4)`
+     (`glVertexAttribIPointer(..., GL_INT, ...)` para int/uint). Si el FS espera
+     una entrada que el GS no emite, el enlace de P3 falla y el log lo indica.
+
+G.3.5. TESSELLATION
+     Dos compute en vez de uno; las etapas 1 (TF, con GL_PATCHES -> GL_POINTS) y 3
+     (raster, P3) son las de G.3.2. Entrada: grupos de `glPatchParameteri`
+     vértices consecutivos.
+     ETAPA 2a: TCS -> compute `P2a` (`translate_tcs_to_cs`):
+       - `layout(vertices = N) out;` -> `local_size_x = N`; UN workgroup por parche
+         (`gl_WorkGroupID.x`); `gl_InvocationID` = `gl_LocalInvocationID.x`.
+         `gl_PatchVerticesIn` = valor de glPatchParameteri (uniforme interna).
+       - Entradas `gl_in[E].gl_Position` y `in T x[]` -> funciones de lectura del
+         búfer TF (igual que G.3.3, con base `patch * patch_vertices`).
+       - Salidas por vértice `out T x[];` y `gl_out[gl_InvocationID].gl_Position`
+         -> escritura en SSBO 1 (`tcs_v`): `(patch*N + idx) * TSTRIDE + OFF`.
+         Salidas por parche (`patch out T y;`) -> SSBO 2 (`tcs_p`): región por
+         parche. `gl_TessLevelOuter[4]` y `gl_TessLevelInner[2]` -> arrays
+         `shared float` con copia final al SSBO 3 (`tcs_l`, 6 floats por parche)
+         tras un `barrier()` implícito al final de `main` (lo hace la invocación 0).
+       - `barrier()` se conserva (en compute es nativo).
+     ETAPA 2b: TES -> compute `P2b` (`translate_tes_to_cs`):
+       - `layout(triangles|quads|isolines, equal_spacing|fractional_even_spacing|
+         fractional_odd_spacing, cw|ccw, point_mode) in;` se parsea.
+       - UN workgroup (64 hilos) por parche; los hilos recorren en bucle con
+         paso 64 los vértices a generar. `gl_TessCoord` = coordenada del vértice
+         (vec3; para quads/isolines z = 0). `gl_in[E].gl_Position` y `in T x[]`
+         leen `tcs_v`; `patch in T y` lee `tcs_p`. Los niveles salen de `tcs_l`.
+       - Salidas del TES (privadas, como en G.3.3) y `gl_Position`: se escriben
+         en SSBO de vértices de salida con la fórmula de región fija
+         `patch * MAXV_T + v`, y los índices (triángulos, sentido según cw/ccw) en
+         `patch * MAXI_T + t*3`, con relleno degenerado previo. Si `point_mode`:
+         índices de puntos; isolines: líneas.
+       - MAXV_T y MAXI_T se calculan con el nivel máximo aplicado
+         `L = NUUBOS_SHIM_TESS_MAX`: triángulos: (L+1)(L+2)/2 vértices y
+         L*L*3 índices; quads: (L+1)^2 y L*L*6; isolines: (L+1)*L y L*L*2
+         (aprox.; el agente verifica con el algoritmo de referencia).
+     ALGORITMO DE GENERACIÓN: el de la especificación OpenGL 4.x, sección
+     "Tessellation Primitive Generation" (anillos concéntricos para triángulos y
+     cuadriláteros, cosido de los bordes con los niveles externos). El agente DEBE
+     implementarlo para triangles, quads e isolines. HITOS: (1) todos los niveles
+     iguales en el parche (sin cosido; cuadrícula regular); (2) niveles externos
+     distintos con cosido sin grietas entre parches vecinos. Hasta el hito (2) la
+     v2.1 documenta que los niveles externos distintos pueden dejar grietas.
+     Redondeo de espaciado (aproximación documentada): equal_spacing -> techo del
+     nivel; fractional_even -> siguiente entero par; fractional_odd -> siguiente
+     impar; sin el "morphing" geométrico fraccionario de GL.
+     Los niveles se limitan a [1, L].
+
+G.3.6. MÓDULO A (versión anunciada) CON LA EMULACIÓN
+     - Con `NUUBOS_SHIM_GEOM_EMU=1` (y la Fase 0 superada): la versión anunciada
+       mínima pasa a 3.2 (los shaders de geometría son parte del core 3.2) y
+       `GL_SHADING_LANGUAGE_VERSION` 1.50.
+     - Con `NUUBOS_SHIM_TESS_EMU=1`: se permite `NUUBOS_SHIM_GL_VERSION=4.0` (el
+       máximo de Módulo A sube de 3.3 a 4.0 SOLO en este caso, GLSL "4.00") y se
+       anuncia `GL_ARB_tessellation_shader`. La regla "toda extensión anunciada
+       tiene sus funciones" aplica: glPatchParameteri/glPatchParameterfv deben
+       resolverse en shim_lookup_gl.
+     - Sin la variable, NO anunciar nada de esto (como en G.2).
+
+G.3.7. PRUEBAS DE ACEPTACIÓN (añadir a 5.x)
+     T-G3-1  GS points -> triangle_strip de 4 vértices (sprites): el quad
+             resultante coincide con la referencia dibujada a mano; con 1000
+             puntos el orden de dibujo respeta el orden de entrada (blending).
+     T-G3-2  GS triangles -> line_strip que dibuja las normales; verifica
+             `gl_in[i].gl_Position`, EndPrimitive y max_vertices.
+     T-G3-3  GS con una uniform de vértice, una de GS y una de FS puestas con
+             glGetUniformLocation/glUniform: las tres llegan (reenvío, G.3.2).
+     T-G3-4  Bloques de interfaz 1.50 en VS y FS SIN geometry shader compilan
+             (G.3.3-bis) y renderizan igual que la versión con varyings sueltos.
+     T-G3-5  Chunking: forzar `NUUBOS_SHIM_GEOM_CAP_MB=1` con >100k primitivas
+             produce la misma imagen que con 32.
+     T-G3-6  TES quads con todos los niveles = 8: malla 8x8 correcta (hito 1).
+     T-G3-7  Dos parches vecinos con niveles externos 4 y 8 sin grietas
+             (hito 2); con TESS_EMU=0, glCreateShader(0x8E88) devuelve
+             GL_INVALID_ENUM.
+     T-G3-8  REGRESIÓN: con GEOM_EMU=0 y TESS_EMU=0, el texto de todos los shaders
+             y el comportamiento son idénticos a G.2; con g_emu_count == 0, el
+             camino rápido de glDrawArrays no se desvía (<= 5 ns extra).
+     T-G3-9  Restauración de estado: tras un dibujo emulado, programa, VAO,
+             ARRAY_BUFFER y SSBO 0..3 que tenía la app siguen siendo los suyos.
+
+G.3.8. LO QUE G.3 NO CUBRE
+     Adjacency (lines_adjacency/triangles_adjacency), instancias de GS
+     (`invocations`), múltiples flujos de salida (`stream`), `max_vertices` no
+     literal, gl_Layer/gl_ViewportIndex efectivos, varyings array/matriz entre
+     etapas, glDrawArraysInstanced con GS/TES (instanceCount > 1), transform
+     feedback de la app sobre un programa con GS, `gl_TessLevel*` leídos en el
+     TES (solo se usan para generar), fractional spacing con morphing exacto,
+     shaders de teselación sin TCS (nivel por defecto de glPatchParameterfv:
+     DEBERÍA soportarse con niveles = 1.0 si no hay TCS). Para estos casos:
+     traza de depuración y el dibujo se omite o falla el enlace con un log
+     explicativo; nunca se oculta un error del driver.
+
+================================================================================
+ANEXO v2.1: CAMBIOS A LAS PARTES DEL DOCUMENTO QUE NO ESTÁN EN ESTE ARCHIVO
+================================================================================
+Este archivo termina en el Módulo G: NO contiene el Módulo H, las secciones 4-6
+ni los Apéndices A-E, aunque el texto los referencia. Los cambios para ellos
+quedan aquí, para aplicarlos donde corresponda:
+
+MÓDULO H
+  - (G.3) En los dibujos con `c->emu_cur`, el dibujo de H cede al camino de G.3.2.
+  - Mantener (o exponer con estos nombres) por contexto: pila modelview,
+    proyección y `tex[8]`; color actual, normal actual, texcoord actual por
+    unidad; punteros de arrays con VBO/tipo/stride.
+  - Llamar a SHIM_FF_TOUCH (G.2.5) en toda función que cambie esas matrices.
+  - Implementar el "modo FF-usuario" de dibujo (G.2.6).
+  - H.2: registrar GL_CLIP_PLANE0+i / GL_CLIP_DISTANCE0+i en clip_enable_mask y
+    el estado de GL_COLOR_MATERIAL (G.2.7).
+
+SECCIÓN 5.0 (Fase 0)
+  - Para G.3: ES real >= 3.1, compute trivial funcional en Panfrost,
+    GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS >= 128, GL_MAX_SHADER_STORAGE_BLOCK_SIZE,
+    transform feedback, glProgramUniform*. Si falla algo, desactivar G.3.
+  - Comprobar y registrar: GL_MAX_VERTEX_ATTRIBS >= 16,
+    GL_MAX_UNIFORM_BUFFER_BINDINGS >= 24, GL_MAX_UNIFORM_BLOCK_SIZE >= 3648,
+    GL_EXT_clip_cull_distance, GL_EXT_geometry_shader / GL_OES_geometry_shader.
+
+SECCIÓN 6 (lo que NO se implementa)
+  - QUITAR: gl_Vertex, gl_Color, gl_Normal, gl_MultiTexCoord*,
+    gl_ModelViewMatrix, gl_ModelViewProjectionMatrix, gl_ProjectionMatrix,
+    gl_TextureMatrix, gl_TexCoord[], gl_FrontColor, gl_BackColor, gl_Fog*,
+    gl_Light*, gl_Material*, gl_ClipVertex, ftransform(), sampler1D/texture1D,
+    double/dvec, gl_ClipDistance (condicional).
+  - MANTENER: la lista de G.2.11 y la de G.3.8. Geometry/tessellation pasan a
+    "emulados opt-in, experimental" (G.3); sin la variable de entorno siguen sin
+    soporte.
+  - QUITAR la frase "los ports que dependan de esto deben seguir usando gl4es".
+
+APÉNDICE B (variables de entorno)
+  - NUUBOS_SHIM_FF_SHADERS = 1 (defecto) | 0. 0 desactiva G.2 por completo.
+  - NUUBOS_SHIM_GEOM_EMU = 0 (defecto) | 1; NUUBOS_SHIM_TESS_EMU = 0 | 1;
+    NUUBOS_SHIM_GEOM_CAP_MB = 32; NUUBOS_SHIM_TESS_MAX = 16 (G.3.0).
+
+APÉNDICE C (funciones interceptadas)
+  - Wrappers con puntero real detrás: glLinkProgram, glUseProgram,
+    glDrawRangeElements.
+  - Solo-escritorio nuevas: glLightf, glLightfv, glLighti, glLightiv, glMaterialf,
+    glMaterialfv, glMateriali, glMaterialiv, glLightModelf, glLightModelfv,
+    glLightModeli, glLightModeliv, glFogf, glFogfv, glFogi, glFogiv, glClipPlane,
+    glColorMaterial, glGetLightfv, glGetMaterialfv, glGetClipPlane,
+    glSecondaryColor3f, glSecondaryColor3fv, glFogCoordf, glFogCoordfv,
+    glSecondaryColorPointer, glFogCoordPointer, glUniform1d, glUniform2d,
+    glUniform3d, glUniform4d, glUniform1dv, glUniform2dv, glUniform3dv,
+    glUniform4dv, glUniformMatrix2dv, glUniformMatrix3dv, glUniformMatrix4dv.
+  - Para G.3 (wrappers, solo con emulación): glCreateShader, glCompileShader,
+    glGetShaderiv, glGetShaderInfoLog, glAttachShader, glDetachShader,
+    glDeleteShader, glDeleteProgram, glGetProgramiv, glGetProgramInfoLog,
+    glGetUniformLocation, glUniform{1,2,3,4}{f,i,ui}[v], glUniformMatrix*fv,
+    glGetUniformBlockIndex, glUniformBlockBinding, glPatchParameteri,
+    glPatchParameterfv. Reales nuevas: glProgramUniform*, glDispatchCompute,
+    glMemoryBarrier, glTransformFeedbackVaryings, glBeginTransformFeedback,
+    glEndTransformFeedback, glBindBufferBase, glVertexAttribIPointer.
+  - Constantes G.3: GL_GEOMETRY_SHADER 0x8DD9, GL_TESS_CONTROL_SHADER 0x8E88,
+    GL_TESS_EVALUATION_SHADER 0x8E87, GL_PATCHES 0x000E, GL_PATCH_VERTICES
+    0x8E72, GL_COMPUTE_SHADER 0x91B9, GL_SHADER_STORAGE_BUFFER 0x90D2,
+    GL_TRANSFORM_FEEDBACK_BUFFER 0x8C8E, GL_INTERLEAVED_ATTRIBS 0x8C8C,
+    GL_RASTERIZER_DISCARD 0x8C89, GL_ALL_BARRIER_BITS 0xFFFFFFFF.
+  - Constantes nuevas para el Apéndice A: GL_LIGHT0 0x4000, GL_LIGHTING 0x0B50,
+    GL_FOG 0x0B60, GL_COLOR_MATERIAL 0x0B57, GL_CLIP_PLANE0 0x3000,
+    GL_UNIFORM_BUFFER 0x8A11, GL_UNIFORM_BUFFER_BINDING 0x8A28,
+    GL_MAX_UNIFORM_BUFFER_BINDINGS 0x8A2F, GL_MAX_UNIFORM_BLOCK_SIZE 0x8A30,
+    GL_LINK_STATUS 0x8B82, GL_INVALID_INDEX 0xFFFFFFFF,
+    GL_SECONDARY_COLOR_ARRAY 0x845E, GL_FOG_COORD_ARRAY 0x8457.
+
+APÉNDICE E (hitos)
+  - Insertar tras el hito de Módulo G: G.2-a atributos + varyings + ftransform
+    (T-G2-1); G.2-b UBO + matrices + sincronización (T-G2-2, T-G2-8);
+    G.2-c luces/material/fog/texenv (T-G2-3); G.2-d sampler1D y double
+    (T-G2-4, T-G2-5); G.2-e clip (T-G2-6). T-G2-7 se ejecuta en cada hito.
+  - Hitos G.3 (SOLO tras terminar y pasar todo G.2): G.3-a aplanado de
+    bloques de interfaz (T-G3-4); G.3-b geometry (T-G3-1,2,3,5,9); G.3-c
+    tessellation hito 1 (T-G3-6); G.3-d tessellation hito 2 (T-G3-7).
+    T-G3-8 en cada hito.

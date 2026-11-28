@@ -1,0 +1,57 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] dri: with a throttle depth, a short wait for the swap before (NUUBOS_THROTTLE_SOFT_MS)
+
+Context-only rebase; depends on 0005. Without the variable behaviour
+is identical to upstream.
+
+Upstream-Status: Pending
+
+---
+
+diff --git a/src/gallium/frontends/dri/dri_drawable.c b/src/gallium/frontends/dri/dri_drawable.c
+index 44d3e9f..d68a112 100644
+--- a/src/gallium/frontends/dri/dri_drawable.c
++++ b/src/gallium/frontends/dri/dri_drawable.c
+@@ -594,6 +594,16 @@ dri_flush(struct dri_context *ctx,
+       unsigned depth = ctx->screen->throttle_depth;
+       struct pipe_fence_handle **oldest = depth >= 2 ?
+          &drawable->throttle_fence_old[depth - 2] : &drawable->throttle_fence;
++      /* nuubOS, NUUBOS_THROTTLE_SOFT_MS: with a depth of 2 or 3 the swap
++       * first waits that long for the swap before as well. A frame whose
++       * GPU work queued behind the one before was still being drawn when
++       * the compositor wanted it, missed its vblank and the frames went
++       * out in pairs (Dead or Alive 2: 31-38 % of frames over 20 ms at a
++       * depth of 2, 4 % at 1). When the GPU itself is the limit the wait
++       * runs out and the deeper queue keeps the frame rate. */
++      if (depth >= 2 && ctx->screen->throttle_soft_ns && drawable->throttle_fence)
++         screen->fence_finish(screen, NULL, drawable->throttle_fence,
++                              ctx->screen->throttle_soft_ns);
+       if (*oldest) {
+          screen->fence_finish(screen, NULL, *oldest, OS_TIMEOUT_INFINITE);
+          screen->fence_reference(screen, oldest, NULL);
+diff --git a/src/gallium/frontends/dri/dri_screen.c b/src/gallium/frontends/dri/dri_screen.c
+index dc5fef6..7fe8223 100644
+--- a/src/gallium/frontends/dri/dri_screen.c
++++ b/src/gallium/frontends/dri/dri_screen.c
+@@ -656,6 +656,7 @@ dri_init_screen(struct dri_screen *screen,
+ 
+    screen->throttle = pscreen->caps.throttle;
+    screen->throttle_depth = CLAMP(debug_get_num_option("NUUBOS_THROTTLE_DEPTH", 1), 1, 3);
++   screen->throttle_soft_ns = (uint64_t)CLAMP(debug_get_num_option("NUUBOS_THROTTLE_SOFT_MS", 0), 0, 16) * 1000000;
+    if (pscreen->caps.device_protected_context)
+       screen->has_protected_context = true;
+    screen->has_reset_status_query = pscreen->caps.device_reset_status_query;
+diff --git a/src/gallium/frontends/dri/dri_screen.h b/src/gallium/frontends/dri/dri_screen.h
+index 140b3c4..7b9dcbd 100644
+--- a/src/gallium/frontends/dri/dri_screen.h
++++ b/src/gallium/frontends/dri/dri_screen.h
+@@ -88,6 +88,9 @@ struct dri_screen
+    /* Swaps that may be in flight before a swap waits for the GPU: 1, or up
+     * to 3 with NUUBOS_THROTTLE_DEPTH (nuubOS). */
+    unsigned throttle_depth;
++   /* With a depth of 2 or 3, how long a swap first waits for the swap
++    * before (NUUBOS_THROTTLE_SOFT_MS, nuubOS); 0 = not at all. */
++   uint64_t throttle_soft_ns;
+    bool dmabuf_import;
+    bool has_multibuffer;
+ 

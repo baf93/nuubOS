@@ -1,0 +1,76 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] panfrost: a larger BO when a streamed texture goes linear
+
+Reduced rebase: upstream already allocates a larger BO, but asserts
+success, does not fall back to tiled, and does not refresh the CRC
+pointer or the descriptors. This patch adds those parts using the new
+field names (plane.layout.data_size_B, plane.base, image.props.format)
+and preserves all old BO flags except PAN_BO_DELAY_MMAP.
+
+Upstream-Status: Pending
+
+---
+
+diff --git a/src/gallium/drivers/panfrost/pan_resource.c b/src/gallium/drivers/panfrost/pan_resource.c
+index 2044230..ff8c5ae 100644
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -2427,23 +2427,45 @@ panfrost_ptr_unmap(struct pipe_context *pctx, struct pipe_transfer *transfer)
+                panfrost_resource_setup(screen, prsrc, DRM_FORMAT_MOD_LINEAR,
+                                        prsrc->image.props.format, 0);
+ 
++               /* Linear rows are aligned to 64 bytes, so at some widths the
++                * linear layout needs more than the tiled one (R8 1480x1080:
++                * 1536 x 1080 bytes against 1488 x 1088, 0x195000 and
++                * 0x18c000 in pages): it takes a larger BO then. */
+                if (prsrc->plane.layout.data_size_B > panfrost_bo_size(bo)) {
++                  /* We copy into the new mapping right away, so don't
++                   * request a delayed mmap, but keep the other flags. */
++                  uint32_t flags = bo->flags & ~PAN_BO_DELAY_MMAP;
+                   struct panfrost_bo *newbo = panfrost_bo_create(
+-                     dev, prsrc->plane.layout.data_size_B, 0, bo->label);
+-
+-                  assert(newbo);
+-                  panfrost_bo_unreference(prsrc->bo);
+-                  prsrc->bo = newbo;
+-                  prsrc->plane.base = newbo->ptr.gpu;
+-                  bo = newbo;
++                     dev, prsrc->plane.layout.data_size_B, flags, bo->label);
++
++                  if (newbo) {
++                     panfrost_bo_unreference(bo);
++                     bo = prsrc->bo = newbo;
++                     prsrc->plane.base = newbo->ptr.gpu;
++                     pan_crc_state_set_ptr(&prsrc->crc_state, &newbo->ptr);
++                  } else {
++                     /* Out of memory: stay tiled, nothing to copy linear. */
++                     panfrost_resource_setup(
++                        screen, prsrc,
++                        DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED,
++                        prsrc->image.props.format, 0);
++                     panfrost_store_tiled_images(trans, prsrc);
++                     bo = NULL;
++                  }
+                }
+ 
+-               util_copy_rect(
+-                  bo->ptr.cpu + prsrc->plane.layout.slices[0].offset_B,
+-                  prsrc->base.format,
+-                  prsrc->plane.layout.slices[0].tiled_or_linear.row_stride_B, 0,
+-                  0, transfer->box.width, transfer->box.height, trans->map,
+-                  transfer->stride, 0, 0);
++               /* The layout (and possibly the BO) changed: with the
++                * descriptor changes from 0010 we must re-emit them. */
++               panfrost_dirty_state_all(ctx);
++
++               if (bo) {
++                  util_copy_rect(
++                     bo->ptr.cpu + prsrc->plane.layout.slices[0].offset_B,
++                     prsrc->base.format,
++                     prsrc->plane.layout.slices[0].tiled_or_linear.row_stride_B,
++                     0, 0, transfer->box.width, transfer->box.height,
++                     trans->map, transfer->stride, 0, 0);
++               }
+             } else {
+                panfrost_store_tiled_images(trans, prsrc);
+             }

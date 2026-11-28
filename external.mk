@@ -53,9 +53,13 @@ COG_CONF_OPTS += -Dcog_dbus_system_owner=root
 DEJAVU_LICENSE = Bitstream-Vera, Public-Domain (DejaVu changes), Arev fonts license
 LINUX_FIRMWARE_LICENSE = Redistributable binary firmware (LICENCE.rtlwifi_firmware.txt)
 
-# Mesa (Panfrost, the GL path of every core and of the UI) at -O3 with LTO:
+# Mesa (Panfrost, the GL path of every core and of the UI) at -O3:
 # Buildroot's -O2 (BR2_OPTIMIZE_2) otherwise overrides meson's buildtype
 # (docs/dev/perf-power.md 5.1). The later -O3 wins.
+# LTO was dropped for Mesa 26.2.7: upstream now rejects it at configure time
+# unless -Dallow-broken-lto=true, because it causes random, unreproducible
+# bugs. On 25.0.6 its measured gain was marginal (85/87 -> 84/84 % on the
+# busiest thread); with the Panfrost faults fixed, one less variable is worth
+# more. Re-add -Dallow-broken-lto=true only as a measured experiment.
 MESA3D_CFLAGS += -O3
 MESA3D_CXXFLAGS += -O3
-MESA3D_CONF_OPTS += -Db_lto=true

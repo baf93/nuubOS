@@ -1,0 +1,30 @@
+From: Eric Guo <eric.guo@nxp.com>
+Subject: [PATCH] pan/bi: run nir_opt_gcm to hoist loop-invariant code
+
+Backported from Mesa 26.3 commit d8c17bac. Semantics-preserving compiler optimization: hoist loop-invariant code out of loops before the local Bifrost scheduler runs.
+
+Adapted to 26.2.7: nir_opt_gcm still takes a third `hoist_tex_from_loops`
+argument there (removed upstream later). Pass true to match 26.3 behaviour,
+where texture hoisting is unconditional; NIR protects tex instructions with
+implicit derivatives in both versions.
+
+Upstream-Status: Backport
+
+---
+
+diff --git a/src/panfrost/compiler/bifrost/bifrost_nir.c b/src/panfrost/compiler/bifrost/bifrost_nir.c
+--- a/src/panfrost/compiler/bifrost/bifrost_nir.c
++++ b/src/panfrost/compiler/bifrost/bifrost_nir.c
+@@ -359,6 +359,11 @@ bi_optimize_late(nir_shader *nir, uint64_t gpu_id,
+    if (pan_arch(gpu_id) < 9)
+       NIR_PASS(_, nir, bifrost_nir_opt_boolean_bitwise);
+ 
++   /* Hoist loop-invariant code out of loops */
++   NIR_PASS(_, nir, nir_opt_gcm, false /* value_number */,
++            true /* hoist_tex_from_loops */);
++   NIR_PASS(_, nir, nir_opt_dce);
++
+    NIR_PASS(_, nir, pan_nir_lower_bool_to_bitsize);
+    NIR_PASS(_, nir, nir_lower_alu_width, bi_vectorize_filter, &gpu_id);
+    NIR_PASS(_, nir, nir_opt_vectorize, bi_vectorize_filter, &gpu_id);
+

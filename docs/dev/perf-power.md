@@ -14,6 +14,7 @@ Status: `done`, `in progress`, `next`, `planned`, `rejected`.
 - Transaction elimination (CRC) is already on for render targets; no AFBC on this GPU; Mesa 25.1-26.0 bring no G31 performance work ([relnotes](https://docs.mesa3d.org/relnotes/26.0.0.html)): no Mesa upgrade for performance.
 - Baseline survey (`tools/perf-power/glsurvey.sh`, user settings bezel + CRT on, mains): SNES 50 fps, CPU 40 % of a core, GPU fragment 39 %; GBA 60 / 41 % / 21 %; PS1 50 / 43 % / 39 %; N64 (Mario Kart PAL) 50 / 62 % / 39 %, GPU at 600 MHz 98 % of the time; NDS 60 / 109 %. 2D games spend ~39 % of the GPU only on presentation (bezel bands + CRT pass at 720x720).
 - No battery run-down measurements (user decision 2026-10-28: we do not need to know how much; lower clocks/voltage at the same fps obviously draw less). Judge changes by clock/voltage residency, GPU/CPU busy and fps (glsurvey.sh). The AXP717 cannot read power on battery anyway (platform.md).
+- 2026-11-24: Mesa was upgraded to 26.2.7 for issue #44 (correctness, not performance): patches 0004-0011, Panfrost LLVM/CLC enabled, LTO off. The figures above were measured on Mesa 25.0.6 with 0001-0010 and LTO unless stated otherwise.
 
 ## Phases
 
@@ -69,6 +70,24 @@ Memory (2026-10-29, CubeXX idle on Home, after games): MemAvailable 531 MB of 98
 
 System-level checks closed (2026-10-29, short runs): labwc composition during games: none (labwc 0 % GPU in God of War with the performance overlay on and off; RetroArch scanned out directly, the overlay costs nothing now). GPU devfreq ramp: simple_ondemand (50 ms polling) changes OPP 2 times in 15 s of Crazy Taxi, i.e. it already sits at 600 MHz under load; pinning 600 gives the same frame times (59.8 fps, 2.4 % > 20 ms). THP already `always`. What is left for fps on the heavy systems is core work (draw count in Flycast, a VDP1 texture cache in YabaSanshiro, the JITs).
 
+## Dusklight / Twilight Princess (2026-11-25, H700)
+Presented frames measured with a temporary `LD_PRELOAD` hook on `SDL_GL_SwapWindow` (Dusklight resolves it through `dlsym`; `eglSwapBuffers` and `wl_surface_commit` hooks never fire). Same disc/save, 45-60 s runs, first 60 frames skipped. Config was restored afterwards: scale 0.6667, `decoupleSimFromRender=true`, bloom/DoF/frame interpolation off, FPS overlay off.
+
+| internal resolution scale | presented fps | p50 | p90 | p99 |
+|---|---|---|---|---|
+| 0.5 | 29.0 | 33.6 ms | 41.6 ms | 46.1 ms |
+| 0.6667 (default) | 20.4 | 47.6 ms | 66.4 ms | 75.6 ms |
+| 0.75 | 15.9 | 59.2 ms | 83.1 ms | 93.6 ms |
+| 1.0 | 9.7 | 99.6 ms | 140.5 ms | 164.6 ms |
+
+Frame time fits roughly `12 ms + 91 ms * scale^2` (34.5 ms at 0.5, 49 ms at 0.667, 103 ms at 1.0), so raster/fill work dominates. `video.decoupleSimFromRender=false` at scale 0.5 gave 27.9 fps vs 29.0: simulation coupling is not the limiter.
+
+At the default scale the GPU devfreq stays at 600 MHz (max) ~99 % of the time; this kernel exposes no `drm-engine-*` busy counters in fdinfo. The app uses 59 % of one core on its main thread and 21 % on the Mesa thread. `pcsample` (300 Hz, 10 s per thread) found 54 % / 76 % of samples in `ioctl`; decoding the request shows `0xc02864c3` = `DRM_IOCTL_SYNCOBJ_WAIT` in 52 % / 69 % of all samples, always called from `drmIoctl` in libdrm; submit ioctls are only 116 samples on the Mesa thread. A `drmIoctl` wrapper over 50 s measured 1142 waits on the app thread (1.05 per frame, 28.2 s blocked, mean 24.7 ms) and 3338 on the Mesa thread (3 per frame, 39.8 s blocked, mean 11.9 ms, p50 0.02 ms but 31.5 % over 5 ms). Both threads are waiting on GPU fences; there is no game-code/JIT hot loop.
+
+Conclusion: the limit is GPU-side raster work at the configured internal resolution, observed as fence waits in both threads; it is not CPU frequency, Wayland composition, optional effects, or simulation/render coupling. The available lever is `game.internalResolutionScale`: 0.5 gives ~+42 % fps with p50 33.6 ms; 0.667 is the current compromise. Raising the GPU clock needs the voltage/DVFS changes already rejected. No shipped code or config was changed.
+
+Mesa 26.3 compiler backports A/B (2026-11-25, see `mesa-263-perf-candidates.md`): patches `0012` (Bifrost `nir_opt_gcm`) and `0013` (`u2uN` downcasts) were built, deployed and measured at the same scale with presented frames, GPU OPP residency and `drm-grab` diffs. Two runs with matched throttled clocks were 26.79 fps (baseline) vs 26.92 fps (patched), p50 both 33.55 ms; image green/blue channels pixel-identical. Session-to-session variance (600 MHz vs 432/552 MHz) dominates and there is no measurable gain. They were restored after the benchmark, but on 2026-11-26 they were applied and deployed again for the gl4es/Mesa validation round and are **currently on the device** (`libgallium-26.2.7.so` md5 `5f2dcbf458e75bc78a674ee4c3b19d3d`); the baseline backup is `/userdata/nuubos-deploy-backup-20261125/` (md5 `483263e26ce64deb5ae0afb4d0902045`). On 2026-11-26 the user decided to **keep** them applied/deployed, without claiming a measurable gain; the baseline backup is retained. This does not reopen the general "Mesa upgrade for performance" question — it only closes these two commits for this workload.
+
 ## Next: emulator work (agreed order 2026-10-29: melonDS, Flycast, Saturn, PSP; then N64 and PCSX ReARMed)
 The system level is done (see above); every remaining limit of the heavy games is inside a core. Measure with `framebench.sh` (presented frames, the busiest threads profiled) and short runs; the numbers below are the starting point (CubeXX, 1416/600 MHz, Mesa 0004 + 0009).
 1. **melonDS (NDS)** - Mario Kart DS slot 9: GET_FPS 60 but only 55.3 frames presented, 13-14 % of the intervals > 20 ms: auto frameskip drops ~5 frames a second; emulation thread 72 % + 2D/3D workers (5.4). Ideas: ARM7 HLE (DSVita, GitHub #25: the biggest saving, compatibility risk, fallback to LLE per game), geometry engine cost (~22-25 % of the emulation thread), scheduler stretches, JIT block linking; heavy scenes need save states from the user (Pokemon Black 2: Reshiram, town camera, Poke Balls). First step: profile MKDS with matching symbols (unstripped core from the build tree, as for Saturn), decide between ARM7 HLE and the JIT/geometry work.
@@ -80,7 +99,7 @@ The system level is done (see above); every remaining limit of the heavy games i
 6. **PCSX ReARMed (PS1)** - added by the user 2026-10-29. Known: PAL games 50 fps on the panel, RetroArch 43 % of a core, GPU fragment 39 % (bezel + CRT); 2x enhancement (`pcsx_rearmed_neon_enhancement_enable`, Auto = 2x on HDMI) on HDMI: Donald Duck PAL 49-51 fps, GPU fragment ~78 %; the RG35XX Pro on a 4K TV gave 44-45 fps where the CubeXX gives 50 (open-items). Open: heavy PS1 games at 2x (NEON GPU enhancement cost on the CPU side, upload of the 1024x512 VRAM frame), NTSC at 60. First step: framebench of a heavy 3D game at 1x and 2x, profile of the GPU thread (gpu_neon).
 
 ## Rejected (do not repeat without new evidence)
-- Mesa upgrade for performance (no G31 work upstream, see Facts).
+- Mesa upgrade for performance (no G31 work upstream, see Facts). Individual 26.3 compiler backports `d8c17bac` + `45006301` were measured on Dusklight (2026-11-25): no gain, not deployed (`mesa-263-perf-candidates.md`).
 - Lowering `vdd-gpu-sys` or GPU DVFS with voltage (shared rail, corruption history).
 - CPU OPPs below 1032 MHz (same voltage), schedutil `rate_limit_us` raise (platform.md idle audit), Mesa glthread, Mesa busy-texture shadowing, tiler masks other than Mesa 0003 (emulation.md).
 - (Reverted 2026-10-29: the corruption was the DRAM voltage, 0004 is back and gives Saturn +8 fps.) Keeping the CPU mapping of cached BOs in Mesa, in any form: 2026-10-14 variant, Mesa 0004 of 2026-10-21 (purgeable) and its 2026-10-28 rewrite (never purgeable) all multiplied the page corruption of step 1.1; 0004 dropped 2026-10-28. Not the root cause (the corruption exists without it, step 1.1 (c)), but it multiplies it.

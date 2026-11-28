@@ -1,0 +1,80 @@
+From: nuubOS <nuubos@localhost>
+Subject: [PATCH] panfrost: textures uploaded by region go linear on request (NUUBOS_PAN_LINEAR_UPLOADS)
+
+Rebased: include util/u_debug.h explicitly (util/os_misc.h is now
+interleaved in the include list) and use rsrc->modifier instead of the
+removed rsrc->image.layout.modifier. Without the variable nothing
+changes.
+
+Upstream-Status: Pending
+
+---
+
+diff --git a/src/gallium/drivers/panfrost/pan_resource.c b/src/gallium/drivers/panfrost/pan_resource.c
+index 30b59e2..2221186 100644
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -15,6 +15,7 @@
+ #include "frontend/winsys_handle.h"
+ #include "util/format/u_format.h"
+ #include "util/os_misc.h"
++#include "util/u_debug.h"
+ #include "util/u_debug_image.h"
+ #include "util/u_drm.h"
+ #include "util/u_gen_mipmap.h"
+@@ -1559,6 +1560,16 @@ panfrost_can_discard(struct pipe_resource *resource, const struct pipe_box *box,
+            !(rsrc->bo->flags & PAN_BO_SHARED));
+ }
+ 
++static bool
++pan_linear_uploads(void)
++{
++   static int enabled = -1;
++
++   if (enabled < 0)
++      enabled = debug_get_bool_option("NUUBOS_PAN_LINEAR_UPLOADS", false);
++   return enabled;
++}
++
+ static void *
+ panfrost_ptr_map(struct pipe_context *pctx, struct pipe_resource *resource,
+                  unsigned level,
+@@ -1591,6 +1602,24 @@ panfrost_ptr_map(struct pipe_context *pctx, struct pipe_resource *resource,
+    if (usage & PIPE_MAP_WRITE)
+       rsrc->constant_stencil = false;
+ 
++   /* nuubOS, NUUBOS_PAN_LINEAR_UPLOADS: a 2D texture the CPU keeps
++    * writing in parts goes linear, with its contents. Only complete
++    * overwrites counted for the switch below (panfrost_should_linear_convert),
++    * so a texture updated by regions stayed u-interleaved and every upload
++    * went through a staging copy and a software tiling pass: 10 % of the
++    * emulation thread of YabaSanshiro (Virtua Fighter 2, H700). The texture
++    * is sampled linear afterwards: opt-in, per process. */
++   if ((usage & PIPE_MAP_WRITE) && !(usage & PIPE_MAP_READ) &&
++       rsrc->modifier == DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED &&
++       !rsrc->modifier_constant && !rsrc->shadow_image &&
++       panfrost_is_2d(rsrc) && rsrc->base.last_level == 0 &&
++       pan_linear_uploads() &&
++       ++rsrc->modifier_partial_updates >= LAYOUT_CONVERT_THRESHOLD) {
++      pan_resource_modifier_convert(ctx, rsrc, DRM_FORMAT_MOD_LINEAR, true,
++                                    "CPU uploads by region");
++      bo = rsrc->bo;
++   }
++
+    /* We don't have s/w routines for AFBC/AFRC, so use a staging texture */
+    if (drm_is_afbc(rsrc->modifier) ||
+        drm_is_afrc(rsrc->modifier)) {
+diff --git a/src/gallium/drivers/panfrost/pan_resource.h b/src/gallium/drivers/panfrost/pan_resource.h
+index bfd3343..a56b083 100644
+--- a/src/gallium/drivers/panfrost/pan_resource.h
++++ b/src/gallium/drivers/panfrost/pan_resource.h
+@@ -86,6 +86,9 @@ struct panfrost_resource {
+    /* Used to decide when to convert to another modifier */
+    uint16_t modifier_updates;
+ 
++   /* CPU writes of any size, for NUUBOS_PAN_LINEAR_UPLOADS (nuubOS) */
++   uint16_t modifier_partial_updates;
++
+    /* Do all pixels have the same stencil value? */
+    bool constant_stencil;
+ 

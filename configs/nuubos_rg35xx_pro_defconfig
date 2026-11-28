@@ -89,6 +89,10 @@ BR2_PACKAGE_LIBDRM=y
 # GPU userspace - Mesa/Panfrost
 BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_PACKAGE_MESA3D=y
+# Mesa 26.2.7 requires LLVM for Panfrost: CLC is mandatory for this driver
+# (meson.build: `CLC requires LLVM`). Buildroot selects NEEDS_PRECOMP_COMPILER,
+# spirv-llvm-translator and spirv-tools through the panfrost Kconfig entry.
+BR2_PACKAGE_MESA3D_LLVM=y
 BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST=y
 BR2_PACKAGE_MESA3D_OPENGL_EGL=y
 BR2_PACKAGE_MESA3D_OPENGL_ES=y
@@ -179,6 +183,10 @@ BR2_PACKAGE_NUUBOS_TAILSCALE=y
 # Ports (EPIC-058): PortMaster is downloaded on the device; the image holds
 # the sandbox and what ports expect (bash, Python 3, SDL2 + extras).
 BR2_PACKAGE_NUUBOS_PORTS=y
+# Desktop GL -> GLES thin shim for PortMaster (aarch64 + armhf).
+BR2_PACKAGE_GL_NUUBOS_SHIM=y
+# 32-bit ELF runtime for armhf PortMaster ports (loader, glibc, SDL2).
+BR2_PACKAGE_ARMHF_RUNTIME=y
 # Terminal (RC4, user decision 2026-10-27): foot with root's login shell.
 # foot needs a UTF-8 locale.
 BR2_PACKAGE_NUUBOS_TERMINAL=y

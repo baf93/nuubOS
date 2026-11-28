@@ -11,6 +11,8 @@ config BR2_PACKAGE_NUUBOS_PORTS
 	depends on BR2_TOOLCHAIN_GCC_AT_LEAST_7 # openal
 	depends on BR2_TOOLCHAIN_HAS_THREADS_NPTL # openal
 	depends on BR2_PACKAGE_OPENAL_ARCH_SUPPORTS # openal
+	select BR2_PACKAGE_GL_NUUBOS_SHIM # desktop GL -> GLES preload
+	select BR2_PACKAGE_ARMHF_RUNTIME # 32-bit ports (loader + SDL2)
 	select BR2_PACKAGE_BASH # port scripts
 	select BR2_PACKAGE_ZIP # port scripts that patch their game archive (Mindustry)
 	select BR2_PACKAGE_BUBBLEWRAP # sandbox
